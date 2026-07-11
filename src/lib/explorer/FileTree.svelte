@@ -1,0 +1,204 @@
+<script lang="ts">
+  import { fileTree, loadRoot } from "../stores/fileTree";
+  import { workspace, openWorkspaceFolder } from "../stores/workspace";
+  import { contextMenu, closeContextMenu, newFile, newFolder, rename, deletePath, revealInFinder } from "./contextMenu";
+  import FileTreeNode from "./FileTreeNode.svelte";
+
+  let promptState = $state<
+    | { kind: "new-file"; dir: string; value: string }
+    | { kind: "new-folder"; dir: string; value: string }
+    | { kind: "rename"; path: string; value: string }
+    | null
+  >(null);
+  let deleteTarget = $state<{ path: string; isDir: boolean } | null>(null);
+
+  $effect(() => {
+    if ($workspace.root) {
+      void loadRoot($workspace.root);
+    }
+  });
+
+  function dirOf(path: string): string {
+    const idx = path.replace(/\\/g, "/").lastIndexOf("/");
+    return idx <= 0 ? path : path.slice(0, idx);
+  }
+
+  function startNewFile(): void {
+    if (!$contextMenu) return;
+    const dir = $contextMenu.isDir ? $contextMenu.path : dirOf($contextMenu.path);
+    promptState = { kind: "new-file", dir, value: "" };
+    closeContextMenu();
+  }
+
+  function startNewFolder(): void {
+    if (!$contextMenu) return;
+    const dir = $contextMenu.isDir ? $contextMenu.path : dirOf($contextMenu.path);
+    promptState = { kind: "new-folder", dir, value: "" };
+    closeContextMenu();
+  }
+
+  function startRename(): void {
+    if (!$contextMenu) return;
+    const name = $contextMenu.path.replace(/\\/g, "/").split("/").pop() ?? "";
+    promptState = { kind: "rename", path: $contextMenu.path, value: name };
+    closeContextMenu();
+  }
+
+  function startDelete(): void {
+    if (!$contextMenu) return;
+    deleteTarget = { path: $contextMenu.path, isDir: $contextMenu.isDir };
+    closeContextMenu();
+  }
+
+  async function reveal(): Promise<void> {
+    if (!$contextMenu) return;
+    const path = $contextMenu.path;
+    closeContextMenu();
+    await revealInFinder(path);
+  }
+
+  async function submitPrompt(): Promise<void> {
+    const current = promptState;
+    if (!current || current.value.trim() === "") {
+      promptState = null;
+      return;
+    }
+    if (current.kind === "new-file") {
+      await newFile(current.dir, current.value.trim());
+    } else if (current.kind === "new-folder") {
+      await newFolder(current.dir, current.value.trim());
+    } else {
+      await rename(current.path, current.value.trim());
+    }
+    promptState = null;
+  }
+
+  async function confirmDelete(): Promise<void> {
+    if (!deleteTarget) return;
+    await deletePath(deleteTarget.path, deleteTarget.isDir);
+    deleteTarget = null;
+  }
+</script>
+
+<svelte:window onclick={() => closeContextMenu()} />
+
+<div class="file-tree">
+  {#if !$workspace.root}
+    <button onclick={() => void openWorkspaceFolder()}>Open Folder…</button>
+  {:else if $fileTree.roots}
+    <div role="tree">
+      {#each $fileTree.roots as node (node.entry.path)}
+        <FileTreeNode {node} />
+      {/each}
+    </div>
+  {/if}
+</div>
+
+{#if $contextMenu}
+  <div
+    class="context-menu"
+    style={`left: ${$contextMenu.x}px; top: ${$contextMenu.y}px`}
+    role="menu"
+  >
+    <button role="menuitem" onclick={startNewFile}>New File</button>
+    <button role="menuitem" onclick={startNewFolder}>New Folder</button>
+    <button role="menuitem" onclick={startRename}>Rename</button>
+    <button role="menuitem" onclick={startDelete}>Delete</button>
+    <button role="menuitem" onclick={() => void reveal()}>Reveal in Finder</button>
+  </div>
+{/if}
+
+{#if promptState}
+  <div class="modal-backdrop">
+    <div class="modal">
+      <p>
+        {#if promptState.kind === "new-file"}New file name{:else if promptState.kind === "new-folder"}New folder name{:else}Rename to{/if}
+      </p>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input
+        bind:value={promptState.value}
+        onkeydown={(e) => e.key === "Enter" && submitPrompt()}
+        autofocus
+      />
+      <div class="actions">
+        <button onclick={() => (promptState = null)}>Cancel</button>
+        <button onclick={submitPrompt}>OK</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if deleteTarget}
+  <div class="modal-backdrop">
+    <div class="modal">
+      <p>
+        Permanently delete <strong>{deleteTarget.path}</strong>? This cannot be undone
+        (there is no trash in Atrium).
+      </p>
+      <div class="actions">
+        <button onclick={() => (deleteTarget = null)}>Cancel</button>
+        <button class="danger" onclick={confirmDelete}>Delete</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .file-tree {
+    height: 100%;
+    overflow: auto;
+    font-size: 0.9em;
+    padding: 6px 0;
+  }
+  .context-menu {
+    position: fixed;
+    display: flex;
+    flex-direction: column;
+    background: var(--atrium-menu-bg, #2a2a2a);
+    border: 1px solid var(--atrium-border, #444);
+    border-radius: 6px;
+    padding: 4px;
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+  .context-menu button {
+    text-align: left;
+    background: none;
+    border: none;
+    color: inherit;
+    padding: 4px 10px;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .context-menu button:hover {
+    background: var(--atrium-hover-bg, rgba(128, 128, 128, 0.2));
+  }
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+  }
+  .modal {
+    background: var(--atrium-menu-bg, #2a2a2a);
+    border-radius: 8px;
+    padding: 16px;
+    min-width: 320px;
+  }
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .danger {
+    background: #c0392b;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 10px;
+  }
+</style>

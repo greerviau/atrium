@@ -1,0 +1,33 @@
+:root {
+  --atrium-border: #33383e;
+  --atrium-hover-bg: rgba(255, 255, 255, 0.08);
+  --atrium-active-tab-bg: rgba(255, 255, 255, 0.08);
+  --atrium-menu-bg: #24272c;
+  --atrium-code-bg: rgba(255, 255, 255, 0.08);
+  --atrium-link-color: #6cb2ff;
+  --atrium-text-muted: #8a8f98;
+  --atrium-mono-font:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #1e2126;
+  color: #e6e6e6;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+}

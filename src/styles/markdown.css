@@ -1,0 +1,49 @@
+/* Rendered markdown live-preview elements. Class names are the single
+   source of truth in lib/editor/markdown/theme.ts; keep both in sync. */
+
+.cm-heading-1 { font-size: 1.8em; font-weight: 700; }
+.cm-heading-2 { font-size: 1.5em; font-weight: 700; }
+.cm-heading-3 { font-size: 1.3em; font-weight: 600; }
+.cm-heading-4 { font-size: 1.15em; font-weight: 600; }
+.cm-heading-5 { font-size: 1.05em; font-weight: 600; }
+.cm-heading-6 { font-size: 1em; font-weight: 600; color: var(--atrium-text-muted, #888); }
+
+.cm-em { font-style: italic; }
+.cm-strong { font-weight: 700; }
+.cm-strikethrough { text-decoration: line-through; }
+
+.cm-inline-code {
+  font-family: var(--atrium-mono-font, monospace);
+  background: var(--atrium-code-bg, rgba(128, 128, 128, 0.15));
+  border-radius: 3px;
+  padding: 0 0.2em;
+}
+
+.cm-link {
+  color: var(--atrium-link-color, #4a9eff);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.cm-task-checkbox {
+  margin-right: 0.4em;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.cm-markdown-image {
+  max-width: 100%;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.cm-table-header {
+  font-weight: 700;
+  border-bottom: 2px solid var(--atrium-border, #666);
+  padding: 0.2em 0.6em;
+}
+
+.cm-table-cell {
+  border: 1px solid var(--atrium-border, #444);
+  padding: 0.2em 0.6em;
+}
