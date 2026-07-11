@@ -1,0 +1,80 @@
+<script lang="ts">
+  import type { TreeNode } from "../stores/fileTree";
+  import { toggleExpanded } from "../stores/fileTree";
+  import { openFile } from "../stores/tabs";
+  import { openContextMenu } from "./contextMenu";
+  import FileTreeNode from "./FileTreeNode.svelte";
+
+  let { node, depth = 0 }: { node: TreeNode; depth?: number } = $props();
+
+  function onClick(): void {
+    if (node.entry.isDir) {
+      void toggleExpanded(node);
+    } else {
+      void openFile(node.entry.path);
+    }
+  }
+
+  function onContextMenu(event: MouseEvent): void {
+    openContextMenu(event, node.entry.path, node.entry.isDir);
+  }
+
+  function onKeydown(event: KeyboardEvent): void {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onClick();
+    }
+  }
+</script>
+
+<div class="node">
+  <div
+    class="row"
+    style={`padding-left: ${depth * 14 + 6}px`}
+    onclick={onClick}
+    onkeydown={onKeydown}
+    oncontextmenu={onContextMenu}
+    role="treeitem"
+    aria-selected="false"
+    aria-expanded={node.entry.isDir ? node.expanded : undefined}
+    tabindex="0"
+  >
+    {#if node.entry.isDir}
+      <span class="disclosure">{node.expanded ? "▾" : "▸"}</span>
+    {:else}
+      <span class="disclosure spacer"></span>
+    {/if}
+    <span class="name" class:symlink={node.entry.isSymlink}>{node.entry.name}</span>
+  </div>
+  {#if node.entry.isDir && node.expanded && node.children}
+    {#each node.children as child (child.entry.path)}
+      <FileTreeNode node={child} depth={depth + 1} />
+    {/each}
+  {/if}
+</div>
+
+<style>
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+  }
+  .row:hover {
+    background: var(--atrium-hover-bg, rgba(128, 128, 128, 0.15));
+  }
+  .disclosure {
+    width: 12px;
+    display: inline-block;
+    font-size: 0.7em;
+    opacity: 0.7;
+  }
+  .name.symlink {
+    font-style: italic;
+    opacity: 0.8;
+  }
+</style>
