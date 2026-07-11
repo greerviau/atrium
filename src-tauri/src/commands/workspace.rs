@@ -8,7 +8,9 @@ use tauri_plugin_dialog::DialogExt;
 use tokio::sync::mpsc;
 
 #[tauri::command]
-pub async fn workspace_open_folder_dialog(app: tauri::AppHandle) -> Result<Option<String>, AppError> {
+pub async fn workspace_open_folder_dialog(
+    app: tauri::AppHandle,
+) -> Result<Option<String>, AppError> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog().file().pick_folder(move |folder| {
         let _ = tx.send(folder);

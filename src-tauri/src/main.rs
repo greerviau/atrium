@@ -31,7 +31,13 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         ],
     )?;
 
-    let open_folder = MenuItem::with_id(app, "menu:open-folder", "Open Folder…", true, Some("CmdOrCtrl+O"))?;
+    let open_folder = MenuItem::with_id(
+        app,
+        "menu:open-folder",
+        "Open Folder…",
+        true,
+        Some("CmdOrCtrl+O"),
+    )?;
     let save = MenuItem::with_id(app, "menu:save", "Save", true, Some("CmdOrCtrl+S"))?;
     let new_terminal_tab = MenuItem::with_id(
         app,
@@ -44,7 +50,12 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         app,
         "File",
         true,
-        &[&open_folder, &save, &PredefinedMenuItem::separator(app)?, &new_terminal_tab],
+        &[
+            &open_folder,
+            &save,
+            &PredefinedMenuItem::separator(app)?,
+            &new_terminal_tab,
+        ],
     )?;
 
     let edit_menu = Submenu::with_items(

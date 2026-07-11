@@ -9,7 +9,10 @@ use tauri::State;
 /// drops the lock before returning, so callers can `.await` on the workspace
 /// without holding a `MutexGuard` across the await point (see the note on
 /// `AppState::workspaces`).
-fn workspace(state: &State<'_, AppState>, workspace_id: &str) -> Result<Arc<dyn Workspace>, AppError> {
+fn workspace(
+    state: &State<'_, AppState>,
+    workspace_id: &str,
+) -> Result<Arc<dyn Workspace>, AppError> {
     state
         .workspaces
         .lock()

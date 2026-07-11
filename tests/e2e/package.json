@@ -1,0 +1,16 @@
+{
+  "name": "atrium-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "wdio run ./wdio.conf.js"
+  },
+  "devDependencies": {
+    "@wdio/cli": "^9.4.4",
+    "@wdio/local-runner": "^9.4.4",
+    "@wdio/mocha-framework": "^9.4.4",
+    "@wdio/spec-reporter": "^9.4.4",
+    "webdriverio": "^9.4.4"
+  }
+}

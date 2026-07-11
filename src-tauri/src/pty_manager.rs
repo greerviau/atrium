@@ -144,11 +144,7 @@ impl PtyManager {
         Ok(terminal_id)
     }
 
-    pub fn subscribe(
-        &self,
-        terminal_id: &str,
-        channel: Channel<PtyEvent>,
-    ) -> Result<(), AppError> {
+    pub fn subscribe(&self, terminal_id: &str, channel: Channel<PtyEvent>) -> Result<(), AppError> {
         let sessions = self.sessions.lock().unwrap();
         let session = sessions
             .get(terminal_id)
