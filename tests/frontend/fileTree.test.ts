@@ -73,6 +73,46 @@ describe("fileTree: root-level refresh", () => {
     expect(paths).toContain(`${ROOT}/external.txt`);
   });
 
+  it("reflects an externally-deleted top-level file once refreshDirectoryContaining fires from fs:changed", async () => {
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("a.txt"), file("b.txt")]);
+    await loadRoot(ROOT);
+
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("a.txt")]);
+    await refreshDirectoryContaining(`${ROOT}/b.txt`);
+
+    const paths = get(fileTree).roots?.map((n) => n.entry.path);
+    expect(paths).toEqual([`${ROOT}/a.txt`]);
+  });
+
+  it("reflects an externally-renamed top-level file once refreshDirectoryContaining fires from fs:changed", async () => {
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("old.txt")]);
+    await loadRoot(ROOT);
+
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("new.txt")]);
+    await refreshDirectoryContaining(`${ROOT}/new.txt`);
+
+    const paths = get(fileTree).roots?.map((n) => n.entry.path);
+    expect(paths).toEqual([`${ROOT}/new.txt`]);
+  });
+
+  it("resets to a fresh unexpanded node when an expanded root-level directory is renamed", async () => {
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([dir("sub")]);
+    await loadRoot(ROOT);
+
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("nested.txt")]);
+    await loadChildren(`${ROOT}/sub`);
+    expect(get(fileTree).roots?.find((n) => n.entry.name === "sub")?.expanded).toBe(true);
+
+    // "sub" renamed to "renamed" at the root: its path changes, so the merge
+    // can't match it to the old node and it comes back as a fresh, unexpanded node.
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([dir("renamed")]);
+    await loadChildren(ROOT); // contextMenu.rename calls loadChildren(dirOf(path)) === ROOT
+
+    const renamedNode = get(fileTree).roots?.find((n) => n.entry.name === "renamed");
+    expect(renamedNode?.expanded).toBe(false);
+    expect(renamedNode?.children).toBeUndefined();
+  });
+
   it("preserves an expanded top-level sibling directory's expanded/children state across an unrelated root-level change", async () => {
     vi.mocked(commands.fsListDir).mockResolvedValueOnce([dir("sub"), file("a.txt")]);
     await loadRoot(ROOT);
