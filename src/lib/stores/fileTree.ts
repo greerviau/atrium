@@ -20,6 +20,15 @@ function toNode(entry: DirEntry): TreeNode {
   return { entry, expanded: false, children: undefined };
 }
 
+/** Merges a fresh listing against a node's existing children, preserving each surviving child's `expanded`/`children` state by path. */
+function mergeChildren(existing: TreeNode[] | undefined, entries: DirEntry[]): TreeNode[] {
+  const existingByPath = new Map((existing ?? []).map((node) => [node.entry.path, node]));
+  return entries.map((entry) => {
+    const survivor = existingByPath.get(entry.path);
+    return survivor ? { ...survivor, entry } : toNode(entry);
+  });
+}
+
 /** Normalizes for path comparison: backslash-to-slash, trailing-slash stripping. No symlink canonicalization. */
 function normalizePath(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -43,10 +52,13 @@ export async function loadChildren(path: string): Promise<void> {
     if (!state.root) {
       return state;
     }
-    const children = entries.map(toNode);
     return {
       ...state,
-      root: patchNode(state.root, path, (node) => ({ ...node, children, expanded: true })),
+      root: patchNode(state.root, path, (node) => ({
+        ...node,
+        children: mergeChildren(node.children, entries),
+        expanded: true,
+      })),
     };
   });
 }

@@ -127,7 +127,7 @@ describe("fileTree: root-level refresh", () => {
     expect(renamedNode?.children).toBeUndefined();
   });
 
-  it("resets a root-level sibling's expanded state across an unrelated root-level change", async () => {
+  it("preserves an expanded top-level sibling's state across an unrelated root-level change", async () => {
     vi.mocked(commands.fsListDir).mockResolvedValueOnce([dir("sub"), file("a.txt")]);
     await loadRoot(ROOT);
 
@@ -141,8 +141,6 @@ describe("fileTree: root-level refresh", () => {
     expect(expandedBefore?.children?.map((c) => c.entry.name)).toEqual(["nested.txt"]);
 
     // Unrelated root-level change: a new sibling file appears alongside "sub".
-    // Refreshing the root's own listing reloads root's direct children like any
-    // other directory refresh does, so "sub" comes back fresh and collapsed too.
     vi.mocked(commands.fsListDir).mockResolvedValueOnce([
       dir("sub"),
       file("a.txt"),
@@ -153,8 +151,8 @@ describe("fileTree: root-level refresh", () => {
     expect(childPaths()).toEqual([`${ROOT}/sub`, `${ROOT}/a.txt`, `${ROOT}/b.txt`]);
 
     const subAfter = get(fileTree).root?.children?.find((n) => n.entry.name === "sub");
-    expect(subAfter?.expanded).toBe(false);
-    expect(subAfter?.children).toBeUndefined();
+    expect(subAfter?.expanded).toBe(true);
+    expect(subAfter?.children?.map((c) => c.entry.name)).toEqual(["nested.txt"]);
   });
 
   it("does not refetch when the root is collapsed and re-expanded", async () => {
