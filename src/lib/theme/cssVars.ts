@@ -10,8 +10,11 @@ function kebabCase(key: string): string {
  * `--atrium-bg-base`), and sets `dataset.theme`/`colorScheme` to the theme's
  * appearance so native form controls and `prefers-color-scheme`-aware CSS
  * follow along. This is the only place that writes theme CSS variables —
- * every consumer (app chrome CSS, the CodeMirror gutter theme's fallback,
- * markdown.css) reads `--atrium-*` vars this function sets.
+ * every app-chrome consumer (`app.css`, the Svelte components' own
+ * `<style>` blocks, `markdown.css`) reads the `--atrium-*` vars this
+ * function sets. `cmTheme.ts` and `xtermTheme.ts` instead read a `Theme`'s
+ * token values directly in JS, bypassing CSS vars entirely — CodeMirror and
+ * xterm.js both configure their own colors imperatively, not via CSS.
  */
 export function applyThemeToDocument(theme: Theme): void {
   const root = document.documentElement;
