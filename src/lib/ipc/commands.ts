@@ -51,6 +51,25 @@ export function workspaceSetRoot(workspaceId: string, path: string): Promise<voi
   return invoke("workspace_set_root", { workspaceId, path });
 }
 
+export interface RecentProject {
+  path: string;
+  name: string;
+  lastOpenedAt: number;
+}
+
+export function workspaceGetRecents(): Promise<RecentProject[]> {
+  return invoke("workspace_get_recents");
+}
+
+export function workspaceRemoveRecent(path: string): Promise<void> {
+  return invoke("workspace_remove_recent", { path });
+}
+
+/** Consumes a pending Dock-menu-picked path from a cold launch, if any (macOS only). */
+export function workspaceTakePendingOpen(): Promise<string | null> {
+  return invoke("workspace_take_pending_open");
+}
+
 export function fsListDir(workspaceId: string, path: string): Promise<DirEntry[]> {
   return invoke("fs_list_dir", { workspaceId, path });
 }

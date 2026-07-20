@@ -23,3 +23,8 @@ export function onMenuEvent(
 ): Promise<UnlistenFn> {
   return listen(id, () => handler());
 }
+
+/** A macOS Dock-menu pick resolved while the app was already running. */
+export function onDockOpenPath(handler: (path: string) => void): Promise<UnlistenFn> {
+  return listen<string>("dock:open-path", (event) => handler(event.payload));
+}

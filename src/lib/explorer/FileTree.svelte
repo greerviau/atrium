@@ -1,6 +1,6 @@
 <script lang="ts">
   import { fileTree, loadRoot } from "../stores/fileTree";
-  import { workspace, openWorkspaceFolder } from "../stores/workspace";
+  import { workspace } from "../stores/workspace";
   import { contextMenu, closeContextMenu, newFile, newFolder, rename, deletePath, revealInFinder } from "./contextMenu";
   import FileTreeNode from "./FileTreeNode.svelte";
 
@@ -83,9 +83,7 @@
 <svelte:window onclick={() => closeContextMenu()} />
 
 <div class="file-tree">
-  {#if !$workspace.root}
-    <button onclick={() => void openWorkspaceFolder()}>Open Folder…</button>
-  {:else if $fileTree.roots}
+  {#if $fileTree.roots}
     <div role="tree">
       {#each $fileTree.roots as node (node.entry.path)}
         <FileTreeNode {node} />
