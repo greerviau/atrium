@@ -95,6 +95,34 @@ function decorateImage(state: EditorState, node: SyntaxNode, documentPath: strin
   );
 }
 
+function decorateCodeBlock(
+  state: EditorState,
+  node: SyntaxNode,
+  isFenced: boolean,
+  out: Range<Decoration>[],
+): void {
+  const startLine = state.doc.lineAt(node.from).number;
+  const endLine = state.doc.lineAt(node.to).number;
+  for (let n = startLine; n <= endLine; n++) {
+    out.push(Decoration.line({ class: CLASS.codeBlock }).range(state.doc.line(n).from));
+  }
+
+  if (!isFenced || isUnderCursor(state, node.from, node.to)) {
+    return;
+  }
+
+  const marks = node.getChildren("CodeMark");
+  const info = node.getChild("CodeInfo");
+  const openMark = marks[0];
+  if (openMark) {
+    out.push(Decoration.replace({}).range(openMark.from, info ? info.to : openMark.to));
+  }
+  const closeMark = marks[marks.length - 1];
+  if (closeMark && closeMark !== openMark) {
+    out.push(Decoration.replace({}).range(closeMark.from, closeMark.to));
+  }
+}
+
 function decorateTaskMarker(state: EditorState, node: SyntaxNode, out: Range<Decoration>[]): void {
   // `[ ]` / `[x]`: the status character sits at offset 1 of the 3-char marker.
   const statusFrom = node.from + 1;
@@ -132,6 +160,13 @@ export function buildDecorations(
         if (name === "TaskMarker") {
           // Checkboxes stay interactive even on the active line.
           decorateTaskMarker(state, ref.node, decorations);
+          return;
+        }
+
+        if (name === "FencedCode" || name === "CodeBlock") {
+          // The container stays visible even while the cursor is inside the
+          // block; only the fence markers/language tag are cursor-gated.
+          decorateCodeBlock(state, ref.node, name === "FencedCode", decorations);
           return;
         }
 
