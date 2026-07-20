@@ -16,6 +16,12 @@ export interface Tab {
   pendingSelection?: PendingSelection;
   /** True while a `fs:changed` conflict banner is showing for this tab (section 6.2). */
   hasExternalConflict: boolean;
+  /**
+   * Which markdown presentation is active; only ever set for `mode ===
+   * "markdown"` tabs. Not persisted — always starts at `"rendered"` on open,
+   * including a fresh open after the tab was previously closed.
+   */
+  viewMode?: "rendered" | "source";
 }
 
 export interface TabsState {
@@ -54,17 +60,31 @@ export async function openFile(path: string, selection?: PendingSelection): Prom
   }
 
   const contents = await fsReadFile(localWorkspaceId(), path);
+  const mode = modeForPath(path);
   const tab: Tab = {
     path,
-    mode: modeForPath(path),
+    mode,
     savedDoc: contents,
     isDirty: false,
     pendingSelection: selection,
     hasExternalConflict: false,
+    viewMode: mode === "markdown" ? "rendered" : undefined,
   };
   tabsState.update((s) => ({
     tabs: [...s.tabs, tab],
     activeTabPath: path,
+  }));
+}
+
+/** Flips a markdown tab's `viewMode` between `"rendered"` and `"source"`; a no-op for a non-markdown tab or an unknown path. */
+export function toggleMarkdownViewMode(path: string): void {
+  tabsState.update((s) => ({
+    ...s,
+    tabs: s.tabs.map((t) =>
+      t.path === path && t.mode === "markdown"
+        ? { ...t, viewMode: t.viewMode === "source" ? "rendered" : "source" }
+        : t,
+    ),
   }));
 }
 
