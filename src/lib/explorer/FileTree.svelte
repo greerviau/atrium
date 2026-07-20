@@ -11,6 +11,7 @@
     | null
   >(null);
   let deleteTarget = $state<{ path: string; isDir: boolean } | null>(null);
+  let isRootContextMenu = $derived($contextMenu?.path === $fileTree.root?.entry.path);
 
   $effect(() => {
     if ($workspace.root) {
@@ -83,11 +84,9 @@
 <svelte:window onclick={() => closeContextMenu()} />
 
 <div class="file-tree">
-  {#if $fileTree.roots}
+  {#if $fileTree.root}
     <div role="tree">
-      {#each $fileTree.roots as node (node.entry.path)}
-        <FileTreeNode {node} />
-      {/each}
+      <FileTreeNode node={$fileTree.root} />
     </div>
   {/if}
 </div>
@@ -100,8 +99,10 @@
   >
     <button role="menuitem" onclick={startNewFile}>New File</button>
     <button role="menuitem" onclick={startNewFolder}>New Folder</button>
-    <button role="menuitem" onclick={startRename}>Rename</button>
-    <button role="menuitem" onclick={startDelete}>Delete</button>
+    {#if !isRootContextMenu}
+      <button role="menuitem" onclick={startRename}>Rename</button>
+      <button role="menuitem" onclick={startDelete}>Delete</button>
+    {/if}
     <button role="menuitem" onclick={() => void reveal()}>Reveal in Finder</button>
   </div>
 {/if}
