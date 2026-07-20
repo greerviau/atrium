@@ -148,6 +148,131 @@ describe("buildDecorations: tables", () => {
   });
 });
 
+describe("buildDecorations: code blocks", () => {
+  it("gives a fenced block a cm-code-block line decoration on every line, cursor elsewhere", () => {
+    const doc = "prose\n\n```js\nconst x = 1;\n```\n\nmore prose";
+    const state = stateFor(doc, 0); // cursor on the first "prose" line
+    const decos = collect(state);
+    for (const lineNum of [3, 4, 5]) {
+      const lineFrom = state.doc.line(lineNum).from;
+      expect(decos.some((d) => d.class === "cm-code-block" && d.from === lineFrom)).toBe(true);
+    }
+  });
+
+  it("keeps the container decoration on a fenced block when the cursor is inside it", () => {
+    const doc = "prose\n\n```js\nconst x = 1;\n```\n\nmore prose";
+    const state = stateFor(doc, doc.indexOf("const x"));
+    const decos = collect(state);
+    for (const lineNum of [3, 4, 5]) {
+      const lineFrom = state.doc.line(lineNum).from;
+      expect(decos.some((d) => d.class === "cm-code-block" && d.from === lineFrom)).toBe(true);
+    }
+  });
+
+  it("hides fence markers and the language tag when the cursor is elsewhere", () => {
+    const doc = "```js\nconst x = 1;\n```\n\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const decos = collect(state);
+    const openLine = state.doc.line(1);
+    const closeLine = state.doc.line(3);
+    const hidesOpen = decos.some(
+      (d) => d.isReplace && !d.class && d.from === openLine.from && d.to === openLine.to,
+    );
+    const hidesClose = decos.some(
+      (d) => d.isReplace && !d.class && d.from === closeLine.from && d.to === closeLine.to,
+    );
+    expect(hidesOpen).toBe(true);
+    expect(hidesClose).toBe(true);
+  });
+
+  it("reveals fence markers as raw text when the cursor is on the block", () => {
+    const doc = "```js\nconst x = 1;\n```\n\nafter";
+    const state = stateFor(doc, doc.indexOf("const x"));
+    const decos = collect(state);
+    const replaces = decos.filter((d) => d.isReplace && !d.class);
+    expect(replaces).toHaveLength(0);
+    expect(state.doc.toString()).toContain("```js");
+    expect(state.doc.toString()).toContain("```\n");
+  });
+
+  it("gives an indented code block a container with nothing to hide", () => {
+    const doc = "prose\n\n    def legacy():\n        return True\n\nmore";
+    const state = stateFor(doc, 0); // cursor outside the block
+    const decos = collect(state);
+    for (const lineNum of [3, 4]) {
+      const lineFrom = state.doc.line(lineNum).from;
+      expect(decos.some((d) => d.class === "cm-code-block" && d.from === lineFrom)).toBe(true);
+    }
+    expect(decos.some((d) => d.isReplace && !d.class)).toBe(false);
+  });
+
+  it("doesn't double-hide an unterminated fence at EOF", () => {
+    const doc = "prose\n\n```js\nconst x = 1;";
+    const state = stateFor(doc, 0); // cursor on the "prose" line, outside the fence
+    const decos = collect(state);
+    for (const lineNum of [3, 4]) {
+      const lineFrom = state.doc.line(lineNum).from;
+      expect(decos.some((d) => d.class === "cm-code-block" && d.from === lineFrom)).toBe(true);
+    }
+    const replaces = decos.filter((d) => d.isReplace && !d.class);
+    expect(replaces).toHaveLength(1);
+  });
+
+  it("hides a bare fence with no language tag using the openMark-only branch", () => {
+    const doc = "```\nconst x = 1;\n```\n\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const decos = collect(state);
+    const openLine = state.doc.line(1);
+    const closeLine = state.doc.line(3);
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === openLine.from && d.to === openLine.to)).toBe(
+      true,
+    );
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === closeLine.from && d.to === closeLine.to)).toBe(
+      true,
+    );
+  });
+
+  it("decorates two adjacent fenced blocks independently", () => {
+    const doc = "```js\nconst a = 1;\n```\n```py\nb = 2\n```\n\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const decos = collect(state);
+    for (const lineNum of [1, 2, 3, 4, 5, 6]) {
+      const lineFrom = state.doc.line(lineNum).from;
+      expect(decos.some((d) => d.class === "cm-code-block" && d.from === lineFrom)).toBe(true);
+    }
+    const block1Open = state.doc.line(1);
+    const block1Close = state.doc.line(3);
+    const block2Open = state.doc.line(4);
+    const block2Close = state.doc.line(6);
+    for (const line of [block1Open, block1Close, block2Open, block2Close]) {
+      expect(decos.some((d) => d.isReplace && !d.class && d.from === line.from && d.to === line.to)).toBe(true);
+    }
+  });
+
+  it("decorates a fenced block and an indented block in the same document", () => {
+    const doc = "```js\nconst a = 1;\n```\n\n    def legacy():\n        return True\n\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const decos = collect(state);
+    for (const lineNum of [1, 2, 3, 5, 6]) {
+      const lineFrom = state.doc.line(lineNum).from;
+      expect(decos.some((d) => d.class === "cm-code-block" && d.from === lineFrom)).toBe(true);
+    }
+    const fenceOpen = state.doc.line(1);
+    const fenceClose = state.doc.line(3);
+    expect(
+      decos.some((d) => d.isReplace && !d.class && d.from === fenceOpen.from && d.to === fenceOpen.to),
+    ).toBe(true);
+    expect(
+      decos.some((d) => d.isReplace && !d.class && d.from === fenceClose.from && d.to === fenceClose.to),
+    ).toBe(true);
+    // The indented block has no fence markup, so nothing within its two
+    // lines should be replaced.
+    const indentedFrom = state.doc.line(5).from;
+    const indentedTo = state.doc.line(6).to;
+    expect(decos.some((d) => d.isReplace && !d.class && d.from >= indentedFrom && d.to <= indentedTo)).toBe(false);
+  });
+});
+
 describe("buildDecorations: round-trip safety", () => {
   it("never mutates document content", () => {
     const doc = "# Heading\n\n*em* **strong** `code` [link](url) ![img](url)\n\n- [ ] task\n\n| a | b |\n|---|---|\n| 1 | 2 |\n";

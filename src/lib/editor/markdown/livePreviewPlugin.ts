@@ -54,8 +54,8 @@ const linkClickHandler = EditorView.domEventHandlers({
  * Full markdown-mode extension set: GFM-flavored language (tables, task
  * lists, strikethrough, autolinks are all part of `markdownLanguage`),
  * fenced-code nested highlighting via `@codemirror/language-data` (colored
- * by the base syntax highlighting shared from `baseExtensions()`), and the
- * live-preview decoration plugin.
+ * by the syntax highlight style shared through `EditorPane.svelte`'s theme
+ * `Compartment`), and the live-preview decoration plugin.
  */
 export function markdownExtensions(documentPath: string): Extension[] {
   return [

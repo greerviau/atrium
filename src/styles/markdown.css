@@ -47,3 +47,11 @@
   border: 1px solid var(--atrium-border);
   padding: 0.2em 0.6em;
 }
+
+.cm-code-block {
+  background: var(--atrium-code-bg);
+  border-left: 3px solid var(--atrium-border);
+  padding: 0 0.6em;
+  white-space: pre;
+  overflow-x: auto;
+}

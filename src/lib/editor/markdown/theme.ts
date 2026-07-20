@@ -14,4 +14,5 @@ export const CLASS = {
   link: "cm-link",
   tableHeader: "cm-table-header",
   tableCell: "cm-table-cell",
+  codeBlock: "cm-code-block",
 } as const;
