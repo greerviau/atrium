@@ -217,6 +217,60 @@ describe("buildDecorations: code blocks", () => {
     const replaces = decos.filter((d) => d.isReplace && !d.class);
     expect(replaces).toHaveLength(1);
   });
+
+  it("hides a bare fence with no language tag using the openMark-only branch", () => {
+    const doc = "```\nconst x = 1;\n```\n\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const decos = collect(state);
+    const openLine = state.doc.line(1);
+    const closeLine = state.doc.line(3);
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === openLine.from && d.to === openLine.to)).toBe(
+      true,
+    );
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === closeLine.from && d.to === closeLine.to)).toBe(
+      true,
+    );
+  });
+
+  it("decorates two adjacent fenced blocks independently", () => {
+    const doc = "```js\nconst a = 1;\n```\n```py\nb = 2\n```\n\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const decos = collect(state);
+    for (const lineNum of [1, 2, 3, 4, 5, 6]) {
+      const lineFrom = state.doc.line(lineNum).from;
+      expect(decos.some((d) => d.class === "cm-code-block" && d.from === lineFrom)).toBe(true);
+    }
+    const block1Open = state.doc.line(1);
+    const block1Close = state.doc.line(3);
+    const block2Open = state.doc.line(4);
+    const block2Close = state.doc.line(6);
+    for (const line of [block1Open, block1Close, block2Open, block2Close]) {
+      expect(decos.some((d) => d.isReplace && !d.class && d.from === line.from && d.to === line.to)).toBe(true);
+    }
+  });
+
+  it("decorates a fenced block and an indented block in the same document", () => {
+    const doc = "```js\nconst a = 1;\n```\n\n    def legacy():\n        return True\n\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const decos = collect(state);
+    for (const lineNum of [1, 2, 3, 5, 6]) {
+      const lineFrom = state.doc.line(lineNum).from;
+      expect(decos.some((d) => d.class === "cm-code-block" && d.from === lineFrom)).toBe(true);
+    }
+    const fenceOpen = state.doc.line(1);
+    const fenceClose = state.doc.line(3);
+    expect(
+      decos.some((d) => d.isReplace && !d.class && d.from === fenceOpen.from && d.to === fenceOpen.to),
+    ).toBe(true);
+    expect(
+      decos.some((d) => d.isReplace && !d.class && d.from === fenceClose.from && d.to === fenceClose.to),
+    ).toBe(true);
+    // The indented block has no fence markup, so nothing within its two
+    // lines should be replaced.
+    const indentedFrom = state.doc.line(5).from;
+    const indentedTo = state.doc.line(6).to;
+    expect(decos.some((d) => d.isReplace && !d.class && d.from >= indentedFrom && d.to <= indentedTo)).toBe(false);
+  });
 });
 
 describe("buildDecorations: round-trip safety", () => {
