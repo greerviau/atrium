@@ -62,6 +62,17 @@
     window.addEventListener("pointerup", onUp);
   }
 
+  type MainSlot = "editor" | "resizer" | "terminal";
+  // For "left", the terminal comes before the editor in DOM order (not just
+  // visually via CSS) so keyboard tab order matches what's on screen. Each
+  // slot's DOM subtree keeps its own identity across a position change
+  // because {#each ... (slot)} is keyed by the (stable) slot name, not by
+  // array index — the terminal subtree (and its running PTY session) is
+  // only ever moved, never torn down and recreated.
+  let mainSlotOrder = $derived<MainSlot[]>(
+    terminalPosition === "left" ? ["terminal", "resizer", "editor"] : ["editor", "resizer", "terminal"],
+  );
+
   function setTerminalPosition(position: TerminalPosition): void {
     terminalPosition = position;
     saveTerminalLayout({ position: terminalPosition, height: terminalHeight, width: terminalWidth });
@@ -115,133 +126,138 @@
   </div>
   <div class="resizer vertical" role="separator" aria-orientation="vertical" onpointerdown={startDragExplorer}></div>
 
-  <div class="main" class:row={terminalPosition !== "bottom"} class:reverse={terminalPosition === "left"}>
-    <div class="editor-area">
-      <div class="tab-strip">
-        {#each $tabsState.tabs as tab (tab.path)}
-          <div
-            class="tab"
-            class:active={tab.path === $tabsState.activeTabPath}
-            onclick={() => setActiveTab(tab.path)}
-            onkeydown={(e) => e.key === "Enter" && setActiveTab(tab.path)}
-            role="tab"
-            tabindex="0"
-            aria-selected={tab.path === $tabsState.activeTabPath}
-          >
-            <span class="tab-name">
-              {tab.path.split("/").pop()}{tab.isDirty ? " •" : ""}
-            </span>
-            <button
-              class="tab-close"
-              onclick={(e) => {
-                e.stopPropagation();
-                closeTab(tab.path);
-              }}
-              aria-label={`Close ${tab.path}`}
-            >
-              ×
-            </button>
-          </div>
-        {/each}
-      </div>
-      <div class="editor-panes">
-        {#each $tabsState.tabs as tab (tab.path)}
-          <div class="editor-pane-slot" class:hidden={tab.path !== $tabsState.activeTabPath}>
-            {#if tab.hasExternalConflict}
-              <div class="conflict-banner">
-                File changed on disk.
-                <button onclick={() => reconcileExternalChange(tab.path)}>Reload</button>
+  <div class="main" class:row={terminalPosition !== "bottom"}>
+    {#each mainSlotOrder as slot (slot)}
+      {#if slot === "editor"}
+        <div class="editor-area">
+          <div class="tab-strip">
+            {#each $tabsState.tabs as tab (tab.path)}
+              <div
+                class="tab"
+                class:active={tab.path === $tabsState.activeTabPath}
+                onclick={() => setActiveTab(tab.path)}
+                onkeydown={(e) => e.key === "Enter" && setActiveTab(tab.path)}
+                role="tab"
+                tabindex="0"
+                aria-selected={tab.path === $tabsState.activeTabPath}
+              >
+                <span class="tab-name">
+                  {tab.path.split("/").pop()}{tab.isDirty ? " •" : ""}
+                </span>
+                <button
+                  class="tab-close"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    closeTab(tab.path);
+                  }}
+                  aria-label={`Close ${tab.path}`}
+                >
+                  ×
+                </button>
               </div>
+            {/each}
+          </div>
+          <div class="editor-panes">
+            {#each $tabsState.tabs as tab (tab.path)}
+              <div class="editor-pane-slot" class:hidden={tab.path !== $tabsState.activeTabPath}>
+                {#if tab.hasExternalConflict}
+                  <div class="conflict-banner">
+                    File changed on disk.
+                    <button onclick={() => reconcileExternalChange(tab.path)}>Reload</button>
+                  </div>
+                {/if}
+                <EditorPane filePath={tab.path} />
+              </div>
+            {/each}
+            {#if $tabsState.tabs.length === 0}
+              <div class="empty-state">Open a file from the explorer to start editing.</div>
             {/if}
-            <EditorPane filePath={tab.path} />
           </div>
-        {/each}
-        {#if $tabsState.tabs.length === 0}
-          <div class="empty-state">Open a file from the explorer to start editing.</div>
-        {/if}
-      </div>
-    </div>
-
-    <div
-      class="resizer"
-      class:horizontal={terminalPosition === "bottom"}
-      class:vertical={terminalPosition !== "bottom"}
-      role="separator"
-      aria-orientation={terminalPosition === "bottom" ? "horizontal" : "vertical"}
-      onpointerdown={startDragTerminal}
-    ></div>
-    <div
-      class="terminal-area"
-      class:dock-left={terminalPosition === "left"}
-      class:dock-right={terminalPosition === "right"}
-      style={terminalPosition === "bottom" ? `height: ${terminalHeight}px` : `width: ${terminalWidth}px`}
-    >
-      <div class="tab-strip">
-        {#each terminalSessions as session (session.id)}
-          <div
-            class="tab"
-            class:active={session.id === activeTerminalId}
-            onclick={() => (activeTerminalId = session.id)}
-            onkeydown={(e) => e.key === "Enter" && (activeTerminalId = session.id)}
-            role="tab"
-            tabindex="0"
-            aria-selected={session.id === activeTerminalId}
-          >
-            <span class="tab-name">Terminal</span>
-            <button
-              class="tab-close"
-              onclick={(e) => {
-                e.stopPropagation();
-                closeTerminalTab(session.id);
-              }}
-              aria-label="Close terminal"
-            >
-              ×
-            </button>
-          </div>
-        {/each}
-        <div class="dock-controls" role="group" aria-label="Terminal dock position">
-          <button
-            class="dock-btn"
-            class:active={terminalPosition === "bottom"}
-            onclick={() => setTerminalPosition("bottom")}
-            aria-label="Dock terminal to bottom"
-            aria-pressed={terminalPosition === "bottom"}
-            title="Dock bottom"
-          >
-            ⬇
-          </button>
-          <button
-            class="dock-btn"
-            class:active={terminalPosition === "left"}
-            onclick={() => setTerminalPosition("left")}
-            aria-label="Dock terminal to left"
-            aria-pressed={terminalPosition === "left"}
-            title="Dock left"
-          >
-            ⬅
-          </button>
-          <button
-            class="dock-btn"
-            class:active={terminalPosition === "right"}
-            onclick={() => setTerminalPosition("right")}
-            aria-label="Dock terminal to right"
-            aria-pressed={terminalPosition === "right"}
-            title="Dock right"
-          >
-            ➡
-          </button>
         </div>
-        <button class="tab new-tab" onclick={newTerminalTab}>+</button>
-      </div>
-      <div class="terminal-panes">
-        {#each terminalSessions as session (session.id)}
-          <div class="terminal-pane-slot" class:hidden={session.id !== activeTerminalId}>
-            <TerminalPane cwd={session.cwd} workspaceId={$workspace.id} onExit={() => closeTerminalTab(session.id)} />
+      {:else if slot === "resizer"}
+        <div
+          class="resizer"
+          class:horizontal={terminalPosition === "bottom"}
+          class:vertical={terminalPosition !== "bottom"}
+          role="separator"
+          aria-orientation={terminalPosition === "bottom" ? "horizontal" : "vertical"}
+          onpointerdown={startDragTerminal}
+        ></div>
+      {:else}
+        <div
+          class="terminal-area"
+          class:dock-left={terminalPosition === "left"}
+          class:dock-right={terminalPosition === "right"}
+          style={terminalPosition === "bottom" ? `height: ${terminalHeight}px` : `width: ${terminalWidth}px`}
+        >
+          <div class="tab-strip">
+            {#each terminalSessions as session (session.id)}
+              <div
+                class="tab"
+                class:active={session.id === activeTerminalId}
+                onclick={() => (activeTerminalId = session.id)}
+                onkeydown={(e) => e.key === "Enter" && (activeTerminalId = session.id)}
+                role="tab"
+                tabindex="0"
+                aria-selected={session.id === activeTerminalId}
+              >
+                <span class="tab-name">Terminal</span>
+                <button
+                  class="tab-close"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    closeTerminalTab(session.id);
+                  }}
+                  aria-label="Close terminal"
+                >
+                  ×
+                </button>
+              </div>
+            {/each}
+            <div class="dock-controls" role="group" aria-label="Terminal dock position">
+              <button
+                class="dock-btn"
+                class:active={terminalPosition === "bottom"}
+                onclick={() => setTerminalPosition("bottom")}
+                aria-label="Dock terminal to bottom"
+                aria-pressed={terminalPosition === "bottom"}
+                title="Dock bottom"
+              >
+                ⬇
+              </button>
+              <button
+                class="dock-btn"
+                class:active={terminalPosition === "left"}
+                onclick={() => setTerminalPosition("left")}
+                aria-label="Dock terminal to left"
+                aria-pressed={terminalPosition === "left"}
+                title="Dock left"
+              >
+                ⬅
+              </button>
+              <button
+                class="dock-btn"
+                class:active={terminalPosition === "right"}
+                onclick={() => setTerminalPosition("right")}
+                aria-label="Dock terminal to right"
+                aria-pressed={terminalPosition === "right"}
+                title="Dock right"
+              >
+                ➡
+              </button>
+            </div>
+            <button class="tab new-tab" onclick={newTerminalTab}>+</button>
           </div>
-        {/each}
-      </div>
-    </div>
+          <div class="terminal-panes">
+            {#each terminalSessions as session (session.id)}
+              <div class="terminal-pane-slot" class:hidden={session.id !== activeTerminalId}>
+                <TerminalPane cwd={session.cwd} workspaceId={$workspace.id} onExit={() => closeTerminalTab(session.id)} />
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+    {/each}
   </div>
 </main>
 {/if}
@@ -278,9 +294,6 @@
   }
   .main.row {
     flex-direction: row;
-  }
-  .main.row.reverse {
-    flex-direction: row-reverse;
   }
   .editor-area {
     flex: 1;
