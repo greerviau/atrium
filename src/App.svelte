@@ -10,9 +10,20 @@
   import { onFsChanged, onDockOpenPath } from "./lib/ipc/events";
   import { workspaceTakePendingOpen } from "./lib/ipc/commands";
   import { initMenuBar } from "./lib/shell/MenuBar";
+  import {
+    loadTerminalLayout,
+    saveTerminalLayout,
+    clampHeight,
+    clampWidth,
+    type TerminalPosition,
+  } from "./lib/stores/layout";
+
+  const initialLayout = loadTerminalLayout();
 
   let explorerWidth = $state(240);
-  let terminalHeight = $state(240);
+  let terminalPosition = $state<TerminalPosition>(initialLayout.position);
+  let terminalHeight = $state(initialLayout.height);
+  let terminalWidth = $state(initialLayout.width);
 
   interface TerminalSession {
     id: string;
@@ -51,16 +62,32 @@
     window.addEventListener("pointerup", onUp);
   }
 
+  function setTerminalPosition(position: TerminalPosition): void {
+    terminalPosition = position;
+    saveTerminalLayout({ position: terminalPosition, height: terminalHeight, width: terminalWidth });
+  }
+
   function startDragTerminal(event: PointerEvent): void {
     event.preventDefault();
-    const startY = event.clientY;
-    const startHeight = terminalHeight;
-    function onMove(e: PointerEvent): void {
-      terminalHeight = Math.max(80, Math.min(700, startHeight - (e.clientY - startY)));
-    }
     function onUp(): void {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      saveTerminalLayout({ position: terminalPosition, height: terminalHeight, width: terminalWidth });
+    }
+    let onMove: (e: PointerEvent) => void;
+    if (terminalPosition === "bottom") {
+      const startY = event.clientY;
+      const startHeight = terminalHeight;
+      onMove = (e: PointerEvent): void => {
+        terminalHeight = clampHeight(startHeight - (e.clientY - startY));
+      };
+    } else {
+      const startX = event.clientX;
+      const startWidth = terminalWidth;
+      const sign = terminalPosition === "left" ? 1 : -1;
+      onMove = (e: PointerEvent): void => {
+        terminalWidth = clampWidth(startWidth + sign * (e.clientX - startX));
+      };
     }
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -88,7 +115,7 @@
   </div>
   <div class="resizer vertical" role="separator" aria-orientation="vertical" onpointerdown={startDragExplorer}></div>
 
-  <div class="main">
+  <div class="main" class:row={terminalPosition !== "bottom"} class:reverse={terminalPosition === "left"}>
     <div class="editor-area">
       <div class="tab-strip">
         {#each $tabsState.tabs as tab (tab.path)}
@@ -135,8 +162,20 @@
       </div>
     </div>
 
-    <div class="resizer horizontal" role="separator" aria-orientation="horizontal" onpointerdown={startDragTerminal}></div>
-    <div class="terminal-area" style={`height: ${terminalHeight}px`}>
+    <div
+      class="resizer"
+      class:horizontal={terminalPosition === "bottom"}
+      class:vertical={terminalPosition !== "bottom"}
+      role="separator"
+      aria-orientation={terminalPosition === "bottom" ? "horizontal" : "vertical"}
+      onpointerdown={startDragTerminal}
+    ></div>
+    <div
+      class="terminal-area"
+      class:dock-left={terminalPosition === "left"}
+      class:dock-right={terminalPosition === "right"}
+      style={terminalPosition === "bottom" ? `height: ${terminalHeight}px` : `width: ${terminalWidth}px`}
+    >
       <div class="tab-strip">
         {#each terminalSessions as session (session.id)}
           <div
@@ -161,6 +200,38 @@
             </button>
           </div>
         {/each}
+        <div class="dock-controls" role="group" aria-label="Terminal dock position">
+          <button
+            class="dock-btn"
+            class:active={terminalPosition === "bottom"}
+            onclick={() => setTerminalPosition("bottom")}
+            aria-label="Dock terminal to bottom"
+            aria-pressed={terminalPosition === "bottom"}
+            title="Dock bottom"
+          >
+            ⬇
+          </button>
+          <button
+            class="dock-btn"
+            class:active={terminalPosition === "left"}
+            onclick={() => setTerminalPosition("left")}
+            aria-label="Dock terminal to left"
+            aria-pressed={terminalPosition === "left"}
+            title="Dock left"
+          >
+            ⬅
+          </button>
+          <button
+            class="dock-btn"
+            class:active={terminalPosition === "right"}
+            onclick={() => setTerminalPosition("right")}
+            aria-label="Dock terminal to right"
+            aria-pressed={terminalPosition === "right"}
+            title="Dock right"
+          >
+            ➡
+          </button>
+        </div>
         <button class="tab new-tab" onclick={newTerminalTab}>+</button>
       </div>
       <div class="terminal-panes">
@@ -205,11 +276,18 @@
     flex-direction: column;
     min-width: 0;
   }
+  .main.row {
+    flex-direction: row;
+  }
+  .main.row.reverse {
+    flex-direction: row-reverse;
+  }
   .editor-area {
     flex: 1;
     display: flex;
     flex-direction: column;
     min-height: 0;
+    min-width: 0;
   }
   .tab-strip {
     display: flex;
@@ -282,5 +360,42 @@
     display: flex;
     flex-direction: column;
     border-top: 1px solid var(--atrium-border, #333);
+  }
+  .terminal-area.dock-left {
+    border-top: none;
+    border-right: 1px solid var(--atrium-border, #333);
+  }
+  .terminal-area.dock-right {
+    border-top: none;
+    border-left: 1px solid var(--atrium-border, #333);
+  }
+  .dock-controls {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 4px;
+    flex-shrink: 0;
+  }
+  .dock-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    border-radius: 3px;
+    color: inherit;
+    font: inherit;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.6;
+    padding: 4px 6px;
+  }
+  .dock-btn:hover {
+    opacity: 1;
+  }
+  .dock-btn.active {
+    opacity: 1;
+    background: var(--atrium-active-tab-bg, rgba(128, 128, 128, 0.2));
   }
 </style>
