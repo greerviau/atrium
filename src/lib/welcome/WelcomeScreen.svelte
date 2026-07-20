@@ -35,7 +35,12 @@
             <div
               class="recent-row"
               onclick={() => void openRecent(project.path)}
-              onkeydown={(e) => e.key === "Enter" && void openRecent(project.path)}
+              onkeydown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  void openRecent(project.path);
+                }
+              }}
               role="button"
               tabindex="0"
             >

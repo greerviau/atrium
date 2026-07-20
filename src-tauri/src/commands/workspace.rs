@@ -49,10 +49,26 @@ pub async fn workspace_set_root(
     // Every "open a folder" action (in-app button, `File` menu, Dock menu)
     // funnels through this command, so recording the recent-project entry
     // here — rather than in each caller — guarantees the list can never
-    // miss an entry or drift from what's actually open.
-    recents::record(&state.app_handle, &path)?;
+    // miss an entry or drift from what's actually open. This is ancillary
+    // to the core "open a folder" action above, so a failure here (e.g. a
+    // full disk) is logged and swallowed rather than aborting the command
+    // and leaving the frontend's workspace store un-updated.
+    if let Err(err) = recents::record(&state.app_handle, &path) {
+        eprintln!("atrium: failed to record recent project: {err}");
+    }
+
+    // `note_recent_document` calls into AppKit, which requires the main
+    // thread; async command bodies run on Tauri's async runtime pool, not
+    // necessarily the main thread, so dispatch explicitly rather than
+    // calling it inline (where `MainThreadMarker::new()` would silently
+    // return `None` and no-op).
     #[cfg(target_os = "macos")]
-    crate::macos_dock::note_recent_document(&path);
+    {
+        let path_for_main_thread = path.clone();
+        let _ = state
+            .app_handle
+            .run_on_main_thread(move || crate::macos_dock::note_recent_document(&path_for_main_thread));
+    }
 
     Ok(())
 }

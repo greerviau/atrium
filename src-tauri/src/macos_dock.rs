@@ -97,7 +97,10 @@ define_class!(
     impl DockMenuItem {
         #[unsafe(method(openRecentProject:))]
         fn open_recent_project(&self, _sender: Option<&AnyObject>) {
-            open_path(self.ivars().clone());
+            // Our own Dock menu is only ever shown for an already-running
+            // app, so there is no cold-launch case to stash for here —
+            // emit live, unlike `open_path` below.
+            emit_open_path(self.ivars().clone());
         }
     }
 );
@@ -117,18 +120,25 @@ impl DockMenuItem {
     }
 }
 
-/// Routes a picked path back to the frontend: stashes it (for the
-/// cold-launch case, consumed via `workspace_take_pending_open`) and emits
-/// it live (for the already-running case). `main.rs`'s `RunEvent::Opened`
-/// handler funnels through the same function.
-pub fn open_path(path: String) {
-    let Some(app) = APP_HANDLE.get() else {
-        return;
-    };
-    if let Some(state) = app.try_state::<crate::state::AppState>() {
-        *state.pending_open.lock().unwrap() = Some(path.clone());
+/// Emits `OPEN_PATH_EVENT` for the frontend's live listener.
+fn emit_open_path(path: String) {
+    if let Some(app) = APP_HANDLE.get() {
+        let _ = app.emit(OPEN_PATH_EVENT, path);
     }
-    let _ = app.emit(OPEN_PATH_EVENT, path);
+}
+
+/// Routes a path from `RunEvent::Opened` (`main.rs`) back to the frontend:
+/// stashes it (for the cold-launch case, consumed via
+/// `workspace_take_pending_open`) and emits it live (for the case where
+/// that event reaches an already-running app, e.g. a pick from the
+/// system-level "Open Recent" list rather than our own Dock menu).
+pub fn open_path(path: String) {
+    if let Some(app) = APP_HANDLE.get() {
+        if let Some(state) = app.try_state::<crate::state::AppState>() {
+            *state.pending_open.lock().unwrap() = Some(path.clone());
+        }
+    }
+    emit_open_path(path);
 }
 
 /// Registers `path` with `NSDocumentController` so it shows up in the
