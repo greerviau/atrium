@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { syntaxTree, defaultHighlightStyle } from "@codemirror/language";
-import { highlightTree } from "@lezer/highlight";
+import { EditorView, lineNumbers } from "@codemirror/view";
+import { baseExtensions } from "../../src/lib/editor/baseExtensions";
 import { codeExtensions } from "../../src/lib/editor/codeExtensions";
 
 interface Case {
@@ -21,21 +21,27 @@ const cases: Case[] = [
   { path: "sample.sh", doc: "#!/bin/bash\n# say hello\necho \"hi\"\n" },
 ];
 
-describe("syntax highlighting is applied to every wired code-file extension", () => {
+let view: EditorView | undefined;
+
+afterEach(() => {
+  view?.destroy();
+  view = undefined;
+});
+
+describe("syntax highlighting is wired up for every wired code-file extension", () => {
   for (const { path, doc } of cases) {
-    it(`highlights ${path}`, () => {
-      const state = EditorState.create({
-        doc,
-        extensions: codeExtensions(path),
+    it(`renders styled token spans for ${path}, via EditorPane's real code-mode extension composition`, () => {
+      const container = document.createElement("div");
+      view = new EditorView({
+        state: EditorState.create({
+          doc,
+          extensions: [baseExtensions(), lineNumbers(), ...codeExtensions(path)],
+        }),
+        parent: container,
       });
 
-      const tree = syntaxTree(state);
-      const styledRanges: string[] = [];
-      highlightTree(tree, defaultHighlightStyle, (_from, _to, classes) => {
-        styledRanges.push(classes);
-      });
-
-      expect(styledRanges.length).toBeGreaterThan(0);
+      const styledSpans = container.querySelectorAll(".cm-content .cm-line span[class]");
+      expect(styledSpans.length).toBeGreaterThan(0);
     });
   }
 });

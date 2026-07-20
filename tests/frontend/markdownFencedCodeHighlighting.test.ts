@@ -1,13 +1,20 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { syntaxTree, defaultHighlightStyle, LanguageDescription } from "@codemirror/language";
+import { EditorView } from "@codemirror/view";
+import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
-import { highlightTree } from "@lezer/highlight";
 import { baseExtensions } from "../../src/lib/editor/baseExtensions";
 import { markdownExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
 
+let view: EditorView | undefined;
+
+afterEach(() => {
+  view?.destroy();
+  view = undefined;
+});
+
 describe("fenced code blocks in markdown still highlight after the shared extension moved to baseExtensions()", () => {
-  it("colors tokens inside a ```js fenced block", async () => {
+  it("renders styled token spans inside a ```js fenced block, via EditorPane's real markdown-mode extension composition", async () => {
     // The markdown language's nested-parser lookup only parses a fenced
     // block's language synchronously once that `LanguageDescription`'s
     // `.load()` has already resolved (otherwise it uses a skipping parser
@@ -15,23 +22,22 @@ describe("fenced code blocks in markdown still highlight after the shared extens
     // synchronous-after-await instead of racing CM6's own reparse cycle.
     await LanguageDescription.matchLanguageName(languages, "js")?.load();
 
-    const doc = "Some text\n\n```js\nfunction greet(name) {\n  return `hi ${name}`;\n}\n```\n";
-    const fenceStart = doc.indexOf("function");
-    const fenceEnd = doc.indexOf("```\n", fenceStart);
-
-    const state = EditorState.create({
-      doc,
-      extensions: [...baseExtensions(), ...markdownExtensions("sample.md")],
+    const doc = "# Heading\n\n```js\nfunction greet(name) {\n  return `hi ${name}`;\n}\n```\n";
+    const container = document.createElement("div");
+    view = new EditorView({
+      state: EditorState.create({
+        doc,
+        extensions: [baseExtensions(), markdownExtensions("sample.md")],
+      }),
+      parent: container,
     });
 
-    const tree = syntaxTree(state);
-    const styledRangesInFence: string[] = [];
-    highlightTree(tree, defaultHighlightStyle, (from, to, classes) => {
-      if (from >= fenceStart && to <= fenceEnd) {
-        styledRangesInFence.push(classes);
-      }
-    });
+    const fenceLines = Array.from(container.querySelectorAll(".cm-content .cm-line")).filter((line) =>
+      line.textContent?.includes("greet"),
+    );
+    expect(fenceLines.length).toBeGreaterThan(0);
 
-    expect(styledRangesInFence.length).toBeGreaterThan(0);
+    const styledSpansInFence = fenceLines.flatMap((line) => Array.from(line.querySelectorAll("span[class]")));
+    expect(styledSpansInFence.length).toBeGreaterThan(0);
   });
 });
