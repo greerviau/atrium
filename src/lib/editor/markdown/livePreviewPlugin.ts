@@ -1,6 +1,5 @@
 import type { Extension } from "@codemirror/state";
 import { EditorView, ViewPlugin, ViewUpdate, type DecorationSet } from "@codemirror/view";
-import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { buildDecorations } from "./decorations";
@@ -54,13 +53,13 @@ const linkClickHandler = EditorView.domEventHandlers({
 /**
  * Full markdown-mode extension set: GFM-flavored language (tables, task
  * lists, strikethrough, autolinks are all part of `markdownLanguage`),
- * fenced-code nested highlighting via `@codemirror/language-data`, base
- * syntax highlighting, and the live-preview decoration plugin.
+ * fenced-code nested highlighting via `@codemirror/language-data` (colored
+ * by the base syntax highlighting shared from `baseExtensions()`), and the
+ * live-preview decoration plugin.
  */
 export function markdownExtensions(documentPath: string): Extension[] {
   return [
     markdown({ base: markdownLanguage, codeLanguages: languages }),
-    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     livePreviewPlugin(documentPath),
     linkClickHandler,
   ];
