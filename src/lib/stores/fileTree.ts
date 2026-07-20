@@ -11,30 +11,56 @@ export interface TreeNode {
 export interface FileTreeState {
   /** Top-level entries of the workspace root; `null` until a root is set. */
   roots: TreeNode[] | null;
+  /** Path passed to `loadRoot`; `null` until a root is set. Used to detect root-level changes, which have no `TreeNode` of their own. */
+  rootPath: string | null;
 }
 
-export const fileTree = writable<FileTreeState>({ roots: null });
+export const fileTree = writable<FileTreeState>({ roots: null, rootPath: null });
 
 function toNode(entry: DirEntry): TreeNode {
   return { entry, expanded: false, children: undefined };
 }
 
+/** Normalizes for path comparison: backslash-to-slash, trailing-slash stripping. No symlink canonicalization. */
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+/** Merges a fresh top-level listing into `roots`, preserving each surviving sibling's `expanded`/`children` state. */
+function mergeRoots(roots: TreeNode[], entries: DirEntry[]): TreeNode[] {
+  const existingByPath = new Map(roots.map((node) => [node.entry.path, node]));
+  return entries.map((entry) => {
+    const existing = existingByPath.get(entry.path);
+    return existing ? { ...existing, entry } : toNode(entry);
+  });
+}
+
 export async function loadRoot(rootPath: string): Promise<void> {
   const entries = await fsListDir(localWorkspaceId(), rootPath);
-  fileTree.set({ roots: entries.map(toNode) });
+  fileTree.set({ roots: entries.map(toNode), rootPath });
 }
 
 /** Loads (or reloads) the children of the node at `path`, patching it in place. */
 export async function loadChildren(path: string): Promise<void> {
   const entries = await fsListDir(localWorkspaceId(), path);
-  const children = entries.map(toNode);
-  fileTree.update((state) => ({
-    roots: state.roots && patchNode(state.roots, path, (node) => ({ ...node, children, expanded: true })),
-  }));
+  fileTree.update((state) => {
+    if (!state.roots) {
+      return state;
+    }
+    if (state.rootPath !== null && normalizePath(path) === normalizePath(state.rootPath)) {
+      return { ...state, roots: mergeRoots(state.roots, entries) };
+    }
+    const children = entries.map(toNode);
+    return {
+      ...state,
+      roots: patchNode(state.roots, path, (node) => ({ ...node, children, expanded: true })),
+    };
+  });
 }
 
 export function collapse(path: string): void {
   fileTree.update((state) => ({
+    ...state,
     roots: state.roots && patchNode(state.roots, path, (node) => ({ ...node, expanded: false })),
   }));
 }
@@ -49,6 +75,7 @@ export async function toggleExpanded(node: TreeNode): Promise<void> {
   }
   if (node.children) {
     fileTree.update((state) => ({
+      ...state,
       roots: state.roots && patchNode(state.roots, node.entry.path, (n) => ({ ...n, expanded: true })),
     }));
     return;
@@ -63,13 +90,18 @@ export async function refreshDirectoryContaining(changedPath: string): Promise<v
     return;
   }
   const parent = parentPath(changedPath);
+  if (state.rootPath !== null && normalizePath(parent) === normalizePath(state.rootPath)) {
+    // The root has no `TreeNode`/`expanded` flag of its own; it is implicitly always expanded.
+    await loadChildren(state.rootPath);
+    return;
+  }
   if (findNode(state.roots, parent)?.expanded) {
     await loadChildren(parent);
   }
 }
 
 function parentPath(path: string): string {
-  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  const normalized = normalizePath(path);
   const idx = normalized.lastIndexOf("/");
   return idx <= 0 ? "/" : normalized.slice(0, idx);
 }
