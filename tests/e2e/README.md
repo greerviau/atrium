@@ -28,7 +28,7 @@ npm test
 2. Open a terminal tab, run `echo`, and verify the output renders.
 3. (Follow-up, not yet in the spec) feed a synthetic buffer containing a PR URL and a real file path and verify both linkify and that clicking the file path opens it in the editor.
 
-The native folder-picker dialog lives outside the WebView, so the spec registers the workspace root directly through the same `workspace_set_root` command the picker's callback would call, rather than trying to drive the OS dialog — everything downstream exercises real app code.
+The native folder-picker dialog lives outside the WebView, so the spec registers the workspace root directly through the same `workspace_set_root` command the picker's callback would call, rather than trying to drive the OS dialog. `workspace_set_root` also records the path as a recent project, so the spec reloads and clicks its row on the welcome screen to pick it up — everything downstream, including the workspace store update, exercises real app code.
 
 ## Status
 

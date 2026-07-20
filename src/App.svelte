@@ -3,10 +3,12 @@
   import FileTree from "./lib/explorer/FileTree.svelte";
   import EditorPane from "./lib/editor/EditorPane.svelte";
   import TerminalPane from "./lib/terminal/TerminalPane.svelte";
-  import { workspace } from "./lib/stores/workspace";
+  import WelcomeScreen from "./lib/welcome/WelcomeScreen.svelte";
+  import { workspace, openWorkspacePath } from "./lib/stores/workspace";
   import { tabsState, setActiveTab, closeTab, reconcileExternalChange } from "./lib/stores/tabs";
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
-  import { onFsChanged } from "./lib/ipc/events";
+  import { onFsChanged, onDockOpenPath } from "./lib/ipc/events";
+  import { workspaceTakePendingOpen } from "./lib/ipc/commands";
   import { initMenuBar } from "./lib/shell/MenuBar";
 
   let explorerWidth = $state(240);
@@ -70,9 +72,16 @@
       void reconcileExternalChange(event.path);
       void refreshDirectoryContaining(event.path);
     });
+    void onDockOpenPath((path) => void openWorkspacePath(path));
+    void workspaceTakePendingOpen().then((path) => {
+      if (path) void openWorkspacePath(path);
+    });
   });
 </script>
 
+{#if !$workspace.root}
+  <WelcomeScreen />
+{:else}
 <main class="app">
   <div class="explorer" style={`width: ${explorerWidth}px`}>
     <FileTree />
@@ -126,46 +135,45 @@
       </div>
     </div>
 
-    {#if $workspace.root}
-      <div class="resizer horizontal" role="separator" aria-orientation="horizontal" onpointerdown={startDragTerminal}></div>
-      <div class="terminal-area" style={`height: ${terminalHeight}px`}>
-        <div class="tab-strip">
-          {#each terminalSessions as session (session.id)}
-            <div
-              class="tab"
-              class:active={session.id === activeTerminalId}
-              onclick={() => (activeTerminalId = session.id)}
-              onkeydown={(e) => e.key === "Enter" && (activeTerminalId = session.id)}
-              role="tab"
-              tabindex="0"
-              aria-selected={session.id === activeTerminalId}
+    <div class="resizer horizontal" role="separator" aria-orientation="horizontal" onpointerdown={startDragTerminal}></div>
+    <div class="terminal-area" style={`height: ${terminalHeight}px`}>
+      <div class="tab-strip">
+        {#each terminalSessions as session (session.id)}
+          <div
+            class="tab"
+            class:active={session.id === activeTerminalId}
+            onclick={() => (activeTerminalId = session.id)}
+            onkeydown={(e) => e.key === "Enter" && (activeTerminalId = session.id)}
+            role="tab"
+            tabindex="0"
+            aria-selected={session.id === activeTerminalId}
+          >
+            <span class="tab-name">Terminal</span>
+            <button
+              class="tab-close"
+              onclick={(e) => {
+                e.stopPropagation();
+                closeTerminalTab(session.id);
+              }}
+              aria-label="Close terminal"
             >
-              <span class="tab-name">Terminal</span>
-              <button
-                class="tab-close"
-                onclick={(e) => {
-                  e.stopPropagation();
-                  closeTerminalTab(session.id);
-                }}
-                aria-label="Close terminal"
-              >
-                ×
-              </button>
-            </div>
-          {/each}
-          <button class="tab new-tab" onclick={newTerminalTab}>+</button>
-        </div>
-        <div class="terminal-panes">
-          {#each terminalSessions as session (session.id)}
-            <div class="terminal-pane-slot" class:hidden={session.id !== activeTerminalId}>
-              <TerminalPane cwd={session.cwd} workspaceId={$workspace.id} onExit={() => closeTerminalTab(session.id)} />
-            </div>
-          {/each}
-        </div>
+              ×
+            </button>
+          </div>
+        {/each}
+        <button class="tab new-tab" onclick={newTerminalTab}>+</button>
       </div>
-    {/if}
+      <div class="terminal-panes">
+        {#each terminalSessions as session (session.id)}
+          <div class="terminal-pane-slot" class:hidden={session.id !== activeTerminalId}>
+            <TerminalPane cwd={session.cwd} workspaceId={$workspace.id} onExit={() => closeTerminalTab(session.id)} />
+          </div>
+        {/each}
+      </div>
+    </div>
   </div>
 </main>
+{/if}
 
 <style>
   .app {

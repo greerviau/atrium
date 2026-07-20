@@ -7,8 +7,11 @@ const fixturesDir = path.join(__dirname, "../fixtures");
 
 // The native folder picker is outside the WebView and out of WebDriver's
 // reach, so these tests register the workspace root directly through the
-// same `workspace_set_root` command the picker's callback would call —
-// everything downstream (the file tree, opening the file, live preview,
+// same `workspace_set_root` command the picker's callback would call.
+// `workspace_set_root` also records `root` as a recent project, so
+// reloading and clicking its row on the welcome screen picks it up through
+// the real `openWorkspacePath` flow (including the workspace store update)
+// — everything downstream (the file tree, opening the file, live preview,
 // save) exercises the real app code.
 async function openWorkspace(root) {
   await browser.execute((path) => {
@@ -17,6 +20,11 @@ async function openWorkspace(root) {
       path,
     });
   }, root);
+  await browser.refresh();
+
+  const recentRow = await $(`//span[@class='recent-path' and text()='${root}']`);
+  await recentRow.waitForExist({ timeout: 10000 });
+  await recentRow.click();
 }
 
 describe("markdown live preview", () => {

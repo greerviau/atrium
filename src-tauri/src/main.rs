@@ -5,7 +5,10 @@ mod commands;
 mod error;
 mod fs_watch;
 mod link_resolve;
+#[cfg(target_os = "macos")]
+mod macos_dock;
 mod pty_manager;
+mod recents;
 mod state;
 mod workspace;
 
@@ -87,9 +90,10 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 }
 
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
         .setup(|app| {
             let handle = app.handle().clone();
             app.manage(AppState::new(handle.clone()));
@@ -113,11 +117,17 @@ fn main() {
                 });
             }
 
+            #[cfg(target_os = "macos")]
+            macos_dock::install(&handle);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::workspace::workspace_open_folder_dialog,
             commands::workspace::workspace_set_root,
+            commands::workspace::workspace_get_recents,
+            commands::workspace::workspace_remove_recent,
+            commands::workspace::workspace_take_pending_open,
             commands::fs::fs_list_dir,
             commands::fs::fs_read_file,
             commands::fs::fs_write_file,
@@ -133,6 +143,22 @@ fn main() {
             commands::pty::pty_kill,
             commands::shell::shell_open_external,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|_app_handle, _event| {
+        // `RunEvent::Opened` fires both when a Dock-menu pick reaches an
+        // already-running app and (per plan section 4.3) during a cold
+        // launch, before the frontend's event listeners exist yet;
+        // `macos_dock::open_path` handles both by stashing the path for
+        // `workspace_take_pending_open` and emitting it live.
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Opened { urls } = _event {
+            for url in urls {
+                if let Ok(path) = url.to_file_path() {
+                    macos_dock::open_path(path.to_string_lossy().into_owned());
+                }
+            }
+        }
+    });
 }

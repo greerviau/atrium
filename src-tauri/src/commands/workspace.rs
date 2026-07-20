@@ -1,9 +1,10 @@
 use crate::error::AppError;
+use crate::recents::{self, RecentProject};
 use crate::state::AppState;
 use crate::workspace::local::LocalWorkspace;
 use crate::workspace::Workspace;
 use std::path::PathBuf;
-use tauri::{Emitter, State};
+use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::mpsc;
 
@@ -44,5 +45,49 @@ pub async fn workspace_set_root(
         .lock()
         .unwrap()
         .insert(workspace_id, std::sync::Arc::new(workspace));
+
+    // Every "open a folder" action (in-app button, `File` menu, Dock menu)
+    // funnels through this command, so recording the recent-project entry
+    // here — rather than in each caller — guarantees the list can never
+    // miss an entry or drift from what's actually open. This is ancillary
+    // to the core "open a folder" action above, so a failure here (e.g. a
+    // full disk) is logged and swallowed rather than aborting the command
+    // and leaving the frontend's workspace store un-updated.
+    if let Err(err) = recents::record(&state.app_handle, &path) {
+        eprintln!("atrium: failed to record recent project: {err}");
+    }
+
+    // `note_recent_document` calls into AppKit, which requires the main
+    // thread; async command bodies run on Tauri's async runtime pool, not
+    // necessarily the main thread, so dispatch explicitly rather than
+    // calling it inline (where `MainThreadMarker::new()` would silently
+    // return `None` and no-op).
+    #[cfg(target_os = "macos")]
+    {
+        let path_for_main_thread = path.clone();
+        let _ = state
+            .app_handle
+            .run_on_main_thread(move || crate::macos_dock::note_recent_document(&path_for_main_thread));
+    }
+
     Ok(())
+}
+
+#[tauri::command]
+pub fn workspace_get_recents(app: AppHandle) -> Result<Vec<RecentProject>, AppError> {
+    recents::get_recents(&app)
+}
+
+#[tauri::command]
+pub fn workspace_remove_recent(app: AppHandle, path: String) -> Result<(), AppError> {
+    recents::remove_recent(&app, &path)
+}
+
+/// Consumes the path from a Dock-menu pick received before the frontend had
+/// mounted its event listeners (the cold-launch case in plan section 4.3).
+/// Called once by the frontend on startup; returns `None` on every other
+/// platform and on every subsequent call.
+#[tauri::command]
+pub fn workspace_take_pending_open(state: State<'_, AppState>) -> Option<String> {
+    state.pending_open.lock().unwrap().take()
 }
