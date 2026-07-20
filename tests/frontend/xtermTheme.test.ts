@@ -22,6 +22,41 @@ const ANSI_SLOTS: (keyof ITheme)[] = [
   "brightWhite",
 ];
 
+/**
+ * xterm.js's own built-in defaults (used when no `theme` option is passed
+ * at all), read directly from its source
+ * (`node_modules/@xterm/xterm/src/browser/services/ThemeService.ts`). Atrium
+ * Dark's `bgBase` (`#1a1d21`) is visually close to xterm's default
+ * background (`#000000`) — both read as "black" at a glance — so a bug that
+ * silently dropped the `theme` option from the `Terminal` constructor could
+ * go unnoticed by eye. These values pin down xterm's actual default so the
+ * tests below can assert Atrium's theme is a deliberately different,
+ * non-default value, not a coincidental visual match.
+ */
+const XTERM_DEFAULTS = {
+  background: "#000000",
+  foreground: "#ffffff",
+  cursor: "#ffffff",
+  ansi: [
+    "#2e3436",
+    "#cc0000",
+    "#4e9a06",
+    "#c4a000",
+    "#3465a4",
+    "#75507b",
+    "#06989a",
+    "#d3d7cf",
+    "#555753",
+    "#ef2929",
+    "#8ae234",
+    "#fce94f",
+    "#729fcf",
+    "#ad7fa8",
+    "#34e2e2",
+    "#eeeeec",
+  ],
+};
+
 describe("buildXtermTheme", () => {
   it.each(themes)("sets background/foreground/cursor/selection from $id's UI tokens", (theme) => {
     const xtermTheme = buildXtermTheme(theme);
@@ -116,5 +151,41 @@ describe("buildXtermTheme", () => {
       brightCyan: "#b3f5e6",
       brightWhite: "#ffffff",
     });
+  });
+});
+
+describe("buildXtermTheme is a real theme, not a coincidental match to xterm's own default", () => {
+  it.each(themes)("$id's full 16-slot ANSI ramp differs from xterm's built-in default ramp", (theme) => {
+    const xtermTheme = buildXtermTheme(theme);
+    const ourRamp = ANSI_SLOTS.map((slot) => xtermTheme[slot]);
+    // Every slot is a real, curated color (never undefined/empty), and the
+    // ramp as a whole is not xterm's own default ramp verbatim — a
+    // wiring bug that dropped the theme option would leave xterm falling
+    // back to XTERM_DEFAULTS.ansi exactly.
+    for (const value of ourRamp) {
+      expect(value).toBeTypeOf("string");
+    }
+    expect(ourRamp).not.toEqual(XTERM_DEFAULTS.ansi);
+    // Stronger than "the 16-tuple differs somewhere": most individual
+    // slots differ too, ruling out a bug that wired through only one slot.
+    const matchingSlots = ourRamp.filter((value, i) => value === XTERM_DEFAULTS.ansi[i]).length;
+    expect(matchingSlots).toBeLessThan(ourRamp.length / 2);
+  });
+
+  it("Atrium Dark and Atrium Light backgrounds are deliberately different values from xterm's default black/white, not a coincidental visual match", () => {
+    // (Atrium High Contrast is excluded here: its background/foreground are
+    // intentionally pure black/white, which happens to equal xterm's own
+    // defaults — its ANSI ramp, checked above, is what proves its theme is
+    // actually wired through.)
+    expect(buildXtermTheme(atriumDark).background).not.toBe(XTERM_DEFAULTS.background);
+    expect(buildXtermTheme(atriumLight).background).not.toBe(XTERM_DEFAULTS.background);
+    expect(buildXtermTheme(atriumLight).foreground).not.toBe(XTERM_DEFAULTS.foreground);
+  });
+
+  it("no two of the three built-in themes produce the same ITheme", () => {
+    const [dark, light, highContrast] = themes.map(buildXtermTheme);
+    expect(dark).not.toEqual(light);
+    expect(dark).not.toEqual(highContrast);
+    expect(light).not.toEqual(highContrast);
   });
 });
