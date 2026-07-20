@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { EditorState } from "@codemirror/state";
+  import { Compartment, EditorState } from "@codemirror/state";
   import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+  import { syntaxHighlighting } from "@codemirror/language";
   import {
     tabsState,
     saveRequest,
@@ -9,6 +10,8 @@
     markDirty,
     clearPendingSelection,
   } from "../stores/tabs";
+  import { theme as themeStore } from "../stores/theme";
+  import { buildCmTheme, buildHighlightStyle } from "../theme/cmTheme";
   import { baseExtensions } from "./baseExtensions";
   import { markdownExtensions } from "./markdown/livePreviewPlugin";
   import { codeExtensions } from "./codeExtensions";
@@ -17,6 +20,11 @@
 
   let container: HTMLDivElement;
   let view: EditorView;
+  const themeCompartment = new Compartment();
+
+  function themeExtensions() {
+    return [buildCmTheme($themeStore), syntaxHighlighting(buildHighlightStyle($themeStore), { fallback: true })];
+  }
 
   const tab = $derived($tabsState.tabs.find((t) => t.path === filePath));
 
@@ -34,6 +42,7 @@
 
     const extensions = [
       baseExtensions(),
+      themeCompartment.of(themeExtensions()),
       mode === "markdown" ? markdownExtensions(filePath) : [lineNumbers(), ...codeExtensions(filePath)],
       keymap.of([
         {
@@ -62,6 +71,22 @@
 
   onDestroy(() => {
     view?.destroy();
+  });
+
+  // Reconfigures the theme compartment in place on a theme change, instead
+  // of tearing down and rebuilding the view (which would lose undo history,
+  // selection, and scroll position).
+  $effect(() => {
+    const current = $themeStore;
+    if (!view) {
+      return;
+    }
+    view.dispatch({
+      effects: themeCompartment.reconfigure([
+        buildCmTheme(current),
+        syntaxHighlighting(buildHighlightStyle(current), { fallback: true }),
+      ]),
+    });
   });
 
   // External-change reconciliation (section 6.2): when the tab is clean and
