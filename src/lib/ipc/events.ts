@@ -14,8 +14,15 @@ export function onFsChanged(
   return listen<FsChangeEvent>("fs:changed", (event) => handler(event.payload));
 }
 
-/** Native menu bar items that need frontend behavior (plan section 7). */
-export type MenuEventId = "menu:open-folder" | "menu:save" | "menu:new-terminal-tab";
+/** Native menu bar items that need frontend behavior. */
+export type MenuEventId =
+  | "menu:open-folder"
+  | "menu:save"
+  | "menu:new-terminal-tab"
+  | "menu:theme:auto"
+  | "menu:theme:atrium-dark"
+  | "menu:theme:atrium-light"
+  | "menu:theme:atrium-high-contrast";
 
 export function onMenuEvent(
   id: MenuEventId,

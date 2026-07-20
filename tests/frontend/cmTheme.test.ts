@@ -4,6 +4,7 @@ import { EditorView, lineNumbers } from "@codemirror/view";
 import { syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import { render, cleanup } from "@testing-library/svelte";
+import { javascript } from "@codemirror/lang-javascript";
 import { buildCmTheme, buildHighlightStyle } from "../../src/lib/theme/cmTheme";
 import { atriumDark, atriumLight, atriumHighContrast, themes } from "../../src/lib/theme/tokens";
 import { baseExtensions } from "../../src/lib/editor/baseExtensions";
@@ -77,7 +78,11 @@ describe("buildHighlightStyle", () => {
     view = new EditorView({
       state: EditorState.create({
         doc: "function greet(name) {\n  // hi\n  return `hi ${name}`;\n}\n",
-        extensions: [baseExtensions(), syntaxHighlighting(buildHighlightStyle(atriumDark), { fallback: true })],
+        extensions: [
+          baseExtensions(),
+          syntaxHighlighting(buildHighlightStyle(atriumDark), { fallback: true }),
+          javascript(),
+        ],
       }),
       parent: container,
     });

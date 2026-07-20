@@ -16,12 +16,16 @@ use state::AppState;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager};
 
-/// Builds the native menu bar described in plan section 7: `App` (About,
-/// Quit), `File` (Open Folder, Save, New Terminal Tab), `Edit` (standard
-/// Undo/Redo/Cut/Copy/Paste/Find), `Window` (standard). Menu items that need
-/// frontend behavior (Open Folder, Save, New Terminal Tab) emit a `menu:*`
-/// event; `App.svelte` / `MenuBar.ts` listen for these and dispatch to the
-/// active pane, since the menu itself has no notion of "the active editor".
+/// Builds the native menu bar: `Atrium` (About, Quit), `File` (Open Folder,
+/// Save, New Terminal Tab), `Edit` (standard Undo/Redo/Cut/Copy/Paste/Find),
+/// `Window` (standard), and `Theme` (Auto plus the three built-in themes).
+/// Menu items that need frontend behavior (Open Folder, Save, New Terminal
+/// Tab, every Theme option) emit a `menu:*` event; `App.svelte` /
+/// `MenuBar.ts` listen for these and dispatch to the active pane or the
+/// theme store, since the menu itself has no notion of "the active editor"
+/// or "the current theme" (no checkmark on the active Theme item yet — the
+/// menu is built once in Rust, before the WebView and its `localStorage`
+/// selection are available).
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let app_menu = Submenu::with_items(
         app,
@@ -86,7 +90,25 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         ],
     )?;
 
-    Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &window_menu])
+    let theme_menu = Submenu::with_items(
+        app,
+        "Theme",
+        true,
+        &[
+            &MenuItem::with_id(app, "menu:theme:auto", "Auto", true, None::<&str>)?,
+            &MenuItem::with_id(app, "menu:theme:atrium-dark", "Atrium Dark", true, None::<&str>)?,
+            &MenuItem::with_id(app, "menu:theme:atrium-light", "Atrium Light", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "menu:theme:atrium-high-contrast",
+                "Atrium High Contrast",
+                true,
+                None::<&str>,
+            )?,
+        ],
+    )?;
+
+    Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &window_menu, &theme_menu])
 }
 
 fn main() {
