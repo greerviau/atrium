@@ -9,6 +9,7 @@ import { yaml } from "@codemirror/lang-yaml";
 import { css } from "@codemirror/lang-css";
 import { html } from "@codemirror/lang-html";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
+import { extensionOf } from "../util/path";
 
 export type PaneMode = "markdown" | "code";
 
@@ -17,12 +18,6 @@ const MARKDOWN_EXTENSIONS = new Set(["md", "markdown"]);
 /** Extension (no dot, lowercased) -> mode. `.md` routes to the markdown pane instead of the code pane. */
 export function modeForPath(path: string): PaneMode {
   return MARKDOWN_EXTENSIONS.has(extensionOf(path)) ? "markdown" : "code";
-}
-
-export function extensionOf(path: string): string {
-  const name = path.split(/[\\/]/).pop() ?? path;
-  const dot = name.lastIndexOf(".");
-  return dot <= 0 ? "" : name.slice(dot + 1).toLowerCase();
 }
 
 /**

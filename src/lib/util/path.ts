@@ -1,10 +1,17 @@
 /**
- * Minimal POSIX-style path helpers for resolving markdown link/image targets
- * relative to the file that contains them. Deliberately not Node's `path`
- * module (not available in the WebView) nor `@tauri-apps/api/path` (that
- * module's resolution helpers are async IPC calls; these decorations need a
- * synchronous string join to build a `src`/target eagerly during rendering).
+ * Minimal POSIX-style path helpers shared across the editor and explorer.
+ * Deliberately not Node's `path` module (not available in the WebView) nor
+ * `@tauri-apps/api/path` (that module's resolution helpers are async IPC
+ * calls; callers like the markdown decorations need a synchronous string
+ * join to build a `src`/target eagerly during rendering).
  */
+
+/** Extension (no dot, lowercased) of a path's final segment; "" for extensionless names and dotfiles like `.gitignore`. */
+export function extensionOf(path: string): string {
+  const name = path.split(/[\\/]/).pop() ?? path;
+  const dot = name.lastIndexOf(".");
+  return dot <= 0 ? "" : name.slice(dot + 1).toLowerCase();
+}
 
 function dirname(filePath: string): string {
   const normalized = filePath.replace(/\\/g, "/");
