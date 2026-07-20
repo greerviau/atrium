@@ -13,6 +13,14 @@ export function extensionOf(path: string): string {
   return dot <= 0 ? "" : name.slice(dot + 1).toLowerCase();
 }
 
+/** Last path segment ("folder" for "/a/b/folder" or "/a/b/folder/"); falls back to the input if empty (e.g. `path` is "/"). */
+export function basename(path: string): string {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  const idx = normalized.lastIndexOf("/");
+  const name = idx < 0 ? normalized : normalized.slice(idx + 1);
+  return name === "" ? path : name;
+}
+
 function dirname(filePath: string): string {
   const normalized = filePath.replace(/\\/g, "/");
   const idx = normalized.lastIndexOf("/");
