@@ -3,6 +3,7 @@
   import { toggleExpanded } from "../stores/fileTree";
   import { openFile } from "../stores/tabs";
   import { openContextMenu } from "./contextMenu";
+  import ExplorerIcon from "./icons/ExplorerIcon.svelte";
   import FileTreeNode from "./FileTreeNode.svelte";
 
   let { node, depth = 0 }: { node: TreeNode; depth?: number } = $props();
@@ -39,11 +40,7 @@
     aria-expanded={node.entry.isDir ? node.expanded : undefined}
     tabindex="0"
   >
-    {#if node.entry.isDir}
-      <span class="disclosure">{node.expanded ? "▾" : "▸"}</span>
-    {:else}
-      <span class="disclosure spacer"></span>
-    {/if}
+    <ExplorerIcon entry={node.entry} expanded={node.expanded} />
     <span class="name" class:symlink={node.entry.isSymlink}>{node.entry.name}</span>
   </div>
   {#if node.entry.isDir && node.expanded && node.children}
@@ -66,12 +63,6 @@
   }
   .row:hover {
     background: var(--atrium-hover-bg, rgba(128, 128, 128, 0.15));
-  }
-  .disclosure {
-    width: 12px;
-    display: inline-block;
-    font-size: 0.7em;
-    opacity: 0.7;
   }
   .name.symlink {
     font-style: italic;

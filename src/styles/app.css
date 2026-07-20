@@ -9,6 +9,22 @@
   --atrium-mono-font:
     ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
 
+  --atrium-icon-folder: #90a4c4;
+  --atrium-icon-markdown: #8a8f98;
+  --atrium-icon-javascript: #e8c547;
+  --atrium-icon-typescript: #5b9dd9;
+  --atrium-icon-python: #6fa8dc;
+  --atrium-icon-rust: #d68a5f;
+  --atrium-icon-go: #5fc9c9;
+  --atrium-icon-json: #c9a86a;
+  --atrium-icon-yaml: #b07fd1;
+  --atrium-icon-css: #6ba3e0;
+  --atrium-icon-html: #e08a4f;
+  --atrium-icon-shell: #7fbf7f;
+  --atrium-icon-toml: #a89060;
+  --atrium-icon-image: #c77fb0;
+  --atrium-icon-generic: #8a8f98;
+
   color-scheme: dark;
 }
 
