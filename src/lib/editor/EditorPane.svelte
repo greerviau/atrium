@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { Compartment, EditorState } from "@codemirror/state";
+  import { Compartment, EditorState, type Extension } from "@codemirror/state";
   import { EditorView, keymap, lineNumbers } from "@codemirror/view";
   import { syntaxHighlighting } from "@codemirror/language";
   import {
@@ -9,11 +9,12 @@
     saveTab,
     markDirty,
     clearPendingSelection,
+    toggleMarkdownViewMode,
   } from "../stores/tabs";
   import { theme as themeStore } from "../stores/theme";
   import { buildCmTheme, buildHighlightStyle } from "../theme/cmTheme";
   import { baseExtensions } from "./baseExtensions";
-  import { markdownExtensions } from "./markdown/livePreviewPlugin";
+  import { markdownExtensions, markdownSourceExtensions } from "./markdown/livePreviewPlugin";
   import { codeExtensions } from "./codeExtensions";
 
   let { filePath }: { filePath: string } = $props();
@@ -21,6 +22,15 @@
   let container: HTMLDivElement;
   let view: EditorView;
   const themeCompartment = new Compartment();
+  const viewModeCompartment = new Compartment();
+  let lastAppliedViewMode: "rendered" | "source" | undefined;
+
+  function viewModeExtensions(mode: "code" | "markdown", viewMode: "rendered" | "source" | undefined): Extension[] {
+    if (mode !== "markdown") {
+      return [lineNumbers(), ...codeExtensions(filePath)];
+    }
+    return viewMode === "source" ? markdownSourceExtensions(filePath) : markdownExtensions(filePath);
+  }
 
   function themeExtensions() {
     return [buildCmTheme($themeStore), syntaxHighlighting(buildHighlightStyle($themeStore), { fallback: true })];
@@ -39,20 +49,32 @@
   onMount(() => {
     const initialTab = $tabsState.tabs.find((t) => t.path === filePath);
     const mode = initialTab?.mode ?? "code";
+    lastAppliedViewMode = initialTab?.viewMode;
+
+    const shortcutKeymap = [
+      {
+        key: "Mod-s",
+        run: () => {
+          void save();
+          return true;
+        },
+      },
+    ];
+    if (mode === "markdown") {
+      shortcutKeymap.push({
+        key: "Mod-Shift-m",
+        run: () => {
+          toggleMarkdownViewMode(filePath);
+          return true;
+        },
+      });
+    }
 
     const extensions = [
       baseExtensions(),
       themeCompartment.of(themeExtensions()),
-      mode === "markdown" ? markdownExtensions(filePath) : [lineNumbers(), ...codeExtensions(filePath)],
-      keymap.of([
-        {
-          key: "Mod-s",
-          run: () => {
-            void save();
-            return true;
-          },
-        },
-      ]),
+      viewModeCompartment.of(viewModeExtensions(mode, initialTab?.viewMode)),
+      keymap.of(shortcutKeymap),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
           markDirty(filePath);
@@ -86,6 +108,22 @@
         buildCmTheme(current),
         syntaxHighlighting(buildHighlightStyle(current), { fallback: true }),
       ]),
+    });
+  });
+
+  // Reconfigures the view-mode compartment in place when a markdown tab's
+  // `viewMode` toggles between rendered and source, preserving document,
+  // cursor, undo history, and scroll position. Guarded against firing on
+  // unrelated tab-store updates (e.g. `markDirty` on every keystroke) by
+  // comparing against the last-applied value before dispatching.
+  $effect(() => {
+    const current = tab;
+    if (!view || !current || current.viewMode === lastAppliedViewMode) {
+      return;
+    }
+    lastAppliedViewMode = current.viewMode;
+    view.dispatch({
+      effects: viewModeCompartment.reconfigure(viewModeExtensions(current.mode, current.viewMode)),
     });
   });
 
