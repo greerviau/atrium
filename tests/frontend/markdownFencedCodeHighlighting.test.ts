@@ -1,10 +1,12 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { LanguageDescription } from "@codemirror/language";
+import { LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { baseExtensions } from "../../src/lib/editor/baseExtensions";
 import { markdownExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
+import { buildHighlightStyle } from "../../src/lib/theme/cmTheme";
+import { atriumDark } from "../../src/lib/theme/tokens";
 
 let view: EditorView | undefined;
 
@@ -27,7 +29,11 @@ describe("fenced code blocks in markdown still highlight after the shared extens
     view = new EditorView({
       state: EditorState.create({
         doc,
-        extensions: [baseExtensions(), markdownExtensions("sample.md")],
+        extensions: [
+          baseExtensions(),
+          syntaxHighlighting(buildHighlightStyle(atriumDark), { fallback: true }),
+          markdownExtensions("sample.md"),
+        ],
       }),
       parent: container,
     });

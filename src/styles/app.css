@@ -1,11 +1,42 @@
 :root {
+  /* Default (pre-JS-paint) token values, matching Atrium Dark. `applyThemeToDocument`
+     overwrites all of these at runtime once the theme store resolves the active theme. */
+  --atrium-bg-base: #1a1d21;
+  --atrium-bg-surface: #202329;
+  --atrium-bg-elevated: #262a30;
+  --atrium-bg-hover: rgba(255, 255, 255, 0.06);
+  --atrium-bg-active: rgba(255, 255, 255, 0.1);
   --atrium-border: #33383e;
-  --atrium-hover-bg: rgba(255, 255, 255, 0.08);
-  --atrium-active-tab-bg: rgba(255, 255, 255, 0.08);
-  --atrium-menu-bg: #24272c;
-  --atrium-code-bg: rgba(255, 255, 255, 0.08);
-  --atrium-link-color: #6cb2ff;
+  --atrium-border-subtle: #2a2e34;
+  --atrium-text-primary: #e6e6e6;
+  --atrium-text-secondary: #b4b8bf;
   --atrium-text-muted: #8a8f98;
+  --atrium-text-inverse: #1a1d21;
+  --atrium-accent: #5b9dff;
+  --atrium-link: #6cb2ff;
+  --atrium-danger: #e5484d;
+  --atrium-danger-text: #000000;
+  --atrium-warning: #e8a33d;
+  --atrium-warning-bg: #7a4a1a;
+  --atrium-code-bg: rgba(255, 255, 255, 0.08);
+  --atrium-gutter-bg: #1a1d21;
+  --atrium-gutter-fg: #8a8f98;
+  --atrium-gutter-fg-active-line: #c9cdd3;
+  --atrium-cursor: #e6e6e6;
+  --atrium-selection-bg: rgba(91, 157, 255, 0.25);
+  --atrium-active-line-bg: rgba(255, 255, 255, 0.04);
+  --atrium-matching-bracket-bg: rgba(91, 157, 255, 0.35);
+  --atrium-search-match-bg: rgba(255, 214, 0, 0.35);
+  --atrium-syntax-keyword: #c586c0;
+  --atrium-syntax-string: #ce9178;
+  --atrium-syntax-number: #b5cea8;
+  --atrium-syntax-comment: #6a7280;
+  --atrium-syntax-function: #dcdcaa;
+  --atrium-syntax-type: #4ec9b0;
+  --atrium-syntax-property: #9cdcfe;
+  --atrium-syntax-operator: #d4d4d4;
+  --atrium-syntax-invalid: #f44747;
+
   --atrium-mono-font:
     ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
 
@@ -37,8 +68,8 @@ body {
   margin: 0;
   padding: 0;
   height: 100%;
-  background: #1e2126;
-  color: #e6e6e6;
+  background: var(--atrium-bg-base);
+  color: var(--atrium-text-primary);
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   overflow: hidden;

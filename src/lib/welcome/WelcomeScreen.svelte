@@ -88,13 +88,13 @@
     padding: 10px;
     font-size: 1em;
     cursor: pointer;
-    border: 1px solid var(--atrium-border, #333);
+    border: 1px solid var(--atrium-border);
     border-radius: 6px;
-    background: var(--atrium-menu-bg, #24272c);
+    background: var(--atrium-bg-elevated);
     color: inherit;
   }
   .open-folder:hover {
-    background: var(--atrium-hover-bg, rgba(255, 255, 255, 0.08));
+    background: var(--atrium-bg-hover);
   }
   .recents {
     margin-top: 28px;
@@ -104,10 +104,10 @@
     font-size: 0.85em;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--atrium-text-muted, #8a8f98);
+    color: var(--atrium-text-muted);
   }
   .empty-state {
-    color: var(--atrium-text-muted, #8a8f98);
+    color: var(--atrium-text-muted);
   }
   .recent-row {
     display: flex;
@@ -119,7 +119,7 @@
     cursor: pointer;
   }
   .recent-row:hover {
-    background: var(--atrium-hover-bg, rgba(255, 255, 255, 0.08));
+    background: var(--atrium-bg-hover);
   }
   .recent-info {
     display: flex;
@@ -136,7 +136,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 0.85em;
-    color: var(--atrium-text-muted, #8a8f98);
+    color: var(--atrium-text-muted);
   }
   .remove {
     background: none;

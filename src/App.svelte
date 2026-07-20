@@ -272,7 +272,7 @@
   .explorer {
     flex-shrink: 0;
     overflow: auto;
-    border-right: 1px solid var(--atrium-border, #333);
+    border-right: 1px solid var(--atrium-border);
   }
   .resizer {
     background: transparent;
@@ -304,7 +304,7 @@
   }
   .tab-strip {
     display: flex;
-    border-bottom: 1px solid var(--atrium-border, #333);
+    border-bottom: 1px solid var(--atrium-border);
     overflow-x: auto;
     flex-shrink: 0;
   }
@@ -315,13 +315,13 @@
     padding: 6px 10px;
     background: none;
     border: none;
-    border-right: 1px solid var(--atrium-border, #333);
+    border-right: 1px solid var(--atrium-border);
     color: inherit;
     cursor: pointer;
     white-space: nowrap;
   }
   .tab.active {
-    background: var(--atrium-active-tab-bg, rgba(128, 128, 128, 0.2));
+    background: var(--atrium-bg-active);
   }
   .tab-close {
     background: none;
@@ -364,23 +364,23 @@
     align-items: center;
     gap: 10px;
     padding: 6px 10px;
-    background: #7a4a1a;
-    color: white;
+    background: var(--atrium-warning-bg);
+    color: var(--atrium-text-primary);
     flex-shrink: 0;
   }
   .terminal-area {
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    border-top: 1px solid var(--atrium-border, #333);
+    border-top: 1px solid var(--atrium-border);
   }
   .terminal-area.dock-left {
     border-top: none;
-    border-right: 1px solid var(--atrium-border, #333);
+    border-right: 1px solid var(--atrium-border);
   }
   .terminal-area.dock-right {
     border-top: none;
-    border-left: 1px solid var(--atrium-border, #333);
+    border-left: 1px solid var(--atrium-border);
   }
   .dock-controls {
     display: flex;
@@ -409,6 +409,6 @@
   }
   .dock-btn.active {
     opacity: 1;
-    background: var(--atrium-active-tab-bg, rgba(128, 128, 128, 0.2));
+    background: var(--atrium-bg-active);
   }
 </style>

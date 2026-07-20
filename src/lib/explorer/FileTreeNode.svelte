@@ -62,7 +62,7 @@
     user-select: none;
   }
   .row:hover {
-    background: var(--atrium-hover-bg, rgba(128, 128, 128, 0.15));
+    background: var(--atrium-bg-hover);
   }
   .name.symlink {
     font-style: italic;

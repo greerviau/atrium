@@ -6,6 +6,8 @@
   import "@xterm/xterm/css/xterm.css";
   import { ptySpawn, ptySubscribe, ptyWrite, ptyResize, ptyKill } from "../ipc/commands";
   import { registerLinkProviders } from "./linkProviders";
+  import { theme as themeStore } from "../stores/theme";
+  import { buildXtermTheme } from "../theme/xtermTheme";
 
   let { cwd, workspaceId, onExit }: { cwd: string; workspaceId: string; onExit?: () => void } = $props();
 
@@ -29,6 +31,7 @@
       cursorBlink: true,
       fontFamily: "Menlo, Monaco, monospace",
       fontSize: 13,
+      theme: buildXtermTheme($themeStore),
     });
     fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
@@ -72,6 +75,14 @@
       void ptyKill(terminalId);
     }
     terminal?.dispose();
+  });
+
+  // xterm.js applies a `theme` option change live, no Terminal recreation needed.
+  $effect(() => {
+    const current = $themeStore;
+    if (terminal) {
+      terminal.options.theme = buildXtermTheme(current);
+    }
   });
 </script>
 

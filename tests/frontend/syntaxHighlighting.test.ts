@@ -1,8 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView, lineNumbers } from "@codemirror/view";
+import { syntaxHighlighting } from "@codemirror/language";
 import { baseExtensions } from "../../src/lib/editor/baseExtensions";
 import { codeExtensions } from "../../src/lib/editor/codeExtensions";
+import { buildHighlightStyle } from "../../src/lib/theme/cmTheme";
+import { atriumDark } from "../../src/lib/theme/tokens";
 
 interface Case {
   path: string;
@@ -35,7 +38,12 @@ describe("syntax highlighting is wired up for every wired code-file extension", 
       view = new EditorView({
         state: EditorState.create({
           doc,
-          extensions: [baseExtensions(), lineNumbers(), ...codeExtensions(path)],
+          extensions: [
+            baseExtensions(),
+            syntaxHighlighting(buildHighlightStyle(atriumDark), { fallback: true }),
+            lineNumbers(),
+            ...codeExtensions(path),
+          ],
         }),
         parent: container,
       });

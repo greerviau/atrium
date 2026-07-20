@@ -152,8 +152,8 @@
     position: fixed;
     display: flex;
     flex-direction: column;
-    background: var(--atrium-menu-bg, #2a2a2a);
-    border: 1px solid var(--atrium-border, #444);
+    background: var(--atrium-bg-elevated);
+    border: 1px solid var(--atrium-border);
     border-radius: 6px;
     padding: 4px;
     z-index: 1000;
@@ -169,7 +169,7 @@
     border-radius: 4px;
   }
   .context-menu button:hover {
-    background: var(--atrium-hover-bg, rgba(128, 128, 128, 0.2));
+    background: var(--atrium-bg-hover);
   }
   .modal-backdrop {
     position: fixed;
@@ -181,7 +181,7 @@
     z-index: 2000;
   }
   .modal {
-    background: var(--atrium-menu-bg, #2a2a2a);
+    background: var(--atrium-bg-elevated);
     border-radius: 8px;
     padding: 16px;
     min-width: 320px;
@@ -193,8 +193,8 @@
     margin-top: 12px;
   }
   .danger {
-    background: #c0392b;
-    color: white;
+    background: var(--atrium-danger);
+    color: var(--atrium-danger-text);
     border: none;
     border-radius: 4px;
     padding: 4px 10px;
