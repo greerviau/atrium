@@ -194,7 +194,7 @@
   }
   .danger {
     background: var(--atrium-danger);
-    color: white;
+    color: var(--atrium-danger-text);
     border: none;
     border-radius: 4px;
     padding: 4px 10px;

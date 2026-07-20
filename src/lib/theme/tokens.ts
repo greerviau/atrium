@@ -21,6 +21,7 @@ export interface ThemeTokens {
   accent: string;
   link: string;
   danger: string;
+  dangerText: string; // text on top of a danger-colored surface (e.g. a delete button's fill)
   warning: string;
   warningBg: string; // conflict-banner background
   codeBg: string; // inline-code chip background (markdown)
@@ -73,6 +74,7 @@ export const atriumDark: Theme = {
     accent: "#5b9dff",
     link: "#6cb2ff",
     danger: "#e5484d",
+    dangerText: "#000000",
     warning: "#e8a33d",
     warningBg: "#7a4a1a",
     codeBg: "rgba(255,255,255,0.08)",
@@ -115,6 +117,7 @@ export const atriumLight: Theme = {
     accent: "#1a73e8",
     link: "#1a73e8",
     danger: "#d0342c",
+    dangerText: "#ffffff",
     warning: "#a35b00",
     warningBg: "#fbe4c8",
     codeBg: "rgba(0,0,0,0.05)",
@@ -157,6 +160,7 @@ export const atriumHighContrast: Theme = {
     accent: "#66d9ff",
     link: "#66d9ff",
     danger: "#ff6b6b",
+    dangerText: "#000000",
     warning: "#ffd54f",
     warningBg: "#4d3800",
     codeBg: "rgba(255,255,255,0.12)",
