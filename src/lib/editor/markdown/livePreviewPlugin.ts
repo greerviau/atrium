@@ -1,5 +1,5 @@
 import type { Extension } from "@codemirror/state";
-import { EditorView, ViewPlugin, ViewUpdate, type DecorationSet } from "@codemirror/view";
+import { EditorView, ViewPlugin, ViewUpdate, lineNumbers, type DecorationSet } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { buildDecorations } from "./decorations";
@@ -63,4 +63,15 @@ export function markdownExtensions(documentPath: string): Extension[] {
     livePreviewPlugin(documentPath),
     linkClickHandler,
   ];
+}
+
+/**
+ * Raw/source markdown extension set: the same GFM-flavored language (so
+ * fenced code blocks still get nested-language highlighting) and a
+ * line-number gutter, but no decoration plugin and no link-click handler —
+ * syntax stays visible, checkboxes and images stay plain text, and links
+ * don't navigate. Behaves like editing any other file type.
+ */
+export function markdownSourceExtensions(_documentPath: string): Extension[] {
+  return [markdown({ base: markdownLanguage, codeLanguages: languages }), lineNumbers()];
 }

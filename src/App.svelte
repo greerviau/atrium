@@ -5,7 +5,13 @@
   import TerminalPane from "./lib/terminal/TerminalPane.svelte";
   import WelcomeScreen from "./lib/welcome/WelcomeScreen.svelte";
   import { workspace, openWorkspacePath } from "./lib/stores/workspace";
-  import { tabsState, setActiveTab, closeTab, reconcileExternalChange } from "./lib/stores/tabs";
+  import {
+    tabsState,
+    setActiveTab,
+    closeTab,
+    reconcileExternalChange,
+    toggleMarkdownViewMode,
+  } from "./lib/stores/tabs";
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
   import { onFsChanged, onDockOpenPath } from "./lib/ipc/events";
   import { workspaceTakePendingOpen } from "./lib/ipc/commands";
@@ -144,6 +150,19 @@
                 <span class="tab-name">
                   {tab.path.split("/").pop()}{tab.isDirty ? " •" : ""}
                 </span>
+                {#if tab.mode === "markdown"}
+                  <button
+                    class="tab-view-mode"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      toggleMarkdownViewMode(tab.path);
+                    }}
+                    aria-label={tab.viewMode === "source" ? "Switch to rendered view" : "Switch to source view"}
+                    title={tab.viewMode === "source" ? "Switch to rendered view" : "Switch to source view"}
+                  >
+                    {tab.viewMode === "source" ? "{}" : "¶"}
+                  </button>
+                {/if}
                 <button
                   class="tab-close"
                   onclick={(e) => {
@@ -323,6 +342,7 @@
   .tab.active {
     background: var(--atrium-bg-active);
   }
+  .tab-view-mode,
   .tab-close {
     background: none;
     border: none;
@@ -332,6 +352,7 @@
     opacity: 0.6;
     padding: 0 2px;
   }
+  .tab-view-mode:hover,
   .tab-close:hover {
     opacity: 1;
   }

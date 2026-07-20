@@ -1,8 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { EditorState, EditorSelection } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { EditorView } from "@codemirror/view";
+import { syntaxTree } from "@codemirror/language";
 import { buildDecorations } from "../../src/lib/editor/markdown/decorations";
 import { CheckboxWidget, ImageWidget } from "../../src/lib/editor/markdown/widgets";
+import { markdownSourceExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
 
 function stateFor(doc: string, selection?: number): EditorState {
   return EditorState.create({
@@ -151,5 +154,48 @@ describe("buildDecorations: round-trip safety", () => {
     const state = stateFor(doc, 0);
     buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md");
     expect(state.doc.toString()).toBe(doc);
+  });
+});
+
+describe("markdownSourceExtensions", () => {
+  const fixture =
+    "# Heading\n\n*em* **strong** [link](https://example.com) ![img](./local.png)\n\n- [ ] task\n\n```js\nconst x = 1;\n```\n";
+
+  it("keeps the markdown language's syntax tree (fenced code still gets nested highlighting)", () => {
+    const state = EditorState.create({ doc: fixture, extensions: markdownSourceExtensions("test.md") });
+    const seen = new Set<string>();
+    syntaxTree(state).iterate({
+      enter(ref) {
+        seen.add(ref.name);
+      },
+    });
+    expect(seen.has("ATXHeading1")).toBe(true);
+    expect(seen.has("FencedCode")).toBe(true);
+  });
+
+  it("renders no decorations or interactive widgets — raw text, untouched", () => {
+    const container = document.createElement("div");
+    const view = new EditorView({
+      state: EditorState.create({ doc: fixture, extensions: markdownSourceExtensions("test.md") }),
+      parent: container,
+    });
+    expect(view.state.doc.toString()).toBe(fixture);
+    expect(container.querySelector("input[type=checkbox]")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(".cm-heading-1")).toBeNull();
+    expect(container.querySelector(".cm-link")).toBeNull();
+    expect(container.textContent).toContain("# Heading");
+    expect(container.textContent).toContain("![img](./local.png)");
+    view.destroy();
+  });
+
+  it("includes a line-number gutter", () => {
+    const container = document.createElement("div");
+    const view = new EditorView({
+      state: EditorState.create({ doc: "line one\nline two\n", extensions: markdownSourceExtensions("test.md") }),
+      parent: container,
+    });
+    expect(container.querySelector(".cm-lineNumbers")).not.toBeNull();
+    view.destroy();
   });
 });
