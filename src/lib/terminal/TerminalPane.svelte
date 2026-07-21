@@ -8,7 +8,7 @@
   import { registerLinkProviders } from "./linkProviders";
   import { theme as themeStore } from "../stores/theme";
   import { buildXtermTheme } from "../theme/xtermTheme";
-  import { parseOsc7Cwd, computeTabTitle } from "./tabTitle";
+  import { computeTabTitle, parseOsc7Cwd, reduceTitleState, type TitleState } from "./tabTitle";
 
   let {
     cwd,
@@ -24,14 +24,14 @@
   let resizeObserver: ResizeObserver;
   let osc7Disposable: { dispose(): void };
   let osc133Disposable: { dispose(): void };
+  let titleChangeDisposable: { dispose(): void };
 
-  let currentCwd: string;
-  let commandRunning = false;
-  let processTitle: string | null = null;
+  let titleState: TitleState;
   let lastEmittedTitle: string | undefined;
 
-  function emitTitle(): void {
-    const title = computeTabTitle({ cwd: currentCwd, commandRunning, processTitle });
+  function dispatch(event: Parameters<typeof reduceTitleState>[1]): void {
+    titleState = reduceTitleState(titleState, event);
+    const title = computeTabTitle(titleState);
     if (title !== lastEmittedTitle) {
       lastEmittedTitle = title;
       onTitleChange?.(title);
@@ -48,8 +48,8 @@
   }
 
   onMount(() => {
-    currentCwd = cwd;
-    lastEmittedTitle = computeTabTitle({ cwd: currentCwd, commandRunning, processTitle });
+    titleState = { cwd, commandRunning: false, processTitle: null };
+    lastEmittedTitle = computeTabTitle(titleState);
 
     terminal = new Terminal({
       cursorBlink: true,
@@ -68,26 +68,22 @@
     osc7Disposable = terminal.parser.registerOscHandler(7, (data) => {
       const parsedCwd = parseOsc7Cwd(data);
       if (parsedCwd) {
-        currentCwd = parsedCwd;
-        emitTitle();
+        dispatch({ type: "cwd", cwd: parsedCwd });
       }
       return true;
     });
 
     osc133Disposable = terminal.parser.registerOscHandler(133, (data) => {
       if (data.startsWith("C")) {
-        commandRunning = true;
-        processTitle = null;
+        dispatch({ type: "commandStart" });
       } else if (data.startsWith("D")) {
-        commandRunning = false;
+        dispatch({ type: "commandFinish" });
       }
-      emitTitle();
       return true;
     });
 
-    terminal.onTitleChange((title) => {
-      processTitle = title;
-      emitTitle();
+    titleChangeDisposable = terminal.onTitleChange((title) => {
+      dispatch({ type: "title", title });
     });
 
     terminal.onData((data) => {
@@ -122,6 +118,7 @@
     resizeObserver?.disconnect();
     osc7Disposable?.dispose();
     osc133Disposable?.dispose();
+    titleChangeDisposable?.dispose();
     if (terminalId) {
       void ptyKill(terminalId);
     }
