@@ -4,6 +4,8 @@ import { openFile } from "../../stores/tabs";
 import { shellOpenExternal } from "../../ipc/commands";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import path from "../../util/path";
+import { loadMermaid } from "./mermaid";
+import { CLASS } from "./theme";
 
 /**
  * Replaces a task list item's `[ ]`/`[x]` marker with a real checkbox.
@@ -93,6 +95,82 @@ export class ImageWidget extends WidgetType {
   ignoreEvent(): boolean {
     return true;
   }
+}
+
+let nextMermaidWidgetId = 0;
+
+/**
+ * Replaces a ` ```mermaid ` fenced block with a rendered diagram, mirroring
+ * `ImageWidget`'s synchronous-`toDOM`-then-async-mutate pattern. `eq()` is
+ * content-based (source text only) so CM6 reuses the same DOM node — and
+ * Mermaid never re-renders — across any decoration recompute that doesn't
+ * change this particular block's text. On invalid syntax, the container
+ * shows a distinct error panel with Mermaid's own parser message instead.
+ * Clicking the container (rendered diagram or error panel alike) drops the
+ * cursor into the raw source, matching `ImageWidget`'s click-to-edit.
+ */
+export class MermaidWidget extends WidgetType {
+  private destroyed = false;
+
+  constructor(
+    readonly source: string,
+    readonly blockFrom: number,
+  ) {
+    super();
+  }
+
+  eq(other: MermaidWidget): boolean {
+    return this.source === other.source;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const container = document.createElement("div");
+    container.className = CLASS.mermaidDiagram;
+    container.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      view.dispatch({ selection: EditorSelection.cursor(this.blockFrom) });
+      view.focus();
+    });
+
+    const id = `cm-mermaid-${nextMermaidWidgetId++}`;
+    loadMermaid()
+      .then((mod) => mod.default.render(id, this.source))
+      .then(({ svg }) => {
+        if (this.destroyed) {
+          return;
+        }
+        container.classList.remove(CLASS.mermaidError);
+        container.innerHTML = svg;
+      })
+      .catch((error: unknown) => {
+        if (this.destroyed) {
+          return;
+        }
+        renderMermaidError(container, error);
+      });
+
+    return container;
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+function renderMermaidError(container: HTMLElement, error: unknown): void {
+  container.classList.add(CLASS.mermaidError);
+  container.innerHTML = "";
+  const label = document.createElement("div");
+  label.className = "cm-mermaid-error-label";
+  label.textContent = "Invalid Mermaid diagram";
+  const message = document.createElement("pre");
+  message.className = "cm-mermaid-error-message";
+  message.textContent = error instanceof Error ? error.message : String(error);
+  container.append(label, message);
 }
 
 function resolveImageSrc(url: string, documentPath: string): string {

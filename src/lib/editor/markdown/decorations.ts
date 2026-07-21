@@ -3,8 +3,9 @@ import { Decoration } from "@codemirror/view";
 import type { DecorationSet } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 import type { SyntaxNode } from "@lezer/common";
-import { CheckboxWidget, ImageWidget } from "./widgets";
+import { CheckboxWidget, ImageWidget, MermaidWidget } from "./widgets";
 import { headingClass, CLASS } from "./theme";
+import { extractMermaidSource } from "./mermaid";
 
 const HEADING_LEVELS: Record<string, 1 | 2 | 3 | 4 | 5 | 6> = {
   ATXHeading1: 1,
@@ -121,6 +122,70 @@ function decorateCodeBlock(
   if (closeMark && closeMark !== openMark) {
     out.push(Decoration.replace({}).range(closeMark.from, closeMark.to));
   }
+}
+
+/**
+ * The Mermaid source for `node`, but only when it should actually be
+ * replaced by a diagram widget: tagged ` ```mermaid ` and the cursor is
+ * elsewhere. `null` covers both "not a mermaid block" and "mermaid block
+ * under the cursor" — either way the caller falls through to
+ * `decorateCodeBlock`'s normal fenced-code handling unchanged.
+ *
+ * CodeMirror requires block-level (`block: true`) replace decorations to
+ * come from a `StateField`, not a `ViewPlugin` — so this check is shared by
+ * two call sites: the `ViewPlugin`-driven `buildDecorations` below (which
+ * uses it only to skip `decorateCodeBlock`'s container/fence decorations,
+ * since there's nothing to decorate underneath a fully-replaced block) and
+ * `buildMermaidWidgetDecorations` (which uses it to actually build the
+ * widget decoration, from a `StateField` — see `mermaidWidgetField` in
+ * `livePreviewPlugin.ts`).
+ */
+function mermaidWidgetSource(state: EditorState, node: SyntaxNode): string | null {
+  const source = extractMermaidSource(state, node);
+  if (source === null || isUnderCursor(state, node.from, node.to)) {
+    return null;
+  }
+  return source;
+}
+
+/**
+ * Node names a ` ```mermaid ` block can be nested under (besides the
+ * document root) — every markdown block container that can hold a fenced
+ * code block as a descendant. Pruning descent to just these keeps
+ * `buildMermaidWidgetDecorations`'s whole-document walk proportional to
+ * block/line count rather than total node count, since it never descends
+ * into inline content (`Paragraph`, `Emphasis`, ...) at all.
+ */
+const MERMAID_CONTAINER_NODES = new Set(["Blockquote", "BulletList", "OrderedList", "ListItem"]);
+
+/**
+ * Builds block-replace `MermaidWidget` decorations for every ` ```mermaid `
+ * block in the document with the cursor elsewhere. Walks the whole
+ * document (not viewport-limited like `buildDecorations`) because a
+ * `StateField`, which is what this feeds, has no notion of the current
+ * viewport — but descent is pruned to markdown block containers
+ * (`MERMAID_CONTAINER_NODES`) plus `FencedCode` itself, so realistic
+ * documents (far more inline content than fenced blocks) stay cheap.
+ */
+export function buildMermaidWidgetDecorations(state: EditorState): DecorationSet {
+  const decorations: Range<Decoration>[] = [];
+  syntaxTree(state).iterate({
+    enter(ref) {
+      if (ref.name === "FencedCode") {
+        const source = mermaidWidgetSource(state, ref.node);
+        if (source !== null) {
+          decorations.push(
+            Decoration.replace({ widget: new MermaidWidget(source, ref.from), block: true }).range(ref.from, ref.to),
+          );
+        }
+        return false;
+      }
+      if (ref.name !== "Document" && !MERMAID_CONTAINER_NODES.has(ref.name)) {
+        return false;
+      }
+    },
+  });
+  return Decoration.set(decorations, true);
 }
 
 type ColumnAlignment = "left" | "center" | "right";
@@ -271,8 +336,20 @@ export function buildDecorations(
         }
 
         if (name === "FencedCode" || name === "CodeBlock") {
-          // The container stays visible even while the cursor is inside the
-          // block; only the fence markers/language tag are cursor-gated.
+          // A mermaid-tagged fenced block with the cursor elsewhere is
+          // replaced entirely by a diagram widget — built separately by
+          // `buildMermaidWidgetDecorations` (a `StateField`, since CodeMirror
+          // requires block decorations to come from one), so this only
+          // needs to skip its own container/fence decorations for that
+          // node; there's nothing to decorate underneath a fully-replaced
+          // block. Everything else (non-mermaid blocks, or a mermaid block
+          // under the cursor) falls through to the normal fenced-code
+          // handling below. The container stays visible even while the
+          // cursor is inside the block; only the fence markers/language tag
+          // are cursor-gated.
+          if (name === "FencedCode" && mermaidWidgetSource(state, ref.node) !== null) {
+            return;
+          }
           decorateCodeBlock(state, ref.node, name === "FencedCode", decorations);
           return;
         }
