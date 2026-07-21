@@ -3,14 +3,16 @@ import { StateField } from "@codemirror/state";
 import { EditorView, ViewPlugin, ViewUpdate, lineNumbers, type DecorationSet } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
+import { syntaxTree } from "@codemirror/language";
 import { buildDecorations, buildMermaidWidgetDecorations } from "./decorations";
 import { handleLinkClick } from "./widgets";
 
 /**
  * Recomputes decorations on doc changes, selection changes (cursor-reveal),
- * and viewport changes (scrolling reveals previously-unvisited nodes) —
- * never on anything else, since walking the syntax tree is the main perf
- * risk for large files.
+ * viewport changes (scrolling reveals previously-unvisited nodes), and
+ * syntax-tree-identity changes (the background parser finishing a chunk
+ * outside the initial synchronous parse window) — never on anything else,
+ * since walking the syntax tree is the main perf risk for large files.
  */
 function livePreviewPlugin(documentPath: string) {
   return ViewPlugin.fromClass(
@@ -22,7 +24,12 @@ function livePreviewPlugin(documentPath: string) {
       }
 
       update(update: ViewUpdate) {
-        if (update.docChanged || update.selectionSet || update.viewportChanged) {
+        if (
+          update.docChanged ||
+          update.selectionSet ||
+          update.viewportChanged ||
+          syntaxTree(update.startState) !== syntaxTree(update.state)
+        ) {
           this.decorations = buildDecorations(update.state, update.view.visibleRanges, documentPath);
         }
       }
@@ -40,14 +47,14 @@ function livePreviewPlugin(documentPath: string) {
  * `RangeError: Block decorations may not be specified via plugins` at
  * runtime otherwise), so this is a separate extension from
  * `livePreviewPlugin` above, recomputed on the same doc-change/
- * selection-change triggers.
+ * selection-change/tree-identity triggers.
  */
 const mermaidWidgetField = StateField.define<DecorationSet>({
   create(state) {
     return buildMermaidWidgetDecorations(state);
   },
   update(decorations, tr: Transaction) {
-    if (tr.docChanged || tr.selection) {
+    if (tr.docChanged || tr.selection || syntaxTree(tr.startState) !== syntaxTree(tr.state)) {
       return buildMermaidWidgetDecorations(tr.state);
     }
     return decorations.map(tr.changes);
