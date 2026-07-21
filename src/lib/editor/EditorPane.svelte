@@ -72,6 +72,7 @@
 
     const extensions = [
       baseExtensions(),
+      mode === "markdown" ? EditorView.lineWrapping : [],
       themeCompartment.of(themeExtensions()),
       viewModeCompartment.of(viewModeExtensions(mode, initialTab?.viewMode)),
       keymap.of(shortcutKeymap),

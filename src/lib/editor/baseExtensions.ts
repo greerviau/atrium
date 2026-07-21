@@ -1,5 +1,5 @@
 import type { Extension } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { keymap } from "@codemirror/view";
 import { history, defaultKeymap, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { search, searchKeymap } from "@codemirror/search";
 import { autocompletion } from "@codemirror/autocomplete";
@@ -12,7 +12,9 @@ import { autocompletion } from "@codemirror/autocomplete";
  * The CM theme and syntax highlight style (theme-driven, not a library
  * default) live in `EditorPane.svelte`'s theme `Compartment` instead, since
  * they need to be reconfigured on a theme change without tearing down
- * everything else in this array.
+ * everything else in this array. Line wrapping is mode-dependent (prose
+ * wraps, code doesn't) so it lives in `EditorPane.svelte` alongside the
+ * other mode-dependent extensions instead of here.
  */
 export function baseExtensions(): Extension[] {
   return [
@@ -20,6 +22,5 @@ export function baseExtensions(): Extension[] {
     search(),
     autocompletion(),
     keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
-    EditorView.lineWrapping,
   ];
 }
