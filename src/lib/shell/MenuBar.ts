@@ -11,16 +11,17 @@ import { get } from "svelte/store";
  * Wires the native menu bar (built in `main.rs`) to frontend behavior. Menu
  * items have no notion of "the active editor," so `menu:save` goes through
  * the same `saveRequest` store an `EditorPane` would react to for a
- * synthetic Cmd+S; `menu:open-folder` and `menu:new-terminal-tab` call the
- * same functions their in-app buttons would; `menu:find-in-files` opens the
- * search overlay, guarded on a workspace being open the same way `menu:save`
- * is guarded on an active tab; `menu:toggle-explorer` and
- * `menu:toggle-terminal` call the same panel-visibility store actions a
- * status-bar button would; `menu:zoom-in`/`menu:zoom-out`/`menu:zoom-reset`
- * call the zoom store's actions; the four `menu:theme:*` items call
- * `setTheme` on the theme store.
+ * synthetic Cmd+S; `menu:open-folder`, `menu:new-terminal-tab`, and
+ * `menu:split-terminal` call the same functions their in-app buttons would;
+ * `menu:find-in-files` opens the search overlay, guarded on a workspace
+ * being open the same way `menu:save` is guarded on an active tab;
+ * `menu:toggle-explorer` and `menu:toggle-terminal` call the same
+ * panel-visibility store actions a status-bar button would;
+ * `menu:zoom-in`/`menu:zoom-out`/`menu:zoom-reset` call the zoom store's
+ * actions; the four `menu:theme:*` items call `setTheme` on the theme
+ * store.
  */
-export async function initMenuBar(onNewTerminalTab: () => void): Promise<void> {
+export async function initMenuBar(onNewTerminalTab: () => void, onSplitTerminal: () => void): Promise<void> {
   await onMenuEvent("menu:open-folder", () => void openWorkspaceFolder());
   await onMenuEvent("menu:save", () => {
     const active = get(tabsState).activeTabPath;
@@ -29,6 +30,7 @@ export async function initMenuBar(onNewTerminalTab: () => void): Promise<void> {
     }
   });
   await onMenuEvent("menu:new-terminal-tab", onNewTerminalTab);
+  await onMenuEvent("menu:split-terminal", onSplitTerminal);
   await onMenuEvent("menu:find-in-files", () => {
     if (get(workspace).root) {
       openSearch();

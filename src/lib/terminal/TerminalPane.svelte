@@ -79,7 +79,10 @@
     // native concept of "the menu accelerator already owns this key," so
     // without this guard a focused terminal would send Ctrl+R straight to
     // the pty as literal input, triggering the shell's reverse-i-search
-    // instead of the panel toggle.
+    // instead of the panel toggle. `Cmd/Ctrl+\` (split-terminal) needs no
+    // entry here: unlike B/R (real readline bindings) or Ctrl+D (shell EOF),
+    // `\` has no shell/readline meaning on any platform this app targets, so
+    // there's nothing for the guard to intercept it from.
     terminal.attachCustomKeyEventHandler((event) => {
       const key = event.key.toLowerCase();
       const hasToggleModifier = isMacPlatform ? event.metaKey : event.ctrlKey && !event.metaKey;

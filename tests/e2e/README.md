@@ -26,9 +26,10 @@ npm test
 
 1. Open a folder, open `note.md`, verify the heading gets its live-preview class, edit, save, reload, and confirm the edit persisted to disk.
 2. Open a terminal tab, run `echo`, and verify the output renders.
-3. Open the project-wide search overlay via Cmd/Ctrl+Shift+F, search for a string that matches `note.md`, click the result, and confirm the overlay closes and the editor jumps to `note.md`.
-4. Confirm the bottom status bar shows the active file's path and cursor position and updates as the caret moves, that its search button opens the search overlay, and that its explorer/terminal toggle buttons show and hide their respective panels.
-5. (Follow-up, not yet in the spec) feed a synthetic buffer containing a PR URL and a real file path and verify both linkify and that clicking the file path opens it in the editor.
+3. Split the active terminal pane, run a distinct command in each of the two resulting panes, confirm neither pane's output leaks into the other's, then close one pane and confirm the other survives with its output intact.
+4. Open the project-wide search overlay via Cmd/Ctrl+Shift+F, search for a string that matches `note.md`, click the result, and confirm the overlay closes and the editor jumps to `note.md`.
+5. Confirm the bottom status bar shows the active file's path and cursor position and updates as the caret moves, that its search button opens the search overlay, and that its explorer/terminal toggle buttons show and hide their respective panels.
+6. (Follow-up, not yet in the spec) feed a synthetic buffer containing a PR URL and a real file path and verify both linkify and that clicking the file path opens it in the editor.
 
 The native folder-picker dialog lives outside the WebView, so the spec registers the workspace root directly through the same `workspace_set_root` command the picker's callback would call, rather than trying to drive the OS dialog. `workspace_set_root` also records the path as a recent project, so the spec reloads and clicks its row on the welcome screen to pick it up — everything downstream, including the workspace store update, exercises real app code.
 
