@@ -8,14 +8,35 @@
   import { registerLinkProviders } from "./linkProviders";
   import { theme as themeStore } from "../stores/theme";
   import { buildXtermTheme } from "../theme/xtermTheme";
+  import { parseOsc7Cwd, computeTabTitle } from "./tabTitle";
 
-  let { cwd, workspaceId, onExit }: { cwd: string; workspaceId: string; onExit?: () => void } = $props();
+  let {
+    cwd,
+    workspaceId,
+    onExit,
+    onTitleChange,
+  }: { cwd: string; workspaceId: string; onExit?: () => void; onTitleChange?: (title: string) => void } = $props();
 
   let container: HTMLDivElement;
   let terminal: Terminal;
   let fitAddon: FitAddon;
   let terminalId: string | undefined;
   let resizeObserver: ResizeObserver;
+  let osc7Disposable: { dispose(): void };
+  let osc133Disposable: { dispose(): void };
+
+  let currentCwd: string;
+  let commandRunning = false;
+  let processTitle: string | null = null;
+  let lastEmittedTitle: string | undefined;
+
+  function emitTitle(): void {
+    const title = computeTabTitle({ cwd: currentCwd, commandRunning, processTitle });
+    if (title !== lastEmittedTitle) {
+      lastEmittedTitle = title;
+      onTitleChange?.(title);
+    }
+  }
 
   function base64ToBytes(base64: string): Uint8Array {
     const binary = atob(base64);
@@ -27,6 +48,9 @@
   }
 
   onMount(() => {
+    currentCwd = cwd;
+    lastEmittedTitle = computeTabTitle({ cwd: currentCwd, commandRunning, processTitle });
+
     terminal = new Terminal({
       cursorBlink: true,
       fontFamily: "Menlo, Monaco, monospace",
@@ -40,6 +64,31 @@
     fitAddon.fit();
 
     registerLinkProviders(terminal, workspaceId, cwd);
+
+    osc7Disposable = terminal.parser.registerOscHandler(7, (data) => {
+      const parsedCwd = parseOsc7Cwd(data);
+      if (parsedCwd) {
+        currentCwd = parsedCwd;
+        emitTitle();
+      }
+      return true;
+    });
+
+    osc133Disposable = terminal.parser.registerOscHandler(133, (data) => {
+      if (data.startsWith("C")) {
+        commandRunning = true;
+        processTitle = null;
+      } else if (data.startsWith("D")) {
+        commandRunning = false;
+      }
+      emitTitle();
+      return true;
+    });
+
+    terminal.onTitleChange((title) => {
+      processTitle = title;
+      emitTitle();
+    });
 
     terminal.onData((data) => {
       if (terminalId) {
@@ -71,6 +120,8 @@
 
   onDestroy(() => {
     resizeObserver?.disconnect();
+    osc7Disposable?.dispose();
+    osc133Disposable?.dispose();
     if (terminalId) {
       void ptyKill(terminalId);
     }
