@@ -223,9 +223,6 @@
                 <EditorPane filePath={tab.path} />
               </div>
             {/each}
-            {#if $tabsState.tabs.length === 0}
-              <div class="empty-state">Open a file from the explorer to start editing.</div>
-            {/if}
           </div>
         </div>
       {:else if slot === "resizer"}
@@ -432,13 +429,6 @@
   .editor-pane-slot.hidden,
   .terminal-pane-slot.hidden {
     display: none;
-  }
-  .empty-state {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    opacity: 0.5;
   }
   .conflict-banner {
     display: flex;
