@@ -3,6 +3,7 @@
   import { workspace } from "../stores/workspace";
   import { contextMenu, closeContextMenu, newFile, newFolder, rename, deletePath, revealInFinder } from "./contextMenu";
   import FileTreeNode from "./FileTreeNode.svelte";
+  import ContextMenu from "../ui/ContextMenu.svelte";
 
   let promptState = $state<
     | { kind: "new-file"; dir: string; value: string }
@@ -92,11 +93,7 @@
 </div>
 
 {#if $contextMenu}
-  <div
-    class="context-menu"
-    style={`left: ${$contextMenu.x}px; top: ${$contextMenu.y}px`}
-    role="menu"
-  >
+  <ContextMenu x={$contextMenu.x} y={$contextMenu.y}>
     <button role="menuitem" onclick={startNewFile}>New File</button>
     <button role="menuitem" onclick={startNewFolder}>New Folder</button>
     {#if !isRootContextMenu}
@@ -104,7 +101,7 @@
       <button role="menuitem" onclick={startDelete}>Delete</button>
     {/if}
     <button role="menuitem" onclick={() => void reveal()}>Reveal in Finder</button>
-  </div>
+  </ContextMenu>
 {/if}
 
 {#if promptState}
@@ -148,29 +145,6 @@
     overflow: auto;
     font-size: 0.9em;
     padding: 6px 0;
-  }
-  .context-menu {
-    position: fixed;
-    display: flex;
-    flex-direction: column;
-    background: var(--atrium-bg-elevated);
-    border: 1px solid var(--atrium-border);
-    border-radius: 6px;
-    padding: 4px;
-    z-index: 1000;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  }
-  .context-menu button {
-    text-align: left;
-    background: none;
-    border: none;
-    color: inherit;
-    padding: 4px 10px;
-    cursor: pointer;
-    border-radius: 4px;
-  }
-  .context-menu button:hover {
-    background: var(--atrium-bg-hover);
   }
   .modal-backdrop {
     position: fixed;
