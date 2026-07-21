@@ -31,6 +31,41 @@ pub struct FsChangeEvent {
     pub kind: FsChangeKind,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchOptions {
+    pub case_sensitive: bool,
+    pub regex: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchMatch {
+    pub path: String,
+    /// 1-indexed, matches `PendingSelection.line` in `tabs.ts`.
+    pub line: u32,
+    /// 1-indexed UTF-16 code-unit offset, matches `PendingSelection.col` in
+    /// `tabs.ts` (and thus how CodeMirror positions its cursor).
+    pub column: u32,
+    /// The full line, trailing newline stripped, for rendering.
+    pub line_text: String,
+    /// UTF-16 code-unit offset into `line_text` where the match starts, for
+    /// highlighting — matches how `lineText.slice()` (JS strings) and
+    /// CodeMirror both index text, not `line_text`'s UTF-8 byte layout.
+    pub match_start: u32,
+    /// UTF-16 code-unit offset into `line_text` where the match ends, for
+    /// highlighting — see `match_start`.
+    pub match_end: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResults {
+    pub matches: Vec<SearchMatch>,
+    /// True if the total- or per-file-match cap was hit.
+    pub truncated: bool,
+}
+
 /// Everything a pane needs from "a place files live," independent of whether
 /// that place is `LocalWorkspace` (the only implementation in the MVP) or a
 /// future `RemoteWorkspace` (phase 3). Every `fs_*` command in `commands/fs.rs`
@@ -46,6 +81,12 @@ pub trait Workspace: Send + Sync {
     async fn create_dir(&self, path: &str) -> Result<(), AppError>;
     async fn rename(&self, from: &str, to: &str) -> Result<(), AppError>;
     async fn delete(&self, path: &str, recursive: bool) -> Result<(), AppError>;
+    /// Searches every text file under the workspace root for `query`,
+    /// gitignore-aware and binary-safe, honoring `options`. Capped at 500
+    /// total matches and 50 per file (see `LocalWorkspace::search`'s doc
+    /// comment); `SearchResults.truncated` reports whether either cap was
+    /// hit.
+    async fn search(&self, query: &str, options: SearchOptions) -> Result<SearchResults, AppError>;
     /// The workspace root, used by `fs_resolve_candidates`'s third resolution
     /// step (relative to the workspace root).
     fn root(&self) -> &str;

@@ -74,3 +74,35 @@ describe("terminal", () => {
     );
   });
 });
+
+describe("project-wide search", () => {
+  it("opens via Cmd/Ctrl+Shift+F, finds a match, and jumps to it", async () => {
+    // The native-menu-bound accelerator is reachable the same way the
+    // markdown test above reaches Cmd+S: send the raw key combo and let
+    // the native menu event drive the frontend.
+    await browser.keys(["Meta", "Shift", "f"]);
+
+    const searchInput = await $(".search-panel input");
+    await searchInput.waitForExist({ timeout: 5000 });
+    await searchInput.click();
+    await browser.keys("bold");
+
+    const resultRow = await $(".search-result-row");
+    await resultRow.waitForExist({ timeout: 5000 });
+    await resultRow.click();
+
+    // Selecting a result closes the overlay and jumps to it via the same
+    // `openFile`/`pendingSelection` mechanism markdown-link clicks and the
+    // terminal's file-path links already use.
+    await $(".search-panel").waitForExist({ timeout: 5000, reverse: true });
+
+    await browser.waitUntil(
+      async () => (await $(".tab.active .tab-name").getText()).includes("note.md"),
+      { timeout: 5000, timeoutMsg: "expected note.md's tab to be active after jumping to the search result" },
+    );
+    await browser.waitUntil(
+      async () => (await $(".cm-content").getText()).includes("bold"),
+      { timeout: 5000, timeoutMsg: "expected the editor to have scrolled to the matched line" },
+    );
+  });
+});

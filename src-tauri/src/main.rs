@@ -17,15 +17,16 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager};
 
 /// Builds the native menu bar: `Atrium` (About, Quit), `File` (Open Folder,
-/// Save, New Terminal Tab), `Edit` (standard Undo/Redo/Cut/Copy/Paste/Find),
-/// `Window` (standard), and `Theme` (Auto plus the three built-in themes).
+/// Save, New Terminal Tab), `Edit` (standard Undo/Redo/Cut/Copy/Paste/Select
+/// All, plus Find in Files), `Window` (standard), and `Theme` (Auto plus the
+/// three built-in themes).
 /// Menu items that need frontend behavior (Open Folder, Save, New Terminal
-/// Tab, every Theme option) emit a `menu:*` event; `App.svelte` /
-/// `MenuBar.ts` listen for these and dispatch to the active pane or the
-/// theme store, since the menu itself has no notion of "the active editor"
-/// or "the current theme" (no checkmark on the active Theme item yet — the
-/// menu is built once in Rust, before the WebView and its `localStorage`
-/// selection are available).
+/// Tab, Find in Files, every Theme option) emit a `menu:*` event; `App.svelte`
+/// / `MenuBar.ts` listen for these and dispatch to the active pane, the
+/// search overlay, or the theme store, since the menu itself has no notion
+/// of "the active editor" or "the current theme" (no checkmark on the active
+/// Theme item yet — the menu is built once in Rust, before the WebView and
+/// its `localStorage` selection are available).
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let app_menu = Submenu::with_items(
         app,
@@ -65,6 +66,13 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         ],
     )?;
 
+    let find_in_files = MenuItem::with_id(
+        app,
+        "menu:find-in-files",
+        "Find in Files…",
+        true,
+        Some("CmdOrCtrl+Shift+F"),
+    )?;
     let edit_menu = Submenu::with_items(
         app,
         "Edit",
@@ -77,6 +85,8 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &PredefinedMenuItem::copy(app, None)?,
             &PredefinedMenuItem::paste(app, None)?,
             &PredefinedMenuItem::select_all(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &find_in_files,
         ],
     )?;
 
@@ -158,6 +168,7 @@ fn main() {
             commands::fs::fs_rename,
             commands::fs::fs_delete,
             commands::fs::fs_resolve_candidates,
+            commands::search::search_workspace,
             commands::pty::pty_spawn,
             commands::pty::pty_subscribe,
             commands::pty::pty_write,

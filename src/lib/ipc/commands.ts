@@ -113,6 +113,33 @@ export function fsResolveCandidates(
   return invoke("fs_resolve_candidates", { workspaceId, candidates });
 }
 
+export interface SearchOptions {
+  caseSensitive: boolean;
+  regex: boolean;
+}
+
+export interface SearchMatch {
+  path: string;
+  line: number;
+  column: number;
+  lineText: string;
+  matchStart: number;
+  matchEnd: number;
+}
+
+export interface SearchResults {
+  matches: SearchMatch[];
+  truncated: boolean;
+}
+
+export function searchWorkspace(
+  workspaceId: string,
+  query: string,
+  options: SearchOptions,
+): Promise<SearchResults> {
+  return invoke("search_workspace", { workspaceId, query, options });
+}
+
 export function ptySpawn(cwd: string, cols: number, rows: number): Promise<string> {
   return invoke("pty_spawn", { cwd, cols, rows });
 }

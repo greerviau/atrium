@@ -4,6 +4,7 @@
   import EditorPane from "./lib/editor/EditorPane.svelte";
   import TerminalPane from "./lib/terminal/TerminalPane.svelte";
   import WelcomeScreen from "./lib/welcome/WelcomeScreen.svelte";
+  import SearchOverlay from "./lib/search/SearchOverlay.svelte";
   import { workspace, openWorkspacePath } from "./lib/stores/workspace";
   import {
     tabsState,
@@ -126,6 +127,7 @@
 {#if !$workspace.root}
   <WelcomeScreen />
 {:else}
+<SearchOverlay />
 <main class="app">
   <div class="explorer" style={`width: ${explorerWidth}px`}>
     <FileTree />
