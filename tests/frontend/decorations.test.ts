@@ -59,11 +59,22 @@ describe("buildDecorations: headings", () => {
     expect(headingDeco?.to).toBe(7); // end of "Hello"
   });
 
-  it("reveals raw markdown when the cursor is on the heading line", () => {
+  it("keeps the heading class over the whole node, marker included, when the cursor is on its line", () => {
     const doc = "# Hello\nSecond line";
     const state = stateFor(doc, 3); // cursor inside "Hello"
     const decos = collect(state);
-    expect(decos.find((d) => d.class === "cm-heading-1")).toBeUndefined();
+    const headingDeco = decos.find((d) => d.class === "cm-heading-1");
+    expect(headingDeco).toBeTruthy();
+    expect(headingDeco?.from).toBe(0); // start of "# Hello", marker included
+    expect(headingDeco?.to).toBe(7); // end of "Hello"
+  });
+
+  it("doesn't hide the `#` marker while the cursor is on the heading line", () => {
+    const doc = "# Hello\nSecond line";
+    const state = stateFor(doc, 3); // cursor inside "Hello"
+    const decos = collect(state);
+    expect(decos.some((d) => d.isReplace && !d.class)).toBe(false);
+    expect(state.doc.toString()).toContain("# Hello");
   });
 });
 
@@ -78,6 +89,36 @@ describe("buildDecorations: emphasis and strong", () => {
     const replaces = decos.filter((d) => d.isReplace && !d.class);
     expect(replaces.length).toBeGreaterThanOrEqual(4);
   });
+
+  it("keeps emphasis/strong styled and reveals delimiters when the cursor is on their line", () => {
+    const doc = "plain *em* and **strong** text\nsecond line";
+    const state = stateFor(doc, doc.indexOf("em"));
+    const decos = collect(state);
+    expect(decos.some((d) => d.class === "cm-em")).toBe(true);
+    expect(decos.some((d) => d.class === "cm-strong")).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class)).toBe(false);
+    expect(state.doc.toString()).toContain("*em*");
+    expect(state.doc.toString()).toContain("**strong**");
+  });
+});
+
+describe("buildDecorations: strikethrough", () => {
+  it("marks strikethrough text and hides delimiters when the cursor is elsewhere", () => {
+    const doc = "plain ~~gone~~ text\nsecond line";
+    const state = stateFor(doc, doc.length);
+    const decos = collect(state);
+    expect(decos.some((d) => d.class === "cm-strikethrough")).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class)).toBe(true);
+  });
+
+  it("keeps strikethrough styled and reveals delimiters when the cursor is on its line", () => {
+    const doc = "plain ~~gone~~ text\nsecond line";
+    const state = stateFor(doc, doc.indexOf("gone"));
+    const decos = collect(state);
+    expect(decos.some((d) => d.class === "cm-strikethrough")).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class)).toBe(false);
+    expect(state.doc.toString()).toContain("~~gone~~");
+  });
 });
 
 describe("buildDecorations: inline code", () => {
@@ -87,6 +128,44 @@ describe("buildDecorations: inline code", () => {
     const decos = collect(state);
     const codeDeco = decos.find((d) => d.class === "cm-inline-code");
     expect(codeDeco).toBeTruthy();
+  });
+
+  it("keeps inline code styled and reveals backticks when the cursor is on its line", () => {
+    const doc = "use `code` here\nsecond line";
+    const state = stateFor(doc, doc.indexOf("code"));
+    const decos = collect(state);
+    expect(decos.some((d) => d.class === "cm-inline-code")).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class)).toBe(false);
+    expect(state.doc.toString()).toContain("`code`");
+  });
+});
+
+describe("buildDecorations: nested/composited inline constructs under the cursor", () => {
+  it("decorates a heading and its nested bold text together when the cursor is on that line", () => {
+    const doc = "# Heading with **bold** text\nsecond line";
+    const state = stateFor(doc, doc.indexOf("bold"));
+    const decos = collect(state);
+
+    const headingDeco = decos.find((d) => d.class === "cm-heading-1");
+    expect(headingDeco).toBeTruthy();
+    expect(headingDeco?.from).toBe(0);
+    expect(headingDeco?.to).toBe(doc.indexOf("\n"));
+
+    const strongDeco = decos.find((d) => d.class === "cm-strong");
+    expect(strongDeco).toBeTruthy();
+    expect(state.doc.sliceString(strongDeco!.from, strongDeco!.to)).toBe("**bold**");
+
+    expect(decos.some((d) => d.isReplace && !d.class)).toBe(false);
+  });
+
+  it("decorates nested emphasis inside strong text together when the cursor is on that line", () => {
+    const doc = "**bold and *italic* together**\nsecond line";
+    const state = stateFor(doc, doc.indexOf("italic"));
+    const decos = collect(state);
+
+    expect(decos.some((d) => d.class === "cm-strong")).toBe(true);
+    expect(decos.some((d) => d.class === "cm-em")).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class)).toBe(false);
   });
 });
 
@@ -105,6 +184,14 @@ describe("buildDecorations: links", () => {
     expect(found?.href).toBe("https://example.com/page");
     expect(state.doc.sliceString(found!.from, found!.to)).toBe("click here");
   });
+
+  it("still fully un-renders (no cm-link decoration) when the cursor is on the link's line", () => {
+    const doc = "[click here](https://example.com/page)\nsecond line";
+    const state = stateFor(doc, doc.indexOf("click"));
+    const decos = collect(state);
+    expect(decos.some((d) => d.class === "cm-link")).toBe(false);
+    expect(state.doc.toString()).toContain("[click here](https://example.com/page)");
+  });
 });
 
 describe("buildDecorations: images", () => {
@@ -121,6 +208,20 @@ describe("buildDecorations: images", () => {
     expect(widget).toBeTruthy();
     expect(widget?.url).toBe("./local.png");
     expect(widget?.alt).toBe("alt text");
+  });
+
+  it("still fully un-renders (no ImageWidget) when the cursor is on the image's line", () => {
+    const doc = "![alt text](./local.png)\nsecond line";
+    const state = stateFor(doc, doc.indexOf("alt"));
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "notes/test.md");
+    let widget: ImageWidget | undefined;
+    decorations.between(0, state.doc.length, (_f, _t, deco) => {
+      if (deco.spec.widget instanceof ImageWidget) {
+        widget = deco.spec.widget;
+      }
+    });
+    expect(widget).toBeUndefined();
+    expect(state.doc.toString()).toContain("![alt text](./local.png)");
   });
 });
 
