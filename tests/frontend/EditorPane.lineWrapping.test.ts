@@ -51,3 +51,23 @@ describe("EditorPane: line wrapping by file type", () => {
     expect(source.container.querySelector(".cm-content")?.classList.contains("cm-lineWrapping")).toBe(true);
   });
 });
+
+describe("EditorPane: scrollbar auto-hide", () => {
+  afterEach(() => {
+    cleanup();
+    tabsState.set({ tabs: [], activeTabPath: null });
+  });
+
+  it("adds scrollbar-autohide to the CodeMirror scroller once mounted", () => {
+    seedTab({
+      path: "/example.py",
+      mode: "code",
+      savedDoc: "x = 1\n",
+      isDirty: false,
+      hasExternalConflict: false,
+    });
+    const { container } = render(EditorPane, { filePath: "/example.py" });
+
+    expect(container.querySelector(".cm-scroller")?.classList.contains("scrollbar-autohide")).toBe(true);
+  });
+});

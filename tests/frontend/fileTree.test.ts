@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { get } from "svelte/store";
+import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import {
   fileTree,
   loadRoot,
@@ -8,6 +9,7 @@ import {
   toggleExpanded,
   refreshDirectoryContaining,
 } from "../../src/lib/stores/fileTree";
+import FileTree from "../../src/lib/explorer/FileTree.svelte";
 import * as commands from "../../src/lib/ipc/commands";
 import type { DirEntry } from "../../src/lib/ipc/commands";
 
@@ -197,5 +199,36 @@ describe("fileTree: root-level refresh", () => {
     await refreshDirectoryContaining(`${ROOT}/b.txt`);
     expect(commands.fsListDir).toHaveBeenCalledTimes(1);
     expect(get(fileTree).root?.children?.map((n) => n.entry.name)).toEqual(["a.txt"]);
+  });
+});
+
+describe("FileTree: scrollbar auto-hide", () => {
+  beforeEach(() => {
+    vi.mocked(commands.fsListDir).mockReset();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders the root element with the scrollbar-autohide class", async () => {
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("a.txt")]);
+    await loadRoot(ROOT);
+
+    const { container } = render(FileTree);
+
+    expect(container.querySelector(".file-tree")?.classList.contains("scrollbar-autohide")).toBe(true);
+  });
+
+  it("marks the root element as scrolling on a scroll event", async () => {
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("a.txt")]);
+    await loadRoot(ROOT);
+
+    const { container } = render(FileTree);
+    const treeEl = container.querySelector(".file-tree")!;
+
+    await fireEvent.scroll(treeEl);
+
+    expect(treeEl.getAttribute("data-scrolling")).toBe("true");
   });
 });
