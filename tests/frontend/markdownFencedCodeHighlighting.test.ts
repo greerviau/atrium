@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { LanguageDescription, syntaxHighlighting } from "@codemirror/language";
+import { LanguageDescription, forceParsing, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { baseExtensions } from "../../src/lib/editor/baseExtensions";
 import { markdownExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
@@ -37,6 +37,16 @@ describe("fenced code blocks in markdown still highlight after the shared extens
       }),
       parent: container,
     });
+
+    // CM6's initial synchronous parse on EditorState.create() is bounded by
+    // a short wall-clock budget (Language.state's LanguageState.init); on a
+    // slow first construction (cold parser-table JIT, GC pause) that budget
+    // can be blown before the nested JS parse for the fenced block
+    // completes, leaving the rest to a later idle-scheduled parseWorker
+    // tick. forceParsing drives the parse to completion synchronously so
+    // the highlight decorations below are deterministic regardless of how
+    // long construction took.
+    forceParsing(view, view.state.doc.length);
 
     const fenceLines = Array.from(container.querySelectorAll(".cm-content .cm-line")).filter((line) =>
       line.textContent?.includes("greet"),
