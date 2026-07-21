@@ -17,6 +17,7 @@
   }
 
   function onContextMenu(event: MouseEvent): void {
+    event.stopPropagation();
     openContextMenu(event, node.entry.path, node.entry.isDir);
   }
 

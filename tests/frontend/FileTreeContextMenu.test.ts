@@ -55,4 +55,37 @@ describe("FileTree: root context menu", () => {
     expect(await findByText("Delete")).toBeTruthy();
     expect(await findByText("Reveal in Finder")).toBeTruthy();
   });
+
+  it("opens the root context menu when right-clicking empty space below the rows", async () => {
+    vi.mocked(commands.fsListDir).mockResolvedValue([
+      { name: "file.txt", path: `${ROOT}/file.txt`, isDir: false, isSymlink: false },
+    ]);
+    await loadRoot(ROOT);
+
+    const { container, findByText, queryByText } = render(FileTree);
+    await fireEvent.contextMenu(container.querySelector(".file-tree")!);
+
+    expect(await findByText("New File")).toBeTruthy();
+    expect(await findByText("New Folder")).toBeTruthy();
+    expect(await findByText("Reveal in Finder")).toBeTruthy();
+    expect(queryByText("Rename")).toBeNull();
+    expect(queryByText("Delete")).toBeNull();
+  });
+
+  it("creates a new file at the workspace root when triggered from empty space", async () => {
+    vi.mocked(commands.fsListDir).mockResolvedValue([
+      { name: "file.txt", path: `${ROOT}/file.txt`, isDir: false, isSymlink: false },
+    ]);
+    await loadRoot(ROOT);
+
+    const { container, findByText } = render(FileTree);
+    await fireEvent.contextMenu(container.querySelector(".file-tree")!);
+    await fireEvent.click(await findByText("New File"));
+
+    const input = container.querySelector("input") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "new.txt" } });
+    await fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(commands.fsCreateFile).toHaveBeenCalledWith("local", `${ROOT}/new.txt`);
+  });
 });
