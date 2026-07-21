@@ -37,15 +37,39 @@
   cursor: pointer;
 }
 
-.cm-table-header {
-  font-weight: 700;
-  border-bottom: 2px solid var(--atrium-border);
-  padding: 0.2em 0.6em;
+/* A run of consecutive `display: table-row` lines gets wrapped in an
+   anonymous `display: table` box by the browser automatically — no <table>
+   element or widget replacement needed. */
+.cm-table-row {
+  display: table-row;
+  border-bottom: 1px solid var(--atrium-border);
+  white-space: pre;
+  overflow-x: auto;
 }
 
 .cm-table-cell {
-  border: 1px solid var(--atrium-border);
+  display: table-cell;
   padding: 0.2em 0.6em;
+}
+
+.cm-table-header-cell {
+  font-weight: 700;
+}
+
+.cm-table-header-row {
+  border-bottom: 2px solid var(--atrium-border);
+}
+
+.cm-table-delimiter-line {
+  display: none;
+}
+
+.cm-table-align-center {
+  text-align: center;
+}
+
+.cm-table-align-right {
+  text-align: right;
 }
 
 .cm-code-block {
