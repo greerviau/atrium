@@ -42,3 +42,12 @@ export function onMenuEvent(
 export function onDockOpenPath(handler: (path: string) => void): Promise<UnlistenFn> {
   return listen<string>("dock:open-path", (event) => handler(event.payload));
 }
+
+/**
+ * Fires when the user tries to close the window or quit the app (Rust
+ * always intercepts both paths and defers the decision here, since it has
+ * no visibility into which tabs are dirty).
+ */
+export function onCloseRequested(handler: () => void): Promise<UnlistenFn> {
+  return listen("app:close-requested", () => handler());
+}

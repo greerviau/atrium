@@ -10,6 +10,7 @@
     markDirty,
     clearPendingSelection,
     toggleMarkdownViewMode,
+    notifySaveComplete,
   } from "../stores/tabs";
   import { theme as themeStore } from "../stores/theme";
   import { buildCmTheme, buildHighlightStyle } from "../theme/cmTheme";
@@ -228,7 +229,10 @@
 
   $effect(() => {
     if ($saveRequest === filePath) {
-      void save().then(() => saveRequest.set(null));
+      void save().then(() => {
+        saveRequest.set(null);
+        notifySaveComplete(filePath);
+      });
     }
   });
 </script>

@@ -1,6 +1,7 @@
 import { get, writable } from "svelte/store";
 import { fsReadFile, fsWriteFile, localWorkspaceId } from "../ipc/commands";
 import { modeForPath, type PaneMode } from "../editor/codeExtensions";
+import { closePrompt } from "./closePrompt";
 
 export interface PendingSelection {
   line: number;
@@ -38,8 +39,25 @@ export const tabsState = writable<TabsState>({ tabs: [], activeTabPath: null });
  */
 export const saveRequest = writable<string | null>(null);
 
-export function requestSave(path: string): void {
+const pendingSaveResolvers = new Map<string, () => void>();
+
+/**
+ * Requests a save for `path` and resolves once the owning `EditorPane` has
+ * actually finished saving (via `notifySaveComplete`). The `File > Save`
+ * menu caller doesn't need this and can keep ignoring the returned promise;
+ * the unsaved-changes close flow awaits it to sequence "save, then close".
+ */
+export function requestSave(path: string): Promise<void> {
   saveRequest.set(path);
+  return new Promise((resolve) => {
+    pendingSaveResolvers.set(path, resolve);
+  });
+}
+
+/** Resolves the pending `requestSave` promise for `path`, if any. */
+export function notifySaveComplete(path: string): void {
+  pendingSaveResolvers.get(path)?.();
+  pendingSaveResolvers.delete(path);
 }
 
 /**
@@ -95,6 +113,21 @@ export function closeTab(path: string): void {
       s.activeTabPath === path ? (tabs[tabs.length - 1]?.path ?? null) : s.activeTabPath;
     return { tabs, activeTabPath };
   });
+}
+
+/**
+ * The entry point for a user-driven tab close (the tab strip's "×" button).
+ * A clean tab closes immediately, exactly as `closeTab` always has; a dirty
+ * tab instead raises the unsaved-changes confirmation and leaves the tab
+ * open until the user resolves it.
+ */
+export function requestCloseTab(path: string): void {
+  const tab = get(tabsState).tabs.find((t) => t.path === path);
+  if (tab?.isDirty) {
+    closePrompt.set({ kind: "tab", path });
+  } else {
+    closeTab(path);
+  }
 }
 
 export function setActiveTab(path: string): void {
