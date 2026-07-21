@@ -87,11 +87,7 @@
   // array index — the terminal subtree (and its running PTY session) is
   // only ever moved, never torn down and recreated.
   let mainSlotOrder = $derived<MainSlot[]>(
-    $terminalVisible
-      ? terminalPosition === "left"
-        ? ["terminal", "resizer", "editor"]
-        : ["editor", "resizer", "terminal"]
-      : ["editor"],
+    terminalPosition === "left" ? ["terminal", "resizer", "editor"] : ["editor", "resizer", "terminal"],
   );
 
   // Showing the terminal panel with no tab open auto-spawns one, matching
@@ -234,6 +230,7 @@
           class="resizer"
           class:horizontal={terminalPosition === "bottom"}
           class:vertical={terminalPosition !== "bottom"}
+          class:hidden={!$terminalVisible}
           role="separator"
           aria-orientation={terminalPosition === "bottom" ? "horizontal" : "vertical"}
           onpointerdown={startDragTerminal}
@@ -243,6 +240,7 @@
           class="terminal-area"
           class:dock-left={terminalPosition === "left"}
           class:dock-right={terminalPosition === "right"}
+          class:hidden={!$terminalVisible}
           style={terminalPosition === "bottom" ? `height: ${terminalHeight}px` : `width: ${terminalWidth}px`}
         >
           <div class="tab-strip">
@@ -345,6 +343,9 @@
   .resizer.horizontal {
     height: 4px;
     cursor: row-resize;
+  }
+  .resizer.hidden {
+    display: none;
   }
   .main {
     flex: 1;
@@ -449,6 +450,9 @@
   .terminal-area.dock-right {
     border-top: none;
     border-left: 1px solid var(--atrium-border);
+  }
+  .terminal-area.hidden {
+    display: none;
   }
   .dock-controls {
     display: flex;
