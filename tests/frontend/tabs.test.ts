@@ -8,8 +8,12 @@ import {
   reconcileExternalChange,
   reloadFromDisk,
   dismissConflict,
+  requestCloseTab,
+  requestSave,
+  notifySaveComplete,
   type Tab,
 } from "../../src/lib/stores/tabs";
+import { closePrompt } from "../../src/lib/stores/closePrompt";
 import * as commands from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
@@ -196,5 +200,75 @@ describe("reconcileExternalChange / reloadFromDisk / dismissConflict", () => {
     expect(tab.savedDoc).toBe("original");
     expect(tab.isDirty).toBe(true);
     expect(tab.hasExternalConflict).toBe(true);
+  });
+});
+
+describe("requestCloseTab", () => {
+  beforeEach(() => {
+    tabsState.set({ tabs: [], activeTabPath: null });
+    closePrompt.set(null);
+  });
+
+  it("closes a clean tab immediately without raising the unsaved-changes prompt", () => {
+    tabsState.set({ tabs: [codeTab("/main.rs")], activeTabPath: "/main.rs" });
+
+    requestCloseTab("/main.rs");
+
+    expect(get(tabsState).tabs).toHaveLength(0);
+    expect(get(closePrompt)).toBeNull();
+  });
+
+  it("raises the tab prompt for a dirty tab instead of closing it", () => {
+    tabsState.set({ tabs: [codeTab("/main.rs", { isDirty: true })], activeTabPath: "/main.rs" });
+
+    requestCloseTab("/main.rs");
+
+    expect(get(tabsState).tabs).toHaveLength(1);
+    expect(get(closePrompt)).toEqual({ kind: "tab", path: "/main.rs" });
+  });
+
+  it("is a no-op for an unknown path", () => {
+    tabsState.set({ tabs: [codeTab("/main.rs")], activeTabPath: "/main.rs" });
+
+    requestCloseTab("/missing.rs");
+
+    expect(get(tabsState).tabs).toHaveLength(1);
+    expect(get(closePrompt)).toBeNull();
+  });
+});
+
+describe("requestSave / notifySaveComplete", () => {
+  it("resolves the returned promise only after the matching notifySaveComplete call", async () => {
+    let resolved = false;
+    const pending = requestSave("/a.md").then(() => {
+      resolved = true;
+    });
+
+    // Give any spuriously-resolved microtask a chance to run.
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    notifySaveComplete("/a.md");
+    await pending;
+
+    expect(resolved).toBe(true);
+  });
+
+  it("does not resolve for an unrelated path", async () => {
+    let resolved = false;
+    void requestSave("/a.md").then(() => {
+      resolved = true;
+    });
+
+    notifySaveComplete("/b.md");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(resolved).toBe(false);
+
+    notifySaveComplete("/a.md");
+    await Promise.resolve();
+
+    expect(resolved).toBe(true);
   });
 });

@@ -33,6 +33,11 @@ npm test
 
 The native folder-picker dialog lives outside the WebView, so the spec registers the workspace root directly through the same `workspace_set_root` command the picker's callback would call, rather than trying to drive the OS dialog. `workspace_set_root` also records the path as a recent project, so the spec reloads and clicks its row on the welcome screen to pick it up — everything downstream, including the workspace store update, exercises real app code.
 
+`specs/unsavedChanges.e2e.js` covers the unsaved-changes close confirmation:
+
+1. Edit `note.md`, click its tab's "×", click "Don't Save" in the confirmation dialog, and confirm the tab closes with the on-disk file unchanged.
+2. Same setup, click "Save" instead, and confirm the on-disk file now contains the edit.
+
 ## Status
 
 Written against the plan but **not executed** in the environment this was developed in (no display, no system WebView libraries, no macOS). Run this suite on a real dev machine or in CI on `macos-latest` before relying on it — treat it as a starting point to verify and adjust selectors/timing against, not as already-passing.
