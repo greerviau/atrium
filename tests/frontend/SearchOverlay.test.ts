@@ -58,6 +58,18 @@ describe("SearchOverlay", () => {
     vi.useRealTimers();
   });
 
+  it("disables native browser autocomplete/spellcheck suggestions on the query input", async () => {
+    render(SearchOverlay);
+    searchOverlay.set({ open: true });
+    await tick();
+
+    const input = await screen.findByPlaceholderText(PLACEHOLDER);
+    expect(input.getAttribute("autocomplete")).toBe("off");
+    expect(input.getAttribute("autocorrect")).toBe("off");
+    expect(input.getAttribute("autocapitalize")).toBe("off");
+    expect(input.getAttribute("spellcheck")).toBe("false");
+  });
+
   it("does not render the panel until the overlay is opened", async () => {
     const { container } = render(SearchOverlay);
     expect(container.querySelector(".search-panel")).toBeNull();

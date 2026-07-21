@@ -206,6 +206,10 @@
           onkeydown={onInputKeydown}
           placeholder="Search across the project…"
           autofocus
+          autocomplete="off"
+          autocorrect="off"
+          autocapitalize="off"
+          spellcheck="false"
         />
         {#if isSearching}
           <span class="search-spinner" aria-hidden="true"></span>
