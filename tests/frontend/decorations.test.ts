@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { EditorState, EditorSelection } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
@@ -6,6 +8,14 @@ import { syntaxTree } from "@codemirror/language";
 import { buildDecorations, buildMermaidWidgetDecorations } from "../../src/lib/editor/markdown/decorations";
 import { CheckboxWidget, ImageWidget, MermaidWidget } from "../../src/lib/editor/markdown/widgets";
 import { markdownSourceExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
+
+const markdownCss = readFileSync(resolve(__dirname, "../../src/styles/markdown.css"), "utf-8");
+
+function ruleBodyFor(selector: string): string {
+  const match = markdownCss.match(new RegExp(`${selector.replace(/\./g, "\\.")}\\s*{([^}]*)}`));
+  if (!match) throw new Error(`no rule found for selector ${selector}`);
+  return match[1];
+}
 
 function stateFor(doc: string, selection?: number): EditorState {
   return EditorState.create({
@@ -529,5 +539,20 @@ describe("markdownSourceExtensions", () => {
     });
     expect(container.querySelector(".cm-lineNumbers")).not.toBeNull();
     view.destroy();
+  });
+});
+
+describe("markdown.css: inline code and mermaid error font-family", () => {
+  // .cm-inline-code and .cm-mermaid-error-message must inherit font-family
+  // from the ambient editor context (CodeMirror's own `monospace` base
+  // theme) rather than declaring their own — a declared override resolves
+  // to a different browser default font-size bucket than the unset
+  // ambient one, producing a visible size/line-height mismatch (issue #63).
+  it(".cm-inline-code does not declare its own font-family", () => {
+    expect(ruleBodyFor(".cm-inline-code")).not.toMatch(/font-family/);
+  });
+
+  it(".cm-mermaid-error-message does not declare its own font-family", () => {
+    expect(ruleBodyFor(".cm-mermaid-error-message")).not.toMatch(/font-family/);
   });
 });
