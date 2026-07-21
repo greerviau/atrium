@@ -39,12 +39,17 @@
 
 /* A run of consecutive `display: table-row` lines gets wrapped in an
    anonymous `display: table` box by the browser automatically — no <table>
-   element or widget replacement needed. */
+   element or widget replacement needed. `!important` is required: CodeMirror's
+   own base theme sets `.cm-line { display: block }` through a scoped
+   two-class selector, which beats a bare `.cm-table-row` on specificity
+   alone regardless of stylesheet load order. `white-space: pre` stops the
+   cell content from wrapping; horizontal scrolling for a long cell comes
+   from CodeMirror's own `.cm-scroller { overflow-x: auto }` (`overflow`
+   has no effect on `display: table-row` itself). */
 .cm-table-row {
-  display: table-row;
+  display: table-row !important;
   border-bottom: 1px solid var(--atrium-border);
   white-space: pre;
-  overflow-x: auto;
 }
 
 .cm-table-cell {
@@ -60,8 +65,10 @@
   border-bottom: 2px solid var(--atrium-border);
 }
 
+/* Same specificity problem as `.cm-table-row` above: `!important` is
+   required to beat CodeMirror's own `.cm-line { display: block }`. */
 .cm-table-delimiter-line {
-  display: none;
+  display: none !important;
 }
 
 .cm-table-align-center {
