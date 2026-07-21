@@ -325,6 +325,10 @@
     border: 1px solid var(--atrium-border);
     border-radius: 6px;
   }
+  .search-input-row input:focus {
+    outline: none;
+    border-color: var(--atrium-accent);
+  }
   .search-spinner {
     flex-shrink: 0;
     width: 14px;
