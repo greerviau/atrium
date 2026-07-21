@@ -13,7 +13,6 @@
 .cm-strikethrough { text-decoration: line-through; }
 
 .cm-inline-code {
-  font-family: var(--atrium-mono-font);
   background: var(--atrium-code-bg);
   border-radius: 3px;
   padding: 0 0.2em;
@@ -123,7 +122,6 @@
 }
 
 .cm-mermaid-error-message {
-  font-family: var(--atrium-mono-font);
   white-space: pre-wrap;
   margin: 0;
 }
