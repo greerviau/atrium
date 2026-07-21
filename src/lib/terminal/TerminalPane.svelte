@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { get } from "svelte/store";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { SearchAddon } from "@xterm/addon-search";
@@ -8,6 +9,7 @@
   import { registerLinkProviders } from "./linkProviders";
   import { theme as themeStore } from "../stores/theme";
   import { buildXtermTheme } from "../theme/xtermTheme";
+  import { zoom } from "../stores/textSize";
   import { computeTabTitle, parseOsc7Cwd, reduceTitleState, type TitleState } from "./tabTitle";
 
   // Tauri's `CmdOrCtrl` accelerator resolves to Cmd-only on macOS and
@@ -16,6 +18,9 @@
   // bound on this platform — otherwise it would also swallow the shell's
   // own Ctrl+B/Ctrl+R readline bindings on macOS, where those are unbound.
   const isMacPlatform = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
+
+  // The pre-zoom hardcoded font size, kept as the 100% baseline the zoom level scales from.
+  const BASE_TERMINAL_FONT_SIZE = 13;
 
   let {
     cwd,
@@ -61,7 +66,7 @@
     terminal = new Terminal({
       cursorBlink: true,
       fontFamily: "Menlo, Monaco, monospace",
-      fontSize: 13,
+      fontSize: Math.round(BASE_TERMINAL_FONT_SIZE * get(zoom)),
       theme: buildXtermTheme($themeStore),
     });
     fitAddon = new FitAddon();
@@ -149,6 +154,20 @@
     const current = $themeStore;
     if (terminal) {
       terminal.options.theme = buildXtermTheme(current);
+    }
+  });
+
+  // A font-size change needs the same recompute-then-notify-the-pty sequence
+  // as a container resize: fitAddon.fit() recalculates rows/cols for the new
+  // cell size, then ptyResize tells the pty about the new dimensions.
+  $effect(() => {
+    const current = $zoom;
+    if (terminal && fitAddon) {
+      terminal.options.fontSize = Math.round(BASE_TERMINAL_FONT_SIZE * current);
+      fitAddon.fit();
+      if (terminalId) {
+        void ptyResize(terminalId, terminal.cols, terminal.rows);
+      }
     }
   });
 </script>

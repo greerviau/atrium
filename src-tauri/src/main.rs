@@ -18,16 +18,18 @@ use tauri::{Emitter, Manager};
 
 /// Builds the native menu bar: `Atrium` (About, Quit), `File` (Open Folder,
 /// Save, New Terminal Tab), `Edit` (standard Undo/Redo/Cut/Copy/Paste/Select
-/// All, plus Find in Files), `View` (Toggle File Explorer, Toggle Terminal),
-/// `Window` (standard), and `Theme` (Auto plus the three built-in themes).
-/// Menu items that need frontend behavior (Open Folder, Save, New Terminal
-/// Tab, Find in Files, both View toggles, every Theme option) emit a
-/// `menu:*` event; `App.svelte` / `MenuBar.ts` listen for these and dispatch
-/// to the active pane, the search overlay, the panel-visibility store, or
+/// All, plus Find in Files), `View` (Toggle File Explorer, Toggle Terminal,
+/// Zoom In, Zoom Out, Reset Zoom), `Window` (standard), and `Theme` (Auto
+/// plus the three built-in themes). Menu items that need frontend behavior
+/// (Open Folder, Save, New Terminal Tab, Find in Files, both View toggles,
+/// all three zoom items, every Theme option) emit a `menu:*` event;
+/// `App.svelte` / `MenuBar.ts` listen for these and dispatch to the active
+/// pane, the search overlay, the panel-visibility store, the zoom store, or
 /// the theme store, since the menu itself has no notion of "the active
-/// editor," "the current theme," or "is the panel shown" (no checkmark on
-/// the active Theme item yet — the menu is built once in Rust, before the
-/// WebView and its `localStorage` selection are available).
+/// editor," "the current theme," "is the panel shown," or "the current zoom
+/// level" (no checkmark on the active Theme item yet — the menu is built
+/// once in Rust, before the WebView and its `localStorage` selection are
+/// available).
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let app_menu = Submenu::with_items(
         app,
@@ -105,7 +107,28 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         Some("CmdOrCtrl+R"),
     )?;
-    let view_menu = Submenu::with_items(app, "View", true, &[&toggle_explorer, &toggle_terminal])?;
+    let zoom_in = MenuItem::with_id(app, "menu:zoom-in", "Zoom In", true, Some("CmdOrCtrl+="))?;
+    let zoom_out = MenuItem::with_id(app, "menu:zoom-out", "Zoom Out", true, Some("CmdOrCtrl+-"))?;
+    let zoom_reset = MenuItem::with_id(
+        app,
+        "menu:zoom-reset",
+        "Reset Zoom",
+        true,
+        Some("CmdOrCtrl+0"),
+    )?;
+    let view_menu = Submenu::with_items(
+        app,
+        "View",
+        true,
+        &[
+            &toggle_explorer,
+            &toggle_terminal,
+            &PredefinedMenuItem::separator(app)?,
+            &zoom_in,
+            &zoom_out,
+            &zoom_reset,
+        ],
+    )?;
 
     let window_menu = Submenu::with_items(
         app,
@@ -123,8 +146,20 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         &[
             &MenuItem::with_id(app, "menu:theme:auto", "Auto", true, None::<&str>)?,
-            &MenuItem::with_id(app, "menu:theme:atrium-dark", "Atrium Dark", true, None::<&str>)?,
-            &MenuItem::with_id(app, "menu:theme:atrium-light", "Atrium Light", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "menu:theme:atrium-dark",
+                "Atrium Dark",
+                true,
+                None::<&str>,
+            )?,
+            &MenuItem::with_id(
+                app,
+                "menu:theme:atrium-light",
+                "Atrium Light",
+                true,
+                None::<&str>,
+            )?,
             &MenuItem::with_id(
                 app,
                 "menu:theme:atrium-high-contrast",
@@ -137,7 +172,14 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
     Menu::with_items(
         app,
-        &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu, &theme_menu],
+        &[
+            &app_menu,
+            &file_menu,
+            &edit_menu,
+            &view_menu,
+            &window_menu,
+            &theme_menu,
+        ],
     )
 }
 

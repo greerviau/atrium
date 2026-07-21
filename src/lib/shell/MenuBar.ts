@@ -3,6 +3,7 @@ import { openWorkspaceFolder, workspace } from "../stores/workspace";
 import { tabsState, requestSave } from "../stores/tabs";
 import { setTheme } from "../stores/theme";
 import { toggleExplorerVisible, toggleTerminalVisible } from "../stores/layout";
+import { zoomIn, zoomOut, resetZoom } from "../stores/textSize";
 import { openSearch } from "../search/searchOverlay";
 import { get } from "svelte/store";
 
@@ -15,8 +16,9 @@ import { get } from "svelte/store";
  * search overlay, guarded on a workspace being open the same way `menu:save`
  * is guarded on an active tab; `menu:toggle-explorer` and
  * `menu:toggle-terminal` call the same panel-visibility store actions a
- * status-bar button would; the four `menu:theme:*` items call `setTheme` on
- * the theme store.
+ * status-bar button would; `menu:zoom-in`/`menu:zoom-out`/`menu:zoom-reset`
+ * call the zoom store's actions; the four `menu:theme:*` items call
+ * `setTheme` on the theme store.
  */
 export async function initMenuBar(onNewTerminalTab: () => void): Promise<void> {
   await onMenuEvent("menu:open-folder", () => void openWorkspaceFolder());
@@ -34,6 +36,9 @@ export async function initMenuBar(onNewTerminalTab: () => void): Promise<void> {
   });
   await onMenuEvent("menu:toggle-explorer", () => toggleExplorerVisible());
   await onMenuEvent("menu:toggle-terminal", () => toggleTerminalVisible());
+  await onMenuEvent("menu:zoom-in", () => zoomIn());
+  await onMenuEvent("menu:zoom-out", () => zoomOut());
+  await onMenuEvent("menu:zoom-reset", () => resetZoom());
   await onMenuEvent("menu:theme:auto", () => setTheme("auto"));
   await onMenuEvent("menu:theme:atrium-dark", () => setTheme("atrium-dark"));
   await onMenuEvent("menu:theme:atrium-light", () => setTheme("atrium-light"));

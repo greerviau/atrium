@@ -28,6 +28,7 @@
     type TerminalPosition,
   } from "./lib/stores/layout";
   import { folderName } from "./lib/terminal/tabTitle";
+  import { zoom } from "./lib/stores/textSize";
 
   const initialLayout = loadTerminalLayout();
 
@@ -208,7 +209,7 @@
               </div>
             {/each}
           </div>
-          <div class="editor-panes">
+          <div class="editor-panes" style={`font-size: ${$zoom * 100}%`}>
             {#each $tabsState.tabs as tab (tab.path)}
               <div class="editor-pane-slot" class:hidden={tab.path !== $tabsState.activeTabPath}>
                 {#if tab.hasExternalConflict}
