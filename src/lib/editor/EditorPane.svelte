@@ -17,11 +17,13 @@
   import { markdownExtensions, markdownSourceExtensions } from "./markdown/livePreviewPlugin";
   import { codeExtensions } from "./codeExtensions";
   import { setCursorPosition, clearCursorPosition, type CursorPosition } from "../stores/editorStatus";
+  import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
 
   let { filePath }: { filePath: string } = $props();
 
   let container: HTMLDivElement;
   let view: EditorView;
+  let detachScrollbarAutoHide: (() => void) | undefined;
   const themeCompartment = new Compartment();
   const viewModeCompartment = new Compartment();
   let lastAppliedViewMode: "rendered" | "source" | undefined;
@@ -111,6 +113,7 @@
       }),
       parent: container,
     });
+    detachScrollbarAutoHide = attachScrollbarAutoHide(view.scrollDOM);
 
     if (lastAppliedActive) {
       setCursorPosition(computeCursorPosition(view.state));
@@ -118,6 +121,7 @@
   });
 
   onDestroy(() => {
+    detachScrollbarAutoHide?.();
     view?.destroy();
     if ($tabsState.activeTabPath === null) {
       clearCursorPosition();

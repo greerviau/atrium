@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount, onDestroy } from "svelte";
   import { fileTree, loadRoot } from "../stores/fileTree";
   import { workspace } from "../stores/workspace";
   import {
@@ -13,6 +14,15 @@
   } from "./contextMenu";
   import FileTreeNode from "./FileTreeNode.svelte";
   import ContextMenu from "../ui/ContextMenu.svelte";
+  import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
+
+  let treeEl: HTMLDivElement;
+  let detach: (() => void) | undefined;
+
+  onMount(() => {
+    detach = attachScrollbarAutoHide(treeEl);
+  });
+  onDestroy(() => detach?.());
 
   let promptState = $state<
     | { kind: "new-file"; dir: string; value: string }
@@ -100,7 +110,7 @@
 <svelte:window onclick={() => closeContextMenu()} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="file-tree" oncontextmenu={onEmptyAreaContextMenu}>
+<div class="file-tree" bind:this={treeEl} oncontextmenu={onEmptyAreaContextMenu}>
   {#if $fileTree.root}
     <div role="tree">
       <FileTreeNode node={$fileTree.root} />
