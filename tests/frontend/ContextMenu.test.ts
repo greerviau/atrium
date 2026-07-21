@@ -73,4 +73,32 @@ describe("ContextMenu: viewport clamping", () => {
     const menu = container.querySelector(".context-menu") as HTMLElement;
     expect(menu.style.top).toBe("4px");
   });
+
+  it("re-clamps on an already-open menu when the anchor and item count both change", () => {
+    // Mirrors FileTree: right-clicking a different row while a menu is
+    // already open sets a new `{x, y, path, isDir}` directly (never through
+    // a null in-between), so `ContextMenu` never remounts — it's the same
+    // component instance getting new props and a different number of menu
+    // items (root vs. non-root rows show 3 vs. 5 actions).
+    const rowHeight = 29;
+    const padding = 8;
+    Element.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      const height = this.classList.contains("context-menu") ? this.children.length * rowHeight + padding : 0;
+      return { x: 0, y: 0, width: 160, height, top: 0, left: 0, right: 160, bottom: height, toJSON: () => ({}) } as DOMRect;
+    };
+
+    const { container, rerender } = render(ContextMenuHost, { x: 100, y: 760, itemCount: 5 });
+    const menu = container.querySelector(".context-menu") as HTMLElement;
+    const tallHeight = 5 * rowHeight + padding;
+    expect(menu.style.top).toBe(`${760 - tallHeight}px`);
+
+    // Same instance: a new anchor point (the next right-click's coordinates)
+    // and fewer items (a root row: no Rename/Delete).
+    rerender({ x: 100, y: 750, itemCount: 3 });
+    const shortHeight = 3 * rowHeight + padding;
+    expect(menu.style.top).toBe(`${750 - shortHeight}px`);
+    // Would equal this (stale) value if the effect re-clamped using the
+    // menu's previous height instead of re-measuring after the DOM update.
+    expect(menu.style.top).not.toBe(`${750 - tallHeight}px`);
+  });
 });
