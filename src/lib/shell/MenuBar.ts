@@ -2,6 +2,7 @@ import { onMenuEvent } from "../ipc/events";
 import { openWorkspaceFolder, workspace } from "../stores/workspace";
 import { tabsState, requestSave } from "../stores/tabs";
 import { setTheme } from "../stores/theme";
+import { toggleExplorerVisible, toggleTerminalVisible } from "../stores/layout";
 import { openSearch } from "../search/searchOverlay";
 import { get } from "svelte/store";
 
@@ -12,8 +13,10 @@ import { get } from "svelte/store";
  * synthetic Cmd+S; `menu:open-folder` and `menu:new-terminal-tab` call the
  * same functions their in-app buttons would; `menu:find-in-files` opens the
  * search overlay, guarded on a workspace being open the same way `menu:save`
- * is guarded on an active tab; the four `menu:theme:*` items call `setTheme`
- * on the theme store.
+ * is guarded on an active tab; `menu:toggle-explorer` and
+ * `menu:toggle-terminal` call the same panel-visibility store actions a
+ * status-bar button would; the four `menu:theme:*` items call `setTheme` on
+ * the theme store.
  */
 export async function initMenuBar(onNewTerminalTab: () => void): Promise<void> {
   await onMenuEvent("menu:open-folder", () => void openWorkspaceFolder());
@@ -29,6 +32,8 @@ export async function initMenuBar(onNewTerminalTab: () => void): Promise<void> {
       openSearch();
     }
   });
+  await onMenuEvent("menu:toggle-explorer", () => toggleExplorerVisible());
+  await onMenuEvent("menu:toggle-terminal", () => toggleTerminalVisible());
   await onMenuEvent("menu:theme:auto", () => setTheme("auto"));
   await onMenuEvent("menu:theme:atrium-dark", () => setTheme("atrium-dark"));
   await onMenuEvent("menu:theme:atrium-light", () => setTheme("atrium-light"));

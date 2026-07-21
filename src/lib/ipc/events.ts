@@ -20,6 +20,8 @@ export type MenuEventId =
   | "menu:save"
   | "menu:new-terminal-tab"
   | "menu:find-in-files"
+  | "menu:toggle-explorer"
+  | "menu:toggle-terminal"
   | "menu:theme:auto"
   | "menu:theme:atrium-dark"
   | "menu:theme:atrium-light"

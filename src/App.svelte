@@ -23,6 +23,8 @@
     clampToContainer,
     HEIGHT_MIN,
     WIDTH_MIN,
+    explorerVisible,
+    terminalVisible,
     type TerminalPosition,
   } from "./lib/stores/layout";
   import { folderName } from "./lib/terminal/tabTitle";
@@ -85,8 +87,24 @@
   // array index — the terminal subtree (and its running PTY session) is
   // only ever moved, never torn down and recreated.
   let mainSlotOrder = $derived<MainSlot[]>(
-    terminalPosition === "left" ? ["terminal", "resizer", "editor"] : ["editor", "resizer", "terminal"],
+    $terminalVisible
+      ? terminalPosition === "left"
+        ? ["terminal", "resizer", "editor"]
+        : ["editor", "resizer", "terminal"]
+      : ["editor"],
   );
+
+  // Showing the terminal panel with no tab open auto-spawns one, matching
+  // the VS Code/JetBrains convention that toggling the terminal never
+  // reveals a blank panel.
+  let wasTerminalVisible = $terminalVisible;
+  $effect(() => {
+    const visible = $terminalVisible;
+    if (visible && !wasTerminalVisible && terminalSessions.length === 0) {
+      newTerminalTab();
+    }
+    wasTerminalVisible = visible;
+  });
 
   function setTerminalPosition(position: TerminalPosition): void {
     terminalPosition = position;
@@ -143,10 +161,12 @@
 {:else}
 <SearchOverlay />
 <main class="app">
-  <div class="explorer" style={`width: ${explorerWidth}px`}>
-    <FileTree />
-  </div>
-  <div class="resizer vertical" role="separator" aria-orientation="vertical" onpointerdown={startDragExplorer}></div>
+  {#if $explorerVisible}
+    <div class="explorer" style={`width: ${explorerWidth}px`}>
+      <FileTree />
+    </div>
+    <div class="resizer vertical" role="separator" aria-orientation="vertical" onpointerdown={startDragExplorer}></div>
+  {/if}
 
   <div class="main" class:row={terminalPosition !== "bottom"} bind:this={mainEl}>
     {#each mainSlotOrder as slot (slot)}

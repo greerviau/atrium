@@ -1,3 +1,5 @@
+import { writable, get } from "svelte/store";
+
 export type TerminalPosition = "bottom" | "left" | "right";
 
 export interface TerminalLayout {
@@ -80,4 +82,69 @@ export function saveTerminalLayout(layout: TerminalLayout): void {
   } catch {
     // localStorage unavailable or quota exceeded; layout simply won't persist.
   }
+}
+
+export interface PanelVisibility {
+  explorerVisible: boolean;
+  terminalVisible: boolean;
+}
+
+const PANELS_STORAGE_KEY = "atrium.layout.panels";
+
+const DEFAULT_PANEL_VISIBILITY: PanelVisibility = { explorerVisible: true, terminalVisible: true };
+
+/** Reads the persisted panel visibility, validating shape. Falls back to both panels shown on any missing/malformed data. */
+function loadPanelVisibility(): PanelVisibility {
+  try {
+    const raw = localStorage.getItem(PANELS_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_PANEL_VISIBILITY };
+    const parsed = JSON.parse(raw);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      typeof parsed.explorerVisible !== "boolean" ||
+      typeof parsed.terminalVisible !== "boolean"
+    ) {
+      return { ...DEFAULT_PANEL_VISIBILITY };
+    }
+    return { explorerVisible: parsed.explorerVisible, terminalVisible: parsed.terminalVisible };
+  } catch {
+    return { ...DEFAULT_PANEL_VISIBILITY };
+  }
+}
+
+/** Persists panel visibility. Swallows quota/availability errors since this persistence is a best-effort convenience. */
+function persistPanelVisibility(visibility: PanelVisibility): void {
+  try {
+    localStorage.setItem(PANELS_STORAGE_KEY, JSON.stringify(visibility));
+  } catch {
+    // localStorage unavailable or quota exceeded; visibility simply won't persist.
+  }
+}
+
+const initialPanelVisibility = loadPanelVisibility();
+
+/**
+ * Canonical shown/hidden state for the explorer and terminal panels. The
+ * native menu accelerator, the keyboard shortcut, and any future UI control
+ * (e.g. a status-bar button) all read these stores and call the toggle
+ * functions below rather than deriving or duplicating this state elsewhere.
+ */
+export const explorerVisible = writable<boolean>(initialPanelVisibility.explorerVisible);
+export const terminalVisible = writable<boolean>(initialPanelVisibility.terminalVisible);
+
+export function toggleExplorerVisible(): void {
+  explorerVisible.update((visible) => {
+    const next = !visible;
+    persistPanelVisibility({ explorerVisible: next, terminalVisible: get(terminalVisible) });
+    return next;
+  });
+}
+
+export function toggleTerminalVisible(): void {
+  terminalVisible.update((visible) => {
+    const next = !visible;
+    persistPanelVisibility({ explorerVisible: get(explorerVisible), terminalVisible: next });
+    return next;
+  });
 }

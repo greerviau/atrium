@@ -18,15 +18,16 @@ use tauri::{Emitter, Manager};
 
 /// Builds the native menu bar: `Atrium` (About, Quit), `File` (Open Folder,
 /// Save, New Terminal Tab), `Edit` (standard Undo/Redo/Cut/Copy/Paste/Select
-/// All, plus Find in Files), `Window` (standard), and `Theme` (Auto plus the
-/// three built-in themes).
+/// All, plus Find in Files), `View` (Toggle File Explorer, Toggle Terminal),
+/// `Window` (standard), and `Theme` (Auto plus the three built-in themes).
 /// Menu items that need frontend behavior (Open Folder, Save, New Terminal
-/// Tab, Find in Files, every Theme option) emit a `menu:*` event; `App.svelte`
-/// / `MenuBar.ts` listen for these and dispatch to the active pane, the
-/// search overlay, or the theme store, since the menu itself has no notion
-/// of "the active editor" or "the current theme" (no checkmark on the active
-/// Theme item yet — the menu is built once in Rust, before the WebView and
-/// its `localStorage` selection are available).
+/// Tab, Find in Files, both View toggles, every Theme option) emit a
+/// `menu:*` event; `App.svelte` / `MenuBar.ts` listen for these and dispatch
+/// to the active pane, the search overlay, the panel-visibility store, or
+/// the theme store, since the menu itself has no notion of "the active
+/// editor," "the current theme," or "is the panel shown" (no checkmark on
+/// the active Theme item yet — the menu is built once in Rust, before the
+/// WebView and its `localStorage` selection are available).
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let app_menu = Submenu::with_items(
         app,
@@ -90,6 +91,22 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         ],
     )?;
 
+    let toggle_explorer = MenuItem::with_id(
+        app,
+        "menu:toggle-explorer",
+        "Toggle File Explorer",
+        true,
+        Some("CmdOrCtrl+B"),
+    )?;
+    let toggle_terminal = MenuItem::with_id(
+        app,
+        "menu:toggle-terminal",
+        "Toggle Terminal",
+        true,
+        Some("CmdOrCtrl+R"),
+    )?;
+    let view_menu = Submenu::with_items(app, "View", true, &[&toggle_explorer, &toggle_terminal])?;
+
     let window_menu = Submenu::with_items(
         app,
         "Window",
@@ -118,7 +135,10 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         ],
     )?;
 
-    Menu::with_items(app, &[&app_menu, &file_menu, &edit_menu, &window_menu, &theme_menu])
+    Menu::with_items(
+        app,
+        &[&app_menu, &file_menu, &edit_menu, &view_menu, &window_menu, &theme_menu],
+    )
 }
 
 fn main() {

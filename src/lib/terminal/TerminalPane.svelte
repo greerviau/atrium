@@ -63,6 +63,17 @@
     terminal.open(container);
     fitAddon.fit();
 
+    // Never forward Cmd/Ctrl+B or Cmd/Ctrl+R to the shell: xterm has no
+    // native concept of "the menu accelerator already owns this key," so
+    // without this guard a focused terminal would send Ctrl+R straight to
+    // the pty as literal input, triggering the shell's reverse-i-search
+    // instead of the panel toggle.
+    terminal.attachCustomKeyEventHandler((event) => {
+      const key = event.key.toLowerCase();
+      const isToggleAccelerator = (event.ctrlKey || event.metaKey) && (key === "b" || key === "r");
+      return !isToggleAccelerator;
+    });
+
     registerLinkProviders(terminal, workspaceId, cwd);
 
     osc7Disposable = terminal.parser.registerOscHandler(7, (data) => {

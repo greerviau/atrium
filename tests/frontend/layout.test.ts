@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { get } from "svelte/store";
 import {
   loadTerminalLayout,
   saveTerminalLayout,
@@ -9,6 +10,7 @@ import {
 } from "../../src/lib/stores/layout";
 
 const STORAGE_KEY = "atrium.layout.terminal";
+const PANELS_STORAGE_KEY = "atrium.layout.panels";
 
 beforeEach(() => {
   localStorage.clear();
@@ -96,6 +98,103 @@ describe("loadTerminalLayout / saveTerminalLayout", () => {
       throw new DOMException("QuotaExceededError");
     });
     expect(() => saveTerminalLayout({ position: "bottom", height: 240, width: 320 })).not.toThrow();
+    setItem.mockRestore();
+  });
+});
+
+/**
+ * The panel-visibility store reads its persisted state once at import time
+ * (module-level `const initialPanelVisibility = loadPanelVisibility()`), so
+ * each test that needs a specific starting localStorage state resets the
+ * module registry and re-imports it fresh, matching the pattern already
+ * used for the theme store in themeStore.test.ts.
+ */
+async function freshLayoutStore() {
+  vi.resetModules();
+  return import("../../src/lib/stores/layout");
+}
+
+describe("panel visibility", () => {
+  it("defaults both panels to shown when nothing is stored", async () => {
+    const { explorerVisible, terminalVisible } = await freshLayoutStore();
+    expect(get(explorerVisible)).toBe(true);
+    expect(get(terminalVisible)).toBe(true);
+  });
+
+  it("round-trips a toggled explorer visibility through localStorage", async () => {
+    const { explorerVisible, terminalVisible, toggleExplorerVisible } = await freshLayoutStore();
+
+    toggleExplorerVisible();
+
+    expect(get(explorerVisible)).toBe(false);
+    expect(JSON.parse(localStorage.getItem(PANELS_STORAGE_KEY) ?? "")).toEqual({
+      explorerVisible: false,
+      terminalVisible: true,
+    });
+
+    const reloaded = await freshLayoutStore();
+    expect(get(reloaded.explorerVisible)).toBe(false);
+    expect(get(reloaded.terminalVisible)).toBe(true);
+  });
+
+  it("round-trips a toggled terminal visibility through localStorage", async () => {
+    const { terminalVisible, toggleTerminalVisible } = await freshLayoutStore();
+
+    toggleTerminalVisible();
+
+    expect(get(terminalVisible)).toBe(false);
+    expect(JSON.parse(localStorage.getItem(PANELS_STORAGE_KEY) ?? "")).toEqual({
+      explorerVisible: true,
+      terminalVisible: false,
+    });
+
+    const reloaded = await freshLayoutStore();
+    expect(get(reloaded.explorerVisible)).toBe(true);
+    expect(get(reloaded.terminalVisible)).toBe(false);
+  });
+
+  it("toggles independently, preserving the other panel's state", async () => {
+    const { explorerVisible, terminalVisible, toggleExplorerVisible } = await freshLayoutStore();
+
+    toggleExplorerVisible();
+    toggleExplorerVisible();
+
+    expect(get(explorerVisible)).toBe(true);
+    expect(get(terminalVisible)).toBe(true);
+  });
+
+  it("falls back to the default on malformed JSON", async () => {
+    localStorage.setItem(PANELS_STORAGE_KEY, "not json{");
+    const { explorerVisible, terminalVisible } = await freshLayoutStore();
+
+    expect(get(explorerVisible)).toBe(true);
+    expect(get(terminalVisible)).toBe(true);
+  });
+
+  it("falls back to the default when a field has the wrong type", async () => {
+    localStorage.setItem(PANELS_STORAGE_KEY, JSON.stringify({ explorerVisible: "yes", terminalVisible: true }));
+    const { explorerVisible, terminalVisible } = await freshLayoutStore();
+
+    expect(get(explorerVisible)).toBe(true);
+    expect(get(terminalVisible)).toBe(true);
+  });
+
+  it("falls back to the default when a field is missing", async () => {
+    localStorage.setItem(PANELS_STORAGE_KEY, JSON.stringify({ explorerVisible: false }));
+    const { explorerVisible, terminalVisible } = await freshLayoutStore();
+
+    expect(get(explorerVisible)).toBe(true);
+    expect(get(terminalVisible)).toBe(true);
+  });
+
+  it("swallows a write error instead of throwing", async () => {
+    const { toggleExplorerVisible } = await freshLayoutStore();
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("QuotaExceededError");
+    });
+
+    expect(() => toggleExplorerVisible()).not.toThrow();
+
     setItem.mockRestore();
   });
 });
