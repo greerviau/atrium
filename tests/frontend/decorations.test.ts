@@ -3,8 +3,8 @@ import { EditorState, EditorSelection } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
-import { buildDecorations } from "../../src/lib/editor/markdown/decorations";
-import { CheckboxWidget, ImageWidget } from "../../src/lib/editor/markdown/widgets";
+import { buildDecorations, buildMermaidWidgetDecorations } from "../../src/lib/editor/markdown/decorations";
+import { CheckboxWidget, ImageWidget, MermaidWidget } from "../../src/lib/editor/markdown/widgets";
 import { markdownSourceExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
 
 function stateFor(doc: string, selection?: number): EditorState {
@@ -381,6 +381,91 @@ describe("buildDecorations: code blocks", () => {
   });
 });
 
+/**
+ * `MermaidWidget` decorations come from `buildMermaidWidgetDecorations` (a
+ * `StateField`, per CodeMirror's own requirement that block-level replace
+ * decorations can't come from a `ViewPlugin`) rather than `buildDecorations`
+ * itself — see `mermaidWidgetSource`'s doc comment in `decorations.ts`.
+ */
+function collectMermaidWidgets(state: EditorState): CollectedDecoration[] {
+  const decorations = buildMermaidWidgetDecorations(state);
+  const out: CollectedDecoration[] = [];
+  decorations.between(0, state.doc.length, (from, to, deco) => {
+    out.push({
+      from,
+      to,
+      class: deco.spec.class,
+      isReplace: (deco as unknown as { isReplace: boolean }).isReplace,
+      widget: deco.spec.widget,
+    });
+  });
+  return out;
+}
+
+describe("buildDecorations: mermaid fenced blocks", () => {
+  it("replaces a mermaid block with a MermaidWidget spanning the full node when the cursor is elsewhere", () => {
+    const doc = "prose\n\n```mermaid\ngraph TD;\nA-->B;\n```\n\nafter";
+    const state = stateFor(doc, 0); // cursor on the "prose" line, outside the block
+
+    const widgetDeco = collectMermaidWidgets(state).find((d) => d.widget instanceof MermaidWidget);
+    expect(widgetDeco).toBeTruthy();
+    const widget = widgetDeco!.widget as MermaidWidget;
+    expect(widget.source).toBe("graph TD;\nA-->B;");
+
+    const openFence = state.doc.line(3); // "```mermaid"
+    const closeFence = state.doc.line(6); // "```"
+    expect(widgetDeco!.from).toBe(openFence.from);
+    expect(widgetDeco!.to).toBe(closeFence.to);
+
+    // The block is fully replaced: no leftover cm-code-block container or
+    // fence-hiding decoration underneath it in the regular decoration set.
+    const decos = collect(state);
+    expect(decos.some((d) => d.class === "cm-code-block" && d.from >= openFence.from && d.from <= closeFence.from)).toBe(
+      false,
+    );
+  });
+
+  it("falls back to normal fenced-code decorations when the cursor is on the mermaid block", () => {
+    const doc = "```mermaid\ngraph TD;\nA-->B;\n```\n\nafter";
+    const state = stateFor(doc, doc.indexOf("A-->B"));
+
+    expect(collectMermaidWidgets(state)).toHaveLength(0);
+
+    const decos = collect(state);
+    const openLine = state.doc.line(1);
+    const closeLine = state.doc.line(4);
+    expect(decos.some((d) => d.class === "cm-code-block" && d.from === openLine.from)).toBe(true);
+    expect(decos.some((d) => d.class === "cm-code-block" && d.from === closeLine.from)).toBe(true);
+    // Cursor is on the block, so the fence markers stay revealed as raw text.
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === openLine.from && d.to === openLine.to)).toBe(
+      false,
+    );
+  });
+
+  it("leaves a non-mermaid fenced block completely unaffected", () => {
+    const doc = "```js\nconst x = 1;\n```\n\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+
+    expect(collectMermaidWidgets(state)).toHaveLength(0);
+
+    const decos = collect(state);
+    const openLine = state.doc.line(1);
+    const closeLine = state.doc.line(3);
+    expect(decos.some((d) => d.class === "cm-code-block" && d.from === openLine.from)).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === openLine.from && d.to === openLine.to)).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === closeLine.from && d.to === closeLine.to)).toBe(
+      true,
+    );
+  });
+
+  it("finds a mermaid block nested inside a blockquote or list item", () => {
+    const doc = "> ```mermaid\n> graph TD;\n> A-->B;\n> ```\n\n- item\n\n  ```mermaid\n  graph TD;\n  C-->D;\n  ```\n";
+    const state = stateFor(doc, doc.indexOf("item")); // cursor outside both fenced blocks
+    const widgets = collectMermaidWidgets(state).filter((d) => d.widget instanceof MermaidWidget);
+    expect(widgets).toHaveLength(2);
+  });
+});
+
 describe("buildDecorations: round-trip safety", () => {
   it("never mutates document content", () => {
     const doc = "# Heading\n\n*em* **strong** `code` [link](url) ![img](url)\n\n- [ ] task\n\n| a | b |\n|---|---|\n| 1 | 2 |\n";
@@ -392,7 +477,7 @@ describe("buildDecorations: round-trip safety", () => {
 
 describe("markdownSourceExtensions", () => {
   const fixture =
-    "# Heading\n\n*em* **strong** [link](https://example.com) ![img](./local.png)\n\n- [ ] task\n\n```js\nconst x = 1;\n```\n";
+    "# Heading\n\n*em* **strong** [link](https://example.com) ![img](./local.png)\n\n- [ ] task\n\n```js\nconst x = 1;\n```\n\n```mermaid\ngraph TD;\nA-->B;\n```\n";
 
   it("keeps the markdown language's syntax tree (fenced code still gets nested highlighting)", () => {
     const state = EditorState.create({ doc: fixture, extensions: markdownSourceExtensions("test.md") });
@@ -419,6 +504,20 @@ describe("markdownSourceExtensions", () => {
     expect(container.querySelector(".cm-link")).toBeNull();
     expect(container.textContent).toContain("# Heading");
     expect(container.textContent).toContain("![img](./local.png)");
+    view.destroy();
+  });
+
+  it("renders a mermaid block as plain unrendered text, with no diagram or error DOM at all", () => {
+    const container = document.createElement("div");
+    const view = new EditorView({
+      state: EditorState.create({ doc: fixture, extensions: markdownSourceExtensions("test.md") }),
+      parent: container,
+    });
+    expect(container.querySelector(".cm-mermaid-diagram")).toBeNull();
+    expect(container.querySelector(".cm-mermaid-error")).toBeNull();
+    expect(container.querySelector("svg")).toBeNull();
+    expect(container.textContent).toContain("```mermaid");
+    expect(container.textContent).toContain("graph TD;");
     view.destroy();
   });
 

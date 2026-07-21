@@ -86,3 +86,44 @@
   white-space: pre;
   overflow-x: auto;
 }
+
+/* Block-level widget replacing a `mermaid` fenced code block. `text-align:
+   center` centers the rendered <svg>. A diagram wider than the pane isn't
+   clipped or wrapped — like a long code line or table row above, it scrolls
+   via CodeMirror's own `.cm-scroller { overflow-x: auto }`, not a container
+   of its own; `overflow-x: auto` here is a no-op today (this box's width
+   always matches its content, same as `.cm-code-block` above) kept as a
+   defensive match to that same precedent. */
+.cm-mermaid-diagram {
+  display: block;
+  overflow-x: auto;
+  padding: 0.6em;
+  text-align: center;
+  cursor: pointer;
+}
+
+.cm-mermaid-diagram svg {
+  max-width: 100%;
+}
+
+/* Invalid Mermaid syntax: a distinct warning-treated panel (matching the
+   external-change conflict banner's palette) with a short label and
+   Mermaid's own parser error message, still click-to-edit like a
+   successfully rendered diagram. */
+.cm-mermaid-diagram.cm-mermaid-error {
+  text-align: left;
+  background: var(--atrium-warning-bg);
+  border-radius: 4px;
+}
+
+.cm-mermaid-error-label {
+  font-weight: 600;
+  color: var(--atrium-warning);
+  margin-bottom: 0.3em;
+}
+
+.cm-mermaid-error-message {
+  font-family: var(--atrium-mono-font);
+  white-space: pre-wrap;
+  margin: 0;
+}

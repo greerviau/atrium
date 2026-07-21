@@ -1,8 +1,9 @@
-import type { Extension } from "@codemirror/state";
+import type { Extension, Transaction } from "@codemirror/state";
+import { StateField } from "@codemirror/state";
 import { EditorView, ViewPlugin, ViewUpdate, lineNumbers, type DecorationSet } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
-import { buildDecorations } from "./decorations";
+import { buildDecorations, buildMermaidWidgetDecorations } from "./decorations";
 import { handleLinkClick } from "./widgets";
 
 /**
@@ -31,6 +32,28 @@ function livePreviewPlugin(documentPath: string) {
     },
   );
 }
+
+/**
+ * Block-replace `MermaidWidget` decorations for every ` ```mermaid ` block
+ * with the cursor elsewhere. CodeMirror requires block-level replace
+ * decorations to come from a `StateField` rather than a `ViewPlugin` (a
+ * `RangeError: Block decorations may not be specified via plugins` at
+ * runtime otherwise), so this is a separate extension from
+ * `livePreviewPlugin` above, recomputed on the same doc-change/
+ * selection-change triggers.
+ */
+const mermaidWidgetField = StateField.define<DecorationSet>({
+  create(state) {
+    return buildMermaidWidgetDecorations(state);
+  },
+  update(decorations, tr: Transaction) {
+    if (tr.docChanged || tr.selection) {
+      return buildMermaidWidgetDecorations(tr.state);
+    }
+    return decorations.map(tr.changes);
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
 
 /** Single click handler for every `cm-link` mark, reading the URL/document path stashed in its attributes. */
 const linkClickHandler = EditorView.domEventHandlers({
@@ -61,6 +84,7 @@ export function markdownExtensions(documentPath: string): Extension[] {
   return [
     markdown({ base: markdownLanguage, codeLanguages: languages }),
     livePreviewPlugin(documentPath),
+    mermaidWidgetField,
     linkClickHandler,
   ];
 }
