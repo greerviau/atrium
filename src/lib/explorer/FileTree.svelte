@@ -1,7 +1,16 @@
 <script lang="ts">
   import { fileTree, loadRoot } from "../stores/fileTree";
   import { workspace } from "../stores/workspace";
-  import { contextMenu, closeContextMenu, newFile, newFolder, rename, deletePath, revealInFinder } from "./contextMenu";
+  import {
+    contextMenu,
+    closeContextMenu,
+    openContextMenu,
+    newFile,
+    newFolder,
+    rename,
+    deletePath,
+    revealInFinder,
+  } from "./contextMenu";
   import FileTreeNode from "./FileTreeNode.svelte";
   import ContextMenu from "../ui/ContextMenu.svelte";
 
@@ -80,11 +89,18 @@
     await deletePath(deleteTarget.path, deleteTarget.isDir);
     deleteTarget = null;
   }
+
+  function onEmptyAreaContextMenu(event: MouseEvent): void {
+    const root = $fileTree.root;
+    if (!root) return;
+    openContextMenu(event, root.entry.path, true);
+  }
 </script>
 
 <svelte:window onclick={() => closeContextMenu()} />
 
-<div class="file-tree">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="file-tree" oncontextmenu={onEmptyAreaContextMenu}>
   {#if $fileTree.root}
     <div role="tree">
       <FileTreeNode node={$fileTree.root} />
