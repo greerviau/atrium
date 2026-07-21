@@ -217,6 +217,7 @@ dependencies = [
  "grep-regex",
  "grep-searcher",
  "ignore",
+ "memchr",
  "notify",
  "notify-debouncer-full",
  "objc2",

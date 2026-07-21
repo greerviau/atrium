@@ -27,6 +27,10 @@ const SEARCH_PER_FILE_MATCH_CAP: usize = 50;
 /// ourselves. A regex compile failure (only reachable with `options.regex
 /// == true`) surfaces as `AppError::InvalidRegex` so the frontend can show
 /// it inline, distinct from an empty result list.
+///
+/// Only used for regex-mode searches and case-sensitive literal searches.
+/// A case-insensitive literal search uses `AsciiCiLiteralMatcher` instead —
+/// see its doc comment for why.
 fn build_matcher(query: &str, options: &SearchOptions) -> Result<RegexMatcher, AppError> {
     let mut builder = RegexMatcherBuilder::new();
     builder
@@ -39,6 +43,81 @@ fn build_matcher(query: &str, options: &SearchOptions) -> Result<RegexMatcher, A
             AppError::Other(err.to_string())
         }
     })
+}
+
+/// A `grep_matcher::Matcher` for a single case-insensitive literal pattern,
+/// backed by a plain ASCII-lowercased `memchr::memmem` substring search
+/// instead of `grep-regex`.
+///
+/// `grep-regex`'s `RegexMatcherBuilder` only takes its cheap
+/// literal-alternation fast path when the search is case-*sensitive*
+/// (`is_fixed_strings` in `grep-regex` bails to full regex AST-parsing and
+/// Unicode-aware HIR translation the moment `case_insensitive` is set, with
+/// no way around it through the public API). For Atrium that's the common
+/// case — case-insensitive is the UI's default — and the cost isn't fixed:
+/// it scales with query length badly enough to be perceptible per
+/// keystroke (measured: ~15µs to build a 3-character case-sensitive
+/// matcher vs. ~18ms for a 45-character case-insensitive one, over 1000x).
+///
+/// An `aho-corasick`-backed matcher was tried first, since it's the
+/// dedicated crate for exactly this (and its own `ascii_case_insensitive`
+/// mode fixed the construction cost). But its scanning showed an
+/// unpredictable, query-content-dependent blowup on real (non-repeating)
+/// text — confirmed reproducible and query-specific by interleaving a slow
+/// and a fast same-length query back to back, ruling out measurement noise
+/// — that neither `AhoCorasickKind::DFA` nor `ContiguousNFA` avoided, and
+/// whose root cause wasn't pinned down. Given that risk, this uses
+/// `memchr::memmem` (the Two-Way algorithm) instead: it has no automaton
+/// construction step at all (so no construction-cost scaling problem to
+/// begin with) and a proven linear worst case, at the cost of an explicit
+/// ASCII-lowercase copy of each line before searching it.
+struct AsciiCiLiteralMatcher {
+    query_lower: Vec<u8>,
+    // A search-box query is always single-line text, so it can never
+    // contain `\n` — meaning `\n` can never be part of a match. Reporting
+    // that via `non_matching_bytes` (below) is what lets `grep-searcher`
+    // use its fast line-by-line scanner for this matcher; without it,
+    // `Searcher::is_line_by_line_fast` falls back to a much slower general
+    // strategy.
+    non_matching: grep_matcher::ByteSet,
+}
+
+impl AsciiCiLiteralMatcher {
+    fn new(query: &str) -> Result<AsciiCiLiteralMatcher, AppError> {
+        let mut non_matching = grep_matcher::ByteSet::empty();
+        non_matching.add(b'\n');
+        Ok(AsciiCiLiteralMatcher {
+            query_lower: query.as_bytes().to_ascii_lowercase(),
+            non_matching,
+        })
+    }
+}
+
+impl Matcher for AsciiCiLiteralMatcher {
+    type Captures = grep_matcher::NoCaptures;
+    type Error = grep_matcher::NoError;
+
+    fn find_at(
+        &self,
+        haystack: &[u8],
+        at: usize,
+    ) -> Result<Option<grep_matcher::Match>, grep_matcher::NoError> {
+        // ASCII-lowercasing preserves byte length and position 1:1, so a
+        // match found in the lowercased copy is at the same offset in the
+        // original (non-ASCII bytes pass through unchanged and simply
+        // won't case-fold, which is the documented ASCII-only tradeoff).
+        let haystack_lower = haystack[at..].to_ascii_lowercase();
+        Ok(memchr::memmem::find(&haystack_lower, &self.query_lower)
+            .map(|pos| grep_matcher::Match::new(at + pos, at + pos + self.query_lower.len())))
+    }
+
+    fn new_captures(&self) -> Result<Self::Captures, Self::Error> {
+        Ok(grep_matcher::NoCaptures::new())
+    }
+
+    fn non_matching_bytes(&self) -> Option<&grep_matcher::ByteSet> {
+        Some(&self.non_matching)
+    }
 }
 
 /// Converts a UTF-8 byte offset into `line` (as returned by
@@ -66,9 +145,9 @@ fn byte_offset_to_utf16(line: &str, byte_offset: usize) -> u32 {
 /// supersedes this one, the walk stops immediately instead of running to
 /// completion for a result nobody will use — the cooperative-cancellation
 /// half of "a new keystroke cancels the previous in-flight search."
-fn search_root(
+fn search_root<M: Matcher>(
     root: &Path,
-    matcher: &RegexMatcher,
+    matcher: &M,
     current_generation: &AtomicU64,
     generation: u64,
 ) -> SearchResults {
@@ -292,15 +371,24 @@ impl Workspace for LocalWorkspace {
     }
 
     async fn search(&self, query: &str, options: SearchOptions) -> Result<SearchResults, AppError> {
-        let matcher = build_matcher(query, &options)?;
         let root = self.root.clone();
         let generation = self.search_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let current_generation = self.search_generation.clone();
-        tokio::task::spawn_blocking(move || {
-            search_root(&root, &matcher, &current_generation, generation)
-        })
-        .await
-        .map_err(|err| AppError::Other(format!("search task panicked: {err}")))
+        if !options.regex && !options.case_sensitive {
+            let matcher = AsciiCiLiteralMatcher::new(query)?;
+            tokio::task::spawn_blocking(move || {
+                search_root(&root, &matcher, &current_generation, generation)
+            })
+            .await
+            .map_err(|err| AppError::Other(format!("search task panicked: {err}")))
+        } else {
+            let matcher = build_matcher(query, &options)?;
+            tokio::task::spawn_blocking(move || {
+                search_root(&root, &matcher, &current_generation, generation)
+            })
+            .await
+            .map_err(|err| AppError::Other(format!("search task panicked: {err}")))
+        }
     }
 
     fn root(&self) -> &str {
