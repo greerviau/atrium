@@ -24,6 +24,7 @@
   const themeCompartment = new Compartment();
   const viewModeCompartment = new Compartment();
   let lastAppliedViewMode: "rendered" | "source" | undefined;
+  let lastAppliedActive: boolean | undefined;
 
   function viewModeExtensions(mode: "code" | "markdown", viewMode: "rendered" | "source" | undefined): Extension[] {
     if (mode !== "markdown") {
@@ -50,6 +51,7 @@
     const initialTab = $tabsState.tabs.find((t) => t.path === filePath);
     const mode = initialTab?.mode ?? "code";
     lastAppliedViewMode = initialTab?.viewMode;
+    lastAppliedActive = $tabsState.activeTabPath === filePath;
 
     const shortcutKeymap = [
       {
@@ -126,6 +128,26 @@
     view.dispatch({
       effects: viewModeCompartment.reconfigure(viewModeExtensions(current.mode, current.viewMode)),
     });
+  });
+
+  // Forces a fresh CodeMirror measurement when this tab's pane actually
+  // becomes visible. Every open tab's `EditorPane` is mounted immediately
+  // (`App.svelte` keeps inactive tabs' panes in the DOM, hidden via
+  // `display: none`), so a background tab's `EditorView` can take its first
+  // layout measurement against a zero-size container and lock in a wrong
+  // content width that CodeMirror won't shrink back down on its own — only a
+  // later, differently-sized measurement (reliably, the first scroll) forces
+  // the correction. Guarded like the view-mode effect above so it only fires
+  // on an actual activation, not on every unrelated tab-store update.
+  $effect(() => {
+    const isActive = $tabsState.activeTabPath === filePath;
+    if (!view || isActive === lastAppliedActive) {
+      return;
+    }
+    lastAppliedActive = isActive;
+    if (isActive) {
+      view.requestMeasure();
+    }
   });
 
   // External-change reconciliation (section 6.2): when the tab is clean and
