@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { loadTerminalLayout, saveTerminalLayout, clampHeight, clampWidth } from "../../src/lib/stores/layout";
+import {
+  loadTerminalLayout,
+  saveTerminalLayout,
+  clampHeight,
+  clampWidth,
+  clampToContainer,
+  WIDTH_MIN,
+} from "../../src/lib/stores/layout";
 
 const STORAGE_KEY = "atrium.layout.terminal";
 
@@ -16,8 +23,8 @@ describe("clampHeight", () => {
     expect(clampHeight(10)).toBe(80);
   });
 
-  it("clamps above the maximum", () => {
-    expect(clampHeight(9999)).toBe(700);
+  it("clamps above the sanity ceiling", () => {
+    expect(clampHeight(9999)).toBe(4000);
   });
 });
 
@@ -30,8 +37,27 @@ describe("clampWidth", () => {
     expect(clampWidth(10)).toBe(140);
   });
 
-  it("clamps above the maximum", () => {
-    expect(clampWidth(9999)).toBe(600);
+  it("clamps above the sanity ceiling", () => {
+    expect(clampWidth(9999)).toBe(4000);
+  });
+});
+
+describe("clampToContainer", () => {
+  it("passes through a value that leaves room for the reserved space", () => {
+    expect(clampToContainer(300, WIDTH_MIN, 1000, 204)).toBe(300);
+  });
+
+  it("caps at containerSize minus the reserved space", () => {
+    expect(clampToContainer(900, WIDTH_MIN, 1000, 204)).toBe(796);
+  });
+
+  it("scales up with a larger container instead of hitting a fixed ceiling", () => {
+    // Old fixed-600 clamp would have capped this at 600 regardless of container size.
+    expect(clampToContainer(4000, WIDTH_MIN, 3440, 204)).toBe(3236);
+  });
+
+  it("never returns less than min, even when the container is smaller than min + reserved", () => {
+    expect(clampToContainer(50, WIDTH_MIN, 300, 204)).toBe(WIDTH_MIN);
   });
 });
 
@@ -62,7 +88,7 @@ describe("loadTerminalLayout / saveTerminalLayout", () => {
 
   it("clamps out-of-range dimensions on load", () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ position: "left", height: 5, width: 9999 }));
-    expect(loadTerminalLayout()).toEqual({ position: "left", height: 80, width: 600 });
+    expect(loadTerminalLayout()).toEqual({ position: "left", height: 80, width: 4000 });
   });
 
   it("swallows a write error instead of throwing", () => {
