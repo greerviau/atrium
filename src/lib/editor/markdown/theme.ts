@@ -12,7 +12,12 @@ export const CLASS = {
   strikethrough: "cm-strikethrough",
   inlineCode: "cm-inline-code",
   link: "cm-link",
-  tableHeader: "cm-table-header",
+  tableRow: "cm-table-row",
+  tableHeaderRow: "cm-table-header-row",
   tableCell: "cm-table-cell",
+  tableHeaderCell: "cm-table-header-cell",
+  tableDelimiterLine: "cm-table-delimiter-line",
+  tableAlignCenter: "cm-table-align-center",
+  tableAlignRight: "cm-table-align-right",
   codeBlock: "cm-code-block",
 } as const;

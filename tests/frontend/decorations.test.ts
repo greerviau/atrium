@@ -132,19 +132,127 @@ describe("buildDecorations: task lists", () => {
 });
 
 describe("buildDecorations: tables", () => {
-  it("hides the row-level delimiter and marks header/cells", () => {
-    const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\nsecond paragraph";
+  const alignedDoc =
+    "| Name | Role | Score |\n| :--- | :---: | ---: |\n| Alice | Engineer | 92 |\n| Bob | Senior Staff Engineer | 8 |\n";
+
+  it("gives header and body lines a cm-table-row line container", () => {
+    const state = stateFor(alignedDoc, alignedDoc.length);
+    const decos = collect(state);
+    for (const lineNum of [1, 3, 4]) {
+      const lineFrom = state.doc.line(lineNum).from;
+      expect(decos.some((d) => d.class?.split(" ").includes("cm-table-row") && d.from === lineFrom)).toBe(true);
+    }
+  });
+
+  it("hides the alignment-delimiter line entirely via display: none", () => {
+    const state = stateFor(alignedDoc, alignedDoc.length);
+    const decos = collect(state);
+    const delimiterLine = state.doc.line(2);
+    const hasContainer = decos.some(
+      (d) => d.class?.split(" ").includes("cm-table-delimiter-line") && d.from === delimiterLine.from,
+    );
+    expect(hasContainer).toBe(true);
+    const hidesContent = decos.some(
+      (d) => d.isReplace && !d.class && d.from <= delimiterLine.from && d.to >= delimiterLine.to,
+    );
+    expect(hidesContent).toBe(true);
+    // Never given a plain cm-table-row container — it's not a row.
+    expect(decos.some((d) => d.class?.split(" ").includes("cm-table-row") && d.from === delimiterLine.from)).toBe(
+      false,
+    );
+  });
+
+  it("applies cm-table-header-cell only to header cells, not body cells", () => {
+    const state = stateFor(alignedDoc, alignedDoc.length);
+    const decos = collect(state);
+    const headerCells = decos.filter((d) => d.class?.split(" ").includes("cm-table-header-cell"));
+    expect(headerCells).toHaveLength(3);
+    for (const cell of headerCells) {
+      expect(state.doc.sliceString(cell.from, cell.to)).toMatch(/^(Name|Role|Score)$/);
+    }
+  });
+
+  it("applies the correct per-column alignment class for :---, :---:, ---:, and plain ---", () => {
+    const doc = "| L | C | R | P |\n| :--- | :---: | ---: | --- |\n| a | b | c | d |\n";
     const state = stateFor(doc, doc.length);
     const decos = collect(state);
-    expect(decos.some((d) => d.class === "cm-table-header")).toBe(true);
-    expect(decos.some((d) => d.class === "cm-table-cell")).toBe(true);
-    // The delimiter row itself (`| --- | --- |`) should be hidden.
-    const delimiterLineFrom = state.doc.line(2).from;
-    const delimiterLineTo = state.doc.line(2).to;
-    const hidesDelimiterLine = decos.some(
-      (d) => d.isReplace && !d.class && d.from <= delimiterLineFrom && d.to >= delimiterLineTo,
+    const bodyRowFrom = state.doc.line(3).from;
+    const bodyRowTo = state.doc.line(3).to;
+    const bodyCells = decos
+      .filter((d) => d.class?.split(" ").includes("cm-table-cell") && d.from >= bodyRowFrom && d.to <= bodyRowTo)
+      .sort((a, b) => a.from - b.from);
+    expect(bodyCells).toHaveLength(4);
+    expect(bodyCells[0].class?.split(" ")).not.toEqual(expect.arrayContaining(["cm-table-align-center", "cm-table-align-right"]));
+    expect(bodyCells[1].class?.split(" ")).toContain("cm-table-align-center");
+    expect(bodyCells[2].class?.split(" ")).toContain("cm-table-align-right");
+    expect(bodyCells[3].class?.split(" ")).not.toEqual(expect.arrayContaining(["cm-table-align-center", "cm-table-align-right"]));
+  });
+
+  it("fully consumes the inter-cell gap, leaving no stray text node between cells", () => {
+    const state = stateFor(alignedDoc, alignedDoc.length);
+    const decos = collect(state);
+    const headerLine = state.doc.line(1);
+    const cellsAndReplaces = decos
+      .filter((d) => d.from >= headerLine.from && d.to <= headerLine.to && (d.class?.split(" ").includes("cm-table-cell") || (d.isReplace && !d.class)))
+      .sort((a, b) => a.from - b.from);
+    // The whole line should be exactly covered, back to back, by alternating
+    // hidden-gap replace decorations and cell marks — no gap, no overlap.
+    let cursor = headerLine.from;
+    for (const d of cellsAndReplaces) {
+      expect(d.from).toBe(cursor);
+      cursor = d.to;
+    }
+    expect(cursor).toBe(headerLine.to);
+  });
+
+  it("reveals raw pipes on the row under the cursor while other rows stay decorated", () => {
+    const state = stateFor(alignedDoc, alignedDoc.indexOf("Alice"));
+    const decos = collect(state);
+    const aliceLine = state.doc.line(3);
+    // The cursor's row keeps its cm-table-row container...
+    expect(decos.some((d) => d.class?.split(" ").includes("cm-table-row") && d.from === aliceLine.from)).toBe(true);
+    // ...but has no cell marks or hidden-gap replacements inside it.
+    expect(
+      decos.some(
+        (d) =>
+          d.from >= aliceLine.from &&
+          d.to <= aliceLine.to &&
+          (d.class?.split(" ").includes("cm-table-cell") || (d.isReplace && !d.class)),
+      ),
+    ).toBe(false);
+    expect(state.doc.sliceString(aliceLine.from, aliceLine.to)).toBe("| Alice | Engineer | 92 |");
+
+    // Every other row is still fully decorated.
+    const bobLine = state.doc.line(4);
+    expect(decos.some((d) => d.class?.split(" ").includes("cm-table-header-cell") && d.to <= state.doc.line(1).to))
+      .toBe(true);
+    expect(decos.some((d) => d.class?.split(" ").includes("cm-table-cell") && d.from >= bobLine.from && d.to <= bobLine.to)).toBe(
+      true,
     );
-    expect(hidesDelimiterLine).toBe(true);
+  });
+
+  it("keeps two separate tables' alignment independent", () => {
+    const doc = "| A | B |\n| ---: | :--- |\n| 1 | 2 |\n\n| C | D |\n| :--- | ---: |\n| 3 | 4 |\n";
+    const state = stateFor(doc, doc.length);
+    const decos = collect(state);
+    const firstBodyRow = state.doc.line(3);
+    const secondBodyRow = state.doc.line(7);
+    const firstCells = decos
+      .filter(
+        (d) =>
+          d.class?.split(" ").includes("cm-table-cell") && d.from >= firstBodyRow.from && d.to <= firstBodyRow.to,
+      )
+      .sort((a, b) => a.from - b.from);
+    const secondCells = decos
+      .filter(
+        (d) =>
+          d.class?.split(" ").includes("cm-table-cell") && d.from >= secondBodyRow.from && d.to <= secondBodyRow.to,
+      )
+      .sort((a, b) => a.from - b.from);
+    expect(firstCells[0].class?.split(" ")).toContain("cm-table-align-right");
+    expect(firstCells[1].class?.split(" ")).not.toContain("cm-table-align-right");
+    expect(secondCells[0].class?.split(" ")).not.toContain("cm-table-align-right");
+    expect(secondCells[1].class?.split(" ")).toContain("cm-table-align-right");
   });
 });
 

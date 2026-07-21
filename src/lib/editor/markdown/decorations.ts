@@ -123,6 +123,113 @@ function decorateCodeBlock(
   }
 }
 
+type ColumnAlignment = "left" | "center" | "right";
+
+/**
+ * Parses a GFM alignment-delimiter row's raw text (e.g. `"| :--- | :---: | ---: |"`)
+ * into one alignment per column, by GFM's own rule: `:` on both ends is
+ * `center`, on the trailing end only is `right`, otherwise `left`.
+ */
+function parseColumnAlignment(text: string): ColumnAlignment[] {
+  return text
+    .split("|")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0)
+    .map((segment) => {
+      if (segment.startsWith(":") && segment.endsWith(":")) {
+        return "center";
+      }
+      if (segment.endsWith(":")) {
+        return "right";
+      }
+      return "left";
+    });
+}
+
+/**
+ * Decorates one table row (`TableHeader` or `TableRow`, always a single
+ * physical line). The row gets an always-visible `Decoration.line`
+ * container (`display: table-row`, matching the code-block precedent);
+ * cursor-gating only applies to the cell/pipe marks inside it, so placing
+ * the cursor on one row reveals its raw markdown without breaking the
+ * table layout of the rows around it.
+ */
+function decorateTableRow(
+  state: EditorState,
+  node: SyntaxNode,
+  alignment: ColumnAlignment[],
+  isHeader: boolean,
+  out: Range<Decoration>[],
+): void {
+  const rowClass = isHeader ? `${CLASS.tableRow} ${CLASS.tableHeaderRow}` : CLASS.tableRow;
+  out.push(Decoration.line({ class: rowClass }).range(state.doc.lineAt(node.from).from));
+
+  if (isUnderCursor(state, node.from, node.to)) {
+    return;
+  }
+
+  let prevEnd = node.from;
+  let column = 0;
+  let child = node.firstChild;
+  while (child) {
+    if (child.type.name === "TableCell") {
+      // Fully consume the gap since the previous cell (its `|` plus any
+      // surrounding whitespace) rather than just the pipe character — a
+      // leftover whitespace text node would become its own anonymous
+      // table-cell once the real cells get `display: table-cell`.
+      if (child.from > prevEnd) {
+        out.push(Decoration.replace({}).range(prevEnd, child.from));
+      }
+      const classes: string[] = [CLASS.tableCell];
+      if (isHeader) {
+        classes.push(CLASS.tableHeaderCell);
+      }
+      if (alignment[column] === "center") {
+        classes.push(CLASS.tableAlignCenter);
+      } else if (alignment[column] === "right") {
+        classes.push(CLASS.tableAlignRight);
+      }
+      out.push(Decoration.mark({ class: classes.join(" ") }).range(child.from, child.to));
+      prevEnd = child.to;
+      column++;
+    }
+    child = child.nextSibling;
+  }
+  if (node.to > prevEnd) {
+    out.push(Decoration.replace({}).range(prevEnd, node.to));
+  }
+}
+
+/**
+ * Decorates an entire `Table` node in one pass: parses per-column alignment
+ * from the row-level alignment-delimiter (a direct `TableDelimiter` child),
+ * removes that delimiter's line from the render flow entirely, and
+ * decorates each `TableHeader`/`TableRow` child. Handled at the `Table`
+ * level (rather than per-node in the main switch) so alignment is parsed
+ * once and shared across every row, and so the row container stays visible
+ * even when the cursor is elsewhere in the same table.
+ */
+function decorateTable(state: EditorState, node: SyntaxNode, out: Range<Decoration>[]): void {
+  const delimiterNode = node.getChild("TableDelimiter");
+  const alignment = delimiterNode
+    ? parseColumnAlignment(state.doc.sliceString(delimiterNode.from, delimiterNode.to))
+    : [];
+
+  let child = node.firstChild;
+  while (child) {
+    if (child.type.name === "TableHeader") {
+      decorateTableRow(state, child, alignment, true, out);
+    } else if (child.type.name === "TableRow") {
+      decorateTableRow(state, child, alignment, false, out);
+    } else if (child.type.name === "TableDelimiter" && child.from === delimiterNode?.from) {
+      const line = state.doc.lineAt(child.from);
+      out.push(Decoration.line({ class: CLASS.tableDelimiterLine }).range(line.from));
+      out.push(Decoration.replace({}).range(child.from, child.to));
+    }
+    child = child.nextSibling;
+  }
+}
+
 function decorateTaskMarker(state: EditorState, node: SyntaxNode, out: Range<Decoration>[]): void {
   // `[ ]` / `[x]`: the status character sits at offset 1 of the 3-char marker.
   const statusFrom = node.from + 1;
@@ -170,6 +277,16 @@ export function buildDecorations(
           return;
         }
 
+        if (name === "Table") {
+          // Handled as one unit (see decorateTable) so alignment is parsed
+          // once and each row's container stays visible regardless of
+          // where the cursor is elsewhere in the same table; returning
+          // `false` skips the default descent into its already-handled
+          // TableHeader/TableRow/TableCell/TableDelimiter children.
+          decorateTable(state, ref.node, decorations);
+          return false;
+        }
+
         if (isUnderCursor(state, ref.from, ref.to)) {
           return;
         }
@@ -197,21 +314,6 @@ export function buildDecorations(
             break;
           case "Image":
             decorateImage(state, ref.node, documentPath, decorations);
-            break;
-          case "TableDelimiter":
-            // Only the row-level delimiter (direct child of Table) is the
-            // `|---|---|` line; per-cell TableDelimiter nodes nested inside
-            // TableHeader/TableRow mark individual `|` separators and are
-            // left alone.
-            if (ref.node.parent?.type.name === "Table") {
-              decorations.push(Decoration.replace({}).range(ref.from, ref.to));
-            }
-            break;
-          case "TableHeader":
-            decorations.push(Decoration.mark({ class: CLASS.tableHeader }).range(ref.from, ref.to));
-            break;
-          case "TableCell":
-            decorations.push(Decoration.mark({ class: CLASS.tableCell }).range(ref.from, ref.to));
             break;
         }
       },
