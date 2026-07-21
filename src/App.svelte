@@ -20,8 +20,9 @@
   import {
     loadTerminalLayout,
     saveTerminalLayout,
-    clampHeight,
-    clampWidth,
+    clampToContainer,
+    HEIGHT_MIN,
+    WIDTH_MIN,
     type TerminalPosition,
   } from "./lib/stores/layout";
 
@@ -31,6 +32,7 @@
   let terminalPosition = $state<TerminalPosition>(initialLayout.position);
   let terminalHeight = $state(initialLayout.height);
   let terminalWidth = $state(initialLayout.width);
+  let mainEl: HTMLDivElement | undefined = $state();
 
   interface TerminalSession {
     id: string;
@@ -97,14 +99,16 @@
       const startY = event.clientY;
       const startHeight = terminalHeight;
       onMove = (e: PointerEvent): void => {
-        terminalHeight = clampHeight(startHeight - (e.clientY - startY));
+        const available = mainEl?.clientHeight ?? Infinity;
+        terminalHeight = clampToContainer(startHeight - (e.clientY - startY), HEIGHT_MIN, available);
       };
     } else {
       const startX = event.clientX;
       const startWidth = terminalWidth;
       const sign = terminalPosition === "left" ? 1 : -1;
       onMove = (e: PointerEvent): void => {
-        terminalWidth = clampWidth(startWidth + sign * (e.clientX - startX));
+        const available = mainEl?.clientWidth ?? Infinity;
+        terminalWidth = clampToContainer(startWidth + sign * (e.clientX - startX), WIDTH_MIN, available);
       };
     }
     window.addEventListener("pointermove", onMove);
@@ -112,6 +116,10 @@
   }
 
   onMount(() => {
+    if (mainEl) {
+      terminalHeight = clampToContainer(terminalHeight, HEIGHT_MIN, mainEl.clientHeight);
+      terminalWidth = clampToContainer(terminalWidth, WIDTH_MIN, mainEl.clientWidth);
+    }
     void initMenuBar(newTerminalTab);
     void onFsChanged((event) => {
       void reconcileExternalChange(event.path);
@@ -134,7 +142,7 @@
   </div>
   <div class="resizer vertical" role="separator" aria-orientation="vertical" onpointerdown={startDragExplorer}></div>
 
-  <div class="main" class:row={terminalPosition !== "bottom"}>
+  <div class="main" class:row={terminalPosition !== "bottom"} bind:this={mainEl}>
     {#each mainSlotOrder as slot (slot)}
       {#if slot === "editor"}
         <div class="editor-area">
