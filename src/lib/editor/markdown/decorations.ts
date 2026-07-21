@@ -37,6 +37,13 @@ function decorateHeading(
   if (!mark) {
     return;
   }
+  // With the cursor on this line, keep the heading styled but reveal the
+  // marker instead of hiding it (matches the fenced-code/table precedent:
+  // container stays visible, only markup-hiding is cursor-gated).
+  if (isUnderCursor(state, node.from, node.to)) {
+    out.push(Decoration.mark({ class: headingClass(level) }).range(node.from, node.to));
+    return;
+  }
   // Hide the `#`+space marker (zero-width); mark the remaining text with a
   // heading-level class controlling font-size/weight.
   const textStart = Math.min(mark.to + 1, node.to);
@@ -47,13 +54,23 @@ function decorateHeading(
 }
 
 /**
- * Shared shape for Emphasis/StrongEmphasis/Strikethrough/InlineCode: hide
- * the delimiter runs (found by `markTypeName`), mark the whole node with a
- * CSS class so the inner text gets the style (the hidden marks contribute
- * no visible width, so the class only visually affects the inner text).
+ * Shared shape for Emphasis/StrongEmphasis/Strikethrough/InlineCode: the
+ * whole node always gets a CSS class so the inner text gets the style; the
+ * delimiter runs (found by `markTypeName`) are hidden unless the cursor is
+ * on this line, in which case they're left visible inside the still-styled
+ * span (matches the fenced-code/table precedent).
  */
-function decorateWrapped(node: SyntaxNode, markTypeName: string, cssClass: string, out: Range<Decoration>[]): void {
+function decorateWrapped(
+  state: EditorState,
+  node: SyntaxNode,
+  markTypeName: string,
+  cssClass: string,
+  out: Range<Decoration>[],
+): void {
   out.push(Decoration.mark({ class: cssClass }).range(node.from, node.to));
+  if (isUnderCursor(state, node.from, node.to)) {
+    return;
+  }
   let child = node.firstChild;
   while (child) {
     if (child.type.name === markTypeName) {
@@ -364,10 +381,6 @@ export function buildDecorations(
           return false;
         }
 
-        if (isUnderCursor(state, ref.from, ref.to)) {
-          return;
-        }
-
         if (name in HEADING_LEVELS) {
           decorateHeading(state, ref.node, HEADING_LEVELS[name], decorations);
           return;
@@ -375,21 +388,27 @@ export function buildDecorations(
 
         switch (name) {
           case "Emphasis":
-            decorateWrapped(ref.node, "EmphasisMark", CLASS.emphasis, decorations);
+            decorateWrapped(state, ref.node, "EmphasisMark", CLASS.emphasis, decorations);
             break;
           case "StrongEmphasis":
-            decorateWrapped(ref.node, "EmphasisMark", CLASS.strong, decorations);
+            decorateWrapped(state, ref.node, "EmphasisMark", CLASS.strong, decorations);
             break;
           case "Strikethrough":
-            decorateWrapped(ref.node, "StrikethroughMark", CLASS.strikethrough, decorations);
+            decorateWrapped(state, ref.node, "StrikethroughMark", CLASS.strikethrough, decorations);
             break;
           case "InlineCode":
-            decorateWrapped(ref.node, "CodeMark", CLASS.inlineCode, decorations);
+            decorateWrapped(state, ref.node, "CodeMark", CLASS.inlineCode, decorations);
             break;
           case "Link":
+            if (isUnderCursor(state, ref.from, ref.to)) {
+              break;
+            }
             decorateLink(state, ref.node, documentPath, decorations);
             break;
           case "Image":
+            if (isUnderCursor(state, ref.from, ref.to)) {
+              break;
+            }
             decorateImage(state, ref.node, documentPath, decorations);
             break;
         }
