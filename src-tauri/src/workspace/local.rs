@@ -41,6 +41,18 @@ fn build_matcher(query: &str, options: &SearchOptions) -> Result<RegexMatcher, A
     })
 }
 
+/// Converts a UTF-8 byte offset into `line` (as returned by
+/// `grep_matcher::Match::start`/`end`, which operate on the line's raw
+/// bytes) into a UTF-16 code-unit offset — the unit `SearchOverlay.svelte`'s
+/// `lineText.slice()` and `EditorPane.svelte`'s CodeMirror jump-to-selection
+/// both index by, since that's how JS strings (and CodeMirror positions)
+/// are indexed. `byte_offset` is always a valid UTF-8 char boundary here:
+/// it comes from a match against `line`'s own bytes via the Unicode-mode
+/// `regex` engine `grep-regex` builds on, which never splits a codepoint.
+fn byte_offset_to_utf16(line: &str, byte_offset: usize) -> u32 {
+    line[..byte_offset].encode_utf16().count() as u32
+}
+
 /// Walks `root` (gitignore-aware, hidden/VCS-dir-skipping, via
 /// `ignore::WalkBuilder`'s ripgrep-equivalent defaults) and searches every
 /// regular file's contents with `matcher`, stopping once either cap in
@@ -99,13 +111,15 @@ fn search_root(
                 let mut cap_hit = false;
                 matcher
                     .find_iter(line_text.as_bytes(), |m| {
+                        let start = byte_offset_to_utf16(line_text, m.start());
+                        let end = byte_offset_to_utf16(line_text, m.end());
                         matches.push(SearchMatch {
                             path: path_str.clone(),
                             line: line_number as u32,
-                            column: m.start() as u32 + 1,
+                            column: start + 1,
                             line_text: line_text.to_string(),
-                            match_start: m.start() as u32,
-                            match_end: m.end() as u32,
+                            match_start: start,
+                            match_end: end,
                         });
                         file_match_count += 1;
                         if matches.len() >= SEARCH_TOTAL_MATCH_CAP
@@ -540,6 +554,27 @@ mod tests {
         assert_eq!(results.matches[0].match_start, 0);
         assert_eq!(results.matches[1].match_start, 7);
         assert_eq!(results.matches[2].match_start, 14);
+    }
+
+    #[tokio::test]
+    async fn search_offsets_are_utf16_code_units_not_utf8_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("a.txt").await.unwrap();
+        // "é" is 1 UTF-16 code unit but 2 UTF-8 bytes, so a byte offset and
+        // a UTF-16 offset diverge for anything after it on the line. The
+        // frontend (SearchOverlay.svelte's highlight slice, EditorPane's
+        // jump-to-selection) indexes by UTF-16 code unit, matching
+        // CodeMirror and JS string semantics, so that's what these fields
+        // need to report.
+        ws.write_file("a.txt", "héllo world").await.unwrap();
+
+        let results = ws.search("world", options(false, false)).await.unwrap();
+
+        assert_eq!(results.matches.len(), 1);
+        assert_eq!(results.matches[0].match_start, 6);
+        assert_eq!(results.matches[0].match_end, 11);
+        assert_eq!(results.matches[0].column, 7);
     }
 
     #[tokio::test]

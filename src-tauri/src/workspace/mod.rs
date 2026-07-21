@@ -44,13 +44,17 @@ pub struct SearchMatch {
     pub path: String,
     /// 1-indexed, matches `PendingSelection.line` in `tabs.ts`.
     pub line: u32,
-    /// 1-indexed, matches `PendingSelection.col` in `tabs.ts`.
+    /// 1-indexed UTF-16 code-unit offset, matches `PendingSelection.col` in
+    /// `tabs.ts` (and thus how CodeMirror positions its cursor).
     pub column: u32,
     /// The full line, trailing newline stripped, for rendering.
     pub line_text: String,
-    /// Byte offset into `line_text` where the match starts, for highlighting.
+    /// UTF-16 code-unit offset into `line_text` where the match starts, for
+    /// highlighting — matches how `lineText.slice()` (JS strings) and
+    /// CodeMirror both index text, not `line_text`'s UTF-8 byte layout.
     pub match_start: u32,
-    /// Byte offset into `line_text` where the match ends, for highlighting.
+    /// UTF-16 code-unit offset into `line_text` where the match ends, for
+    /// highlighting — see `match_start`.
     pub match_end: u32,
 }
 
