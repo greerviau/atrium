@@ -8,14 +8,35 @@
   import { registerLinkProviders } from "./linkProviders";
   import { theme as themeStore } from "../stores/theme";
   import { buildXtermTheme } from "../theme/xtermTheme";
+  import { computeTabTitle, parseOsc7Cwd, reduceTitleState, type TitleState } from "./tabTitle";
 
-  let { cwd, workspaceId, onExit }: { cwd: string; workspaceId: string; onExit?: () => void } = $props();
+  let {
+    cwd,
+    workspaceId,
+    onExit,
+    onTitleChange,
+  }: { cwd: string; workspaceId: string; onExit?: () => void; onTitleChange?: (title: string) => void } = $props();
 
   let container: HTMLDivElement;
   let terminal: Terminal;
   let fitAddon: FitAddon;
   let terminalId: string | undefined;
   let resizeObserver: ResizeObserver;
+  let osc7Disposable: { dispose(): void };
+  let osc133Disposable: { dispose(): void };
+  let titleChangeDisposable: { dispose(): void };
+
+  let titleState: TitleState;
+  let lastEmittedTitle: string | undefined;
+
+  function dispatch(event: Parameters<typeof reduceTitleState>[1]): void {
+    titleState = reduceTitleState(titleState, event);
+    const title = computeTabTitle(titleState);
+    if (title !== lastEmittedTitle) {
+      lastEmittedTitle = title;
+      onTitleChange?.(title);
+    }
+  }
 
   function base64ToBytes(base64: string): Uint8Array {
     const binary = atob(base64);
@@ -27,6 +48,9 @@
   }
 
   onMount(() => {
+    titleState = { cwd, commandRunning: false, processTitle: null };
+    lastEmittedTitle = computeTabTitle(titleState);
+
     terminal = new Terminal({
       cursorBlink: true,
       fontFamily: "Menlo, Monaco, monospace",
@@ -40,6 +64,27 @@
     fitAddon.fit();
 
     registerLinkProviders(terminal, workspaceId, cwd);
+
+    osc7Disposable = terminal.parser.registerOscHandler(7, (data) => {
+      const parsedCwd = parseOsc7Cwd(data);
+      if (parsedCwd) {
+        dispatch({ type: "cwd", cwd: parsedCwd });
+      }
+      return true;
+    });
+
+    osc133Disposable = terminal.parser.registerOscHandler(133, (data) => {
+      if (data.startsWith("C")) {
+        dispatch({ type: "commandStart" });
+      } else if (data.startsWith("D")) {
+        dispatch({ type: "commandFinish" });
+      }
+      return true;
+    });
+
+    titleChangeDisposable = terminal.onTitleChange((title) => {
+      dispatch({ type: "title", title });
+    });
 
     terminal.onData((data) => {
       if (terminalId) {
@@ -71,6 +116,9 @@
 
   onDestroy(() => {
     resizeObserver?.disconnect();
+    osc7Disposable?.dispose();
+    osc133Disposable?.dispose();
+    titleChangeDisposable?.dispose();
     if (terminalId) {
       void ptyKill(terminalId);
     }

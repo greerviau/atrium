@@ -24,6 +24,7 @@
     clampWidth,
     type TerminalPosition,
   } from "./lib/stores/layout";
+  import { folderName } from "./lib/terminal/tabTitle";
 
   const initialLayout = loadTerminalLayout();
 
@@ -35,6 +36,7 @@
   interface TerminalSession {
     id: string;
     cwd: string;
+    title: string;
   }
   let terminalSessions = $state<TerminalSession[]>([]);
   let activeTerminalId = $state<string | null>(null);
@@ -43,7 +45,7 @@
     const root = $workspace.root;
     if (!root) return;
     const id = `term-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    terminalSessions = [...terminalSessions, { id, cwd: root }];
+    terminalSessions = [...terminalSessions, { id, cwd: root, title: folderName(root) }];
     activeTerminalId = id;
   }
 
@@ -52,6 +54,10 @@
     if (activeTerminalId === id) {
       activeTerminalId = terminalSessions[terminalSessions.length - 1]?.id ?? null;
     }
+  }
+
+  function setTerminalTitle(id: string, title: string): void {
+    terminalSessions = terminalSessions.map((t) => (t.id === id ? { ...t, title } : t));
   }
 
   function startDragExplorer(event: PointerEvent): void {
@@ -222,7 +228,7 @@
                 tabindex="0"
                 aria-selected={session.id === activeTerminalId}
               >
-                <span class="tab-name">Terminal</span>
+                <span class="tab-name" title={session.title}>{session.title}</span>
                 <button
                   class="tab-close"
                   onclick={(e) => {
@@ -272,7 +278,12 @@
           <div class="terminal-panes">
             {#each terminalSessions as session (session.id)}
               <div class="terminal-pane-slot" class:hidden={session.id !== activeTerminalId}>
-                <TerminalPane cwd={session.cwd} workspaceId={$workspace.id} onExit={() => closeTerminalTab(session.id)} />
+                <TerminalPane
+                  cwd={session.cwd}
+                  workspaceId={$workspace.id}
+                  onExit={() => closeTerminalTab(session.id)}
+                  onTitleChange={(title) => setTerminalTitle(session.id, title)}
+                />
               </div>
             {/each}
           </div>
@@ -343,6 +354,12 @@
   }
   .tab.active {
     background: var(--atrium-bg-active);
+  }
+  .tab-name {
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .tab-view-mode,
   .tab-close {
