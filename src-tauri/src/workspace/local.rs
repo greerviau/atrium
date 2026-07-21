@@ -1,4 +1,7 @@
-use super::{DirEntry, FsChangeEvent, SearchMatch, SearchOptions, SearchResults, Workspace};
+use super::{
+    is_default_ignored, DirEntry, FsChangeEvent, SearchMatch, SearchOptions, SearchResults,
+    Workspace,
+};
 use crate::error::AppError;
 use crate::fs_watch;
 use async_trait::async_trait;
@@ -301,10 +304,14 @@ impl Workspace for LocalWorkspace {
         let mut entries = Vec::new();
         let mut read_dir = tokio::fs::read_dir(&dir).await?;
         while let Some(entry) = read_dir.next_entry().await? {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if is_default_ignored(&name) {
+                continue;
+            }
             let metadata = entry.metadata().await?;
             let file_type = entry.file_type().await?;
             entries.push(DirEntry {
-                name: entry.file_name().to_string_lossy().to_string(),
+                name,
                 path: entry.path().to_string_lossy().to_string(),
                 is_dir: metadata.is_dir(),
                 is_symlink: file_type.is_symlink(),
@@ -461,6 +468,33 @@ mod tests {
         let entries = ws.list_dir(".").await.unwrap();
         let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, vec!["z_dir", "a.txt", "b.txt"]);
+    }
+
+    #[tokio::test]
+    async fn list_dir_filters_out_default_ignored_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("note.md").await.unwrap();
+        ws.create_file(".DS_Store").await.unwrap();
+        ws.create_dir(".git").await.unwrap();
+        ws.create_file("Thumbs.db").await.unwrap();
+
+        let entries = ws.list_dir(".").await.unwrap();
+        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+
+        assert_eq!(names, vec!["note.md"]);
+    }
+
+    #[tokio::test]
+    async fn list_dir_does_not_filter_gitignore() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file(".gitignore").await.unwrap();
+
+        let entries = ws.list_dir(".").await.unwrap();
+        let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
+
+        assert_eq!(names, vec![".gitignore"]);
     }
 
     fn options(case_sensitive: bool, regex: bool) -> SearchOptions {
