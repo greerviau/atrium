@@ -23,6 +23,7 @@
   let errorMessage = $state<string | null>(null);
   let hasSearched = $state(false);
   let selectedIndex = $state(0);
+  let isSearching = $state(false);
 
   let inputEl: HTMLInputElement | undefined = $state();
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -38,6 +39,7 @@
     errorMessage = null;
     hasSearched = false;
     selectedIndex = 0;
+    isSearching = false;
     requestId += 1;
   }
 
@@ -84,6 +86,7 @@
       errorMessage = null;
       hasSearched = true;
       selectedIndex = 0;
+      isSearching = false;
     } catch (err) {
       if (myRequestId !== requestId) return;
       if (isAppError(err) && err.code === "INVALID_REGEX") {
@@ -95,6 +98,7 @@
       results = [];
       truncated = false;
       hasSearched = true;
+      isSearching = false;
     }
   }
 
@@ -109,12 +113,20 @@
   // (src-tauri) mirrors this with its own generation counter, so a
   // superseded search is also abandoned mid-walk on the backend instead of
   // running to completion for a result nobody will use.
+  //
+  // `isSearching` turns on right here — covering the debounce wait itself,
+  // not just the backend round trip — so the loading indicator is visible
+  // from the moment a qualifying keystroke lands, since that wait is exactly
+  // what otherwise looks like nothing is happening. It turns off in
+  // `runSearch` once the (non-superseded) result settles, or immediately
+  // here if the query no longer qualifies for a search at all.
   $effect(() => {
     void query;
     void caseSensitive;
     void regexMode;
     requestId += 1;
     const myRequestId = requestId;
+    isSearching = query.length >= MIN_QUERY_LENGTH;
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => void runSearch(myRequestId), DEBOUNCE_MS);
   });
@@ -195,6 +207,9 @@
           placeholder="Search across the project…"
           autofocus
         />
+        {#if isSearching}
+          <span class="search-spinner" aria-hidden="true"></span>
+        {/if}
         <button
           class="search-toggle"
           class:active={caseSensitive}
@@ -305,6 +320,20 @@
     color: inherit;
     border: 1px solid var(--atrium-border);
     border-radius: 6px;
+  }
+  .search-spinner {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--atrium-border);
+    border-top-color: var(--atrium-accent);
+    border-radius: 50%;
+    animation: search-spin 0.6s linear infinite;
+  }
+  @keyframes search-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   .search-toggle {
     background: none;

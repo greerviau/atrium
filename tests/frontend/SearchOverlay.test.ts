@@ -88,6 +88,45 @@ describe("SearchOverlay", () => {
     });
   });
 
+  it("shows a loading spinner from the first qualifying keystroke through the debounce wait and the response, then hides it", async () => {
+    const first = deferred<SearchResults>();
+    vi.mocked(commands.searchWorkspace).mockReturnValueOnce(first.promise);
+
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true });
+    await tick();
+
+    const input = await screen.findByPlaceholderText(PLACEHOLDER);
+    await fireEvent.input(input, { target: { value: "foo" } });
+    await tick();
+
+    // Visible immediately, before the debounce timer has even fired.
+    expect(container.querySelector(".search-spinner")).not.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(150);
+    // Still visible while the backend call is in flight.
+    expect(container.querySelector(".search-spinner")).not.toBeNull();
+
+    first.resolve(results([]));
+    await tick();
+    await tick();
+
+    expect(container.querySelector(".search-spinner")).toBeNull();
+  });
+
+  it("does not show a loading spinner for a query below the minimum length", async () => {
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true });
+    await tick();
+
+    const input = await screen.findByPlaceholderText(PLACEHOLDER);
+    await fireEvent.input(input, { target: { value: "fo" } });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(container.querySelector(".search-spinner")).toBeNull();
+  });
+
   it("does not search below the minimum query length, and shows a hint instead", async () => {
     render(SearchOverlay);
     searchOverlay.set({ open: true });
