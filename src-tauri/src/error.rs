@@ -18,6 +18,8 @@ pub enum AppError {
     Io(#[from] std::io::Error),
     #[error("unknown workspace: {0}")]
     UnknownWorkspace(String),
+    #[error("invalid regex: {0}")]
+    InvalidRegex(String),
     #[error("{0}")]
     Other(String),
 }
@@ -31,6 +33,7 @@ impl AppError {
             AppError::NotUtf8(_) => "NOT_UTF8",
             AppError::Io(_) => "IO_ERROR",
             AppError::UnknownWorkspace(_) => "UNKNOWN_WORKSPACE",
+            AppError::InvalidRegex(_) => "INVALID_REGEX",
             AppError::Other(_) => "OTHER",
         }
     }
