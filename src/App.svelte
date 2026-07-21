@@ -23,6 +23,8 @@
     clampToContainer,
     HEIGHT_MIN,
     WIDTH_MIN,
+    explorerVisible,
+    terminalVisible,
     type TerminalPosition,
   } from "./lib/stores/layout";
   import { folderName } from "./lib/terminal/tabTitle";
@@ -88,6 +90,18 @@
     terminalPosition === "left" ? ["terminal", "resizer", "editor"] : ["editor", "resizer", "terminal"],
   );
 
+  // Showing the terminal panel with no tab open auto-spawns one, matching
+  // the VS Code/JetBrains convention that toggling the terminal never
+  // reveals a blank panel.
+  let wasTerminalVisible = $terminalVisible;
+  $effect(() => {
+    const visible = $terminalVisible;
+    if (visible && !wasTerminalVisible && terminalSessions.length === 0) {
+      newTerminalTab();
+    }
+    wasTerminalVisible = visible;
+  });
+
   function setTerminalPosition(position: TerminalPosition): void {
     terminalPosition = position;
     saveTerminalLayout({ position: terminalPosition, height: terminalHeight, width: terminalWidth });
@@ -143,10 +157,12 @@
 {:else}
 <SearchOverlay />
 <main class="app">
-  <div class="explorer" style={`width: ${explorerWidth}px`}>
-    <FileTree />
-  </div>
-  <div class="resizer vertical" role="separator" aria-orientation="vertical" onpointerdown={startDragExplorer}></div>
+  {#if $explorerVisible}
+    <div class="explorer" style={`width: ${explorerWidth}px`}>
+      <FileTree />
+    </div>
+    <div class="resizer vertical" role="separator" aria-orientation="vertical" onpointerdown={startDragExplorer}></div>
+  {/if}
 
   <div class="main" class:row={terminalPosition !== "bottom"} bind:this={mainEl}>
     {#each mainSlotOrder as slot (slot)}
@@ -214,6 +230,7 @@
           class="resizer"
           class:horizontal={terminalPosition === "bottom"}
           class:vertical={terminalPosition !== "bottom"}
+          class:hidden={!$terminalVisible}
           role="separator"
           aria-orientation={terminalPosition === "bottom" ? "horizontal" : "vertical"}
           onpointerdown={startDragTerminal}
@@ -223,6 +240,7 @@
           class="terminal-area"
           class:dock-left={terminalPosition === "left"}
           class:dock-right={terminalPosition === "right"}
+          class:hidden={!$terminalVisible}
           style={terminalPosition === "bottom" ? `height: ${terminalHeight}px` : `width: ${terminalWidth}px`}
         >
           <div class="tab-strip">
@@ -325,6 +343,9 @@
   .resizer.horizontal {
     height: 4px;
     cursor: row-resize;
+  }
+  .resizer.hidden {
+    display: none;
   }
   .main {
     flex: 1;
@@ -429,6 +450,9 @@
   .terminal-area.dock-right {
     border-top: none;
     border-left: 1px solid var(--atrium-border);
+  }
+  .terminal-area.hidden {
+    display: none;
   }
   .dock-controls {
     display: flex;

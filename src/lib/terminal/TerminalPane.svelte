@@ -10,6 +10,13 @@
   import { buildXtermTheme } from "../theme/xtermTheme";
   import { computeTabTitle, parseOsc7Cwd, reduceTitleState, type TitleState } from "./tabTitle";
 
+  // Tauri's `CmdOrCtrl` accelerator resolves to Cmd-only on macOS and
+  // Ctrl-only elsewhere (never both on one platform), so the toggle-panel
+  // guard below must match whichever modifier the native menu actually
+  // bound on this platform — otherwise it would also swallow the shell's
+  // own Ctrl+B/Ctrl+R readline bindings on macOS, where those are unbound.
+  const isMacPlatform = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
+
   let {
     cwd,
     workspaceId,
@@ -62,6 +69,18 @@
     terminal.loadAddon(new SearchAddon());
     terminal.open(container);
     fitAddon.fit();
+
+    // Never forward Cmd/Ctrl+B or Cmd/Ctrl+R to the shell: xterm has no
+    // native concept of "the menu accelerator already owns this key," so
+    // without this guard a focused terminal would send Ctrl+R straight to
+    // the pty as literal input, triggering the shell's reverse-i-search
+    // instead of the panel toggle.
+    terminal.attachCustomKeyEventHandler((event) => {
+      const key = event.key.toLowerCase();
+      const hasToggleModifier = isMacPlatform ? event.metaKey : event.ctrlKey && !event.metaKey;
+      const isToggleAccelerator = hasToggleModifier && (key === "b" || key === "r");
+      return !isToggleAccelerator;
+    });
 
     registerLinkProviders(terminal, workspaceId, cwd);
 
