@@ -9,7 +9,8 @@ use grep_searcher::{BinaryDetection, SearcherBuilder, SinkError};
 use notify_debouncer_full::{Debouncer, FileIdMap};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::UnboundedSender;
 
 /// Caps on `LocalWorkspace::search`'s result set (section 4.2 of the search
@@ -46,7 +47,19 @@ fn build_matcher(query: &str, options: &SearchOptions) -> Result<RegexMatcher, A
 /// section 4.2 is hit. Runs synchronously; `LocalWorkspace::search` runs it
 /// via `spawn_blocking` since directory walking and file I/O here are
 /// blocking calls, not `tokio::fs`.
-fn search_root(root: &Path, matcher: &RegexMatcher) -> SearchResults {
+///
+/// `current_generation` is checked once per directory entry against the
+/// `generation` this call was started with: `LocalWorkspace::search` bumps
+/// `current_generation` on every new call, so as soon as a newer search
+/// supersedes this one, the walk stops immediately instead of running to
+/// completion for a result nobody will use — the cooperative-cancellation
+/// half of "a new keystroke cancels the previous in-flight search."
+fn search_root(
+    root: &Path,
+    matcher: &RegexMatcher,
+    current_generation: &AtomicU64,
+    generation: u64,
+) -> SearchResults {
     let mut searcher = SearcherBuilder::new()
         .binary_detection(BinaryDetection::quit(0))
         .line_number(true)
@@ -60,6 +73,9 @@ fn search_root(root: &Path, matcher: &RegexMatcher) -> SearchResults {
     // "whatever folder the user opened," git repo or not — gitignore-aware
     // filtering (section 4.2) needs to work either way.
     for entry in ignore::WalkBuilder::new(root).require_git(false).build() {
+        if current_generation.load(Ordering::SeqCst) != generation {
+            break;
+        }
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
@@ -129,6 +145,11 @@ pub struct LocalWorkspace {
     root: PathBuf,
     workspace_id: String,
     watcher: Mutex<Option<Debouncer<notify::RecommendedWatcher, FileIdMap>>>,
+    /// Bumped on every `search()` call; lets `search_root` notice mid-walk
+    /// that a newer search has superseded it (see `search_root`'s doc
+    /// comment) and stop early instead of finishing a search whose result
+    /// will only be thrown away.
+    search_generation: Arc<AtomicU64>,
 }
 
 impl LocalWorkspace {
@@ -137,6 +158,7 @@ impl LocalWorkspace {
             root,
             workspace_id,
             watcher: Mutex::new(None),
+            search_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -258,9 +280,13 @@ impl Workspace for LocalWorkspace {
     async fn search(&self, query: &str, options: SearchOptions) -> Result<SearchResults, AppError> {
         let matcher = build_matcher(query, &options)?;
         let root = self.root.clone();
-        tokio::task::spawn_blocking(move || search_root(&root, &matcher))
-            .await
-            .map_err(|err| AppError::Other(format!("search task panicked: {err}")))
+        let generation = self.search_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let current_generation = self.search_generation.clone();
+        tokio::task::spawn_blocking(move || {
+            search_root(&root, &matcher, &current_generation, generation)
+        })
+        .await
+        .map_err(|err| AppError::Other(format!("search task panicked: {err}")))
     }
 
     fn root(&self) -> &str {
@@ -514,5 +540,40 @@ mod tests {
         assert_eq!(results.matches[0].match_start, 0);
         assert_eq!(results.matches[1].match_start, 7);
         assert_eq!(results.matches[2].match_start, 14);
+    }
+
+    #[tokio::test]
+    async fn search_root_stops_early_once_superseded() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("a.txt").await.unwrap();
+        ws.write_file("a.txt", "needle").await.unwrap();
+        let matcher = build_matcher("needle", &options(false, false)).unwrap();
+
+        // Simulate a newer search having already started by the time this
+        // (stale) generation gets to check: `current_generation` no longer
+        // reads back the `generation` this call was given, so it should
+        // bail out before matching anything in `a.txt`, the same way a
+        // superseded `LocalWorkspace::search` call does mid-walk.
+        let current_generation = AtomicU64::new(2);
+        let results = search_root(dir.path(), &matcher, &current_generation, 1);
+
+        assert!(results.matches.is_empty());
+        assert!(!results.truncated);
+    }
+
+    #[tokio::test]
+    async fn search_bumps_the_generation_on_every_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("a.txt").await.unwrap();
+        ws.write_file("a.txt", "needle").await.unwrap();
+
+        ws.search("needle", options(false, false)).await.unwrap();
+        let first = ws.search_generation.load(Ordering::SeqCst);
+        ws.search("needle", options(false, false)).await.unwrap();
+        let second = ws.search_generation.load(Ordering::SeqCst);
+
+        assert!(second > first);
     }
 }
