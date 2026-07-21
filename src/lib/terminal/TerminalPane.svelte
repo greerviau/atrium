@@ -181,4 +181,24 @@
     padding: 4px;
     box-sizing: border-box;
   }
+
+  .terminal-pane :global(.xterm-viewport) {
+    scrollbar-width: thin;
+    scrollbar-color: var(--atrium-border) transparent;
+  }
+  .terminal-pane :global(.xterm-viewport::-webkit-scrollbar) {
+    width: 10px;
+  }
+  .terminal-pane :global(.xterm-viewport::-webkit-scrollbar-track) {
+    background: transparent;
+  }
+  .terminal-pane :global(.xterm-viewport::-webkit-scrollbar-thumb) {
+    background-color: var(--atrium-border);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  .terminal-pane :global(.xterm-viewport::-webkit-scrollbar-thumb:hover) {
+    background-color: var(--atrium-text-muted);
+  }
 </style>
