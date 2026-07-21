@@ -124,6 +124,7 @@ export class MermaidWidget extends WidgetType {
   }
 
   toDOM(view: EditorView): HTMLElement {
+    this.destroyed = false;
     const container = document.createElement("div");
     container.className = CLASS.mermaidDiagram;
     container.addEventListener("mousedown", (event) => {

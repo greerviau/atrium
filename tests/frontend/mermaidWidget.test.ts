@@ -87,4 +87,44 @@ describe("MermaidWidget", () => {
     expect(dom.innerHTML).toBe("");
     view.destroy();
   });
+
+  it("renders normally on a toDOM() call that follows a destroy() on the same instance (scroll away then back)", async () => {
+    mockMermaidModule(() => Promise.resolve({ svg: "<svg>diagram</svg>" }));
+
+    const widget = new MermaidWidget("graph TD;\nA-->B;", 0);
+    const view = makeView();
+
+    const firstDom = widget.toDOM(view);
+    await vi.waitFor(() => expect(firstDom.innerHTML).toContain("<svg>diagram</svg>"));
+
+    // Block scrolls fully out of the drawn viewport; CodeMirror tears down
+    // the tile.
+    widget.destroy();
+
+    // Block scrolls back into view; CodeMirror reuses the same widget
+    // instance and calls toDOM() again.
+    const secondDom = widget.toDOM(view);
+    await vi.waitFor(() => expect(secondDom.innerHTML).toContain("<svg>diagram</svg>"));
+
+    view.destroy();
+  });
+
+  it("shows the error panel on a toDOM() call that follows a destroy() on the same instance, for invalid syntax", async () => {
+    mockMermaidModule(() => Promise.reject(new Error("Parse error on line 2")));
+
+    const widget = new MermaidWidget("bad syntax here", 5);
+    const view = makeView();
+
+    const firstDom = widget.toDOM(view);
+    await vi.waitFor(() => expect(firstDom.classList.contains("cm-mermaid-error")).toBe(true));
+
+    widget.destroy();
+
+    const secondDom = widget.toDOM(view);
+    await vi.waitFor(() => expect(secondDom.classList.contains("cm-mermaid-error")).toBe(true));
+    expect(secondDom.textContent).toContain("Invalid Mermaid diagram");
+    expect(secondDom.textContent).toContain("Parse error on line 2");
+
+    view.destroy();
+  });
 });
