@@ -65,9 +65,9 @@ pub async fn workspace_set_root(
     #[cfg(target_os = "macos")]
     {
         let path_for_main_thread = path.clone();
-        let _ = state
-            .app_handle
-            .run_on_main_thread(move || crate::macos_dock::note_recent_document(&path_for_main_thread));
+        let _ = state.app_handle.run_on_main_thread(move || {
+            crate::macos_dock::note_recent_document(&path_for_main_thread)
+        });
     }
 
     Ok(())
