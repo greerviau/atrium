@@ -66,6 +66,29 @@ pub struct SearchResults {
     pub truncated: bool,
 }
 
+/// OS/VCS bookkeeping entries hidden from every `Workspace::list_dir`
+/// listing by default, matching VS Code's own default `files.exclude`.
+/// Deliberately narrow: build-artifact directories like `node_modules` or
+/// `target` are left out, since hiding those needs a configurable exclude
+/// setting or `.gitignore` parsing, not a fixed list.
+const DEFAULT_IGNORED_NAMES: &[&str] = &[
+    ".DS_Store",
+    ".git",
+    ".svn",
+    ".hg",
+    "CVS",
+    "Thumbs.db",
+    ".Spotlight-V100",
+    ".Trashes",
+];
+
+/// Whether a directory entry's bare name should be hidden from every
+/// `Workspace::list_dir` listing by default. Exact-name match only, so a
+/// real file like `.gitignore` or `.env` is never caught by this.
+pub fn is_default_ignored(name: &str) -> bool {
+    DEFAULT_IGNORED_NAMES.contains(&name)
+}
+
 /// Everything a pane needs from "a place files live," independent of whether
 /// that place is `LocalWorkspace` (the only implementation in the MVP) or a
 /// future `RemoteWorkspace` (phase 3). Every `fs_*` command in `commands/fs.rs`
