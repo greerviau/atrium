@@ -209,13 +209,18 @@ fn main() {
                 let _ = menu_handle.emit(event.id().as_ref(), ());
             });
 
+            // Rust has no visibility into which tabs are dirty (that state
+            // lives only in the frontend's Svelte store), so a close
+            // request is always intercepted here and handed to the
+            // frontend to decide; `app_confirm_close` (called once the
+            // frontend has resolved any unsaved-changes prompt) is what
+            // actually kills PTYs and exits.
             let close_handle = handle.clone();
             if let Some(window) = app.get_webview_window("main") {
                 window.on_window_event(move |event| {
-                    if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
-                        if let Some(state) = close_handle.try_state::<AppState>() {
-                            state.pty.kill_all();
-                        }
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = close_handle.emit("app:close-requested", ());
                     }
                 });
             }
@@ -226,6 +231,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::app::app_confirm_close,
             commands::workspace::workspace_open_folder_dialog,
             commands::workspace::workspace_set_root,
             commands::workspace::workspace_get_recents,
@@ -250,18 +256,32 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|_app_handle, _event| {
+    app.run(|app_handle, event| {
         // `RunEvent::Opened` fires both when a Dock-menu pick reaches an
         // already-running app and (per plan section 4.3) during a cold
         // launch, before the frontend's event listeners exist yet;
         // `macos_dock::open_path` handles both by stashing the path for
         // `workspace_take_pending_open` and emitting it live.
         #[cfg(target_os = "macos")]
-        if let tauri::RunEvent::Opened { urls } = _event {
+        if let tauri::RunEvent::Opened { ref urls } = event {
             for url in urls {
                 if let Ok(path) = url.to_file_path() {
                     macos_dock::open_path(path.to_string_lossy().into_owned());
                 }
+            }
+        }
+
+        // Mirrors the window-event handler above for the Quit-menu/Cmd+Q
+        // path, which bypasses `WindowEvent::CloseRequested` entirely. Only
+        // a `None` code (a user/OS-initiated exit request) is intercepted;
+        // `code` is `Some(_)` when `app_confirm_close`'s own `app.exit(0)`
+        // triggers this same event after the frontend has already resolved
+        // the unsaved-changes prompt, and that exit must be allowed through
+        // rather than looped back into another confirmation.
+        if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+            if code.is_none() {
+                api.prevent_exit();
+                let _ = app_handle.emit("app:close-requested", ());
             }
         }
     });
