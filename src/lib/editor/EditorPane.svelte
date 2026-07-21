@@ -16,6 +16,7 @@
   import { baseExtensions } from "./baseExtensions";
   import { markdownExtensions, markdownSourceExtensions } from "./markdown/livePreviewPlugin";
   import { codeExtensions } from "./codeExtensions";
+  import { setCursorPosition, clearCursorPosition, type CursorPosition } from "../stores/editorStatus";
 
   let { filePath }: { filePath: string } = $props();
 
@@ -41,6 +42,21 @@
 
   function currentDoc(): string {
     return view.state.doc.toString();
+  }
+
+  function computeCursorPosition(state: EditorState): CursorPosition {
+    const { main } = state.selection;
+    const headLine = state.doc.lineAt(main.head);
+    return {
+      line: headLine.number,
+      col: main.head - headLine.from + 1,
+      selection: main.empty
+        ? null
+        : {
+            chars: main.to - main.from,
+            lines: state.doc.lineAt(main.to).number - state.doc.lineAt(main.from).number + 1,
+          },
+    };
   }
 
   async function save(): Promise<void> {
@@ -82,6 +98,9 @@
         if (update.docChanged) {
           markDirty(filePath);
         }
+        if ((update.docChanged || update.selectionSet) && $tabsState.activeTabPath === filePath) {
+          setCursorPosition(computeCursorPosition(update.state));
+        }
       }),
     ];
 
@@ -92,10 +111,17 @@
       }),
       parent: container,
     });
+
+    if (lastAppliedActive) {
+      setCursorPosition(computeCursorPosition(view.state));
+    }
   });
 
   onDestroy(() => {
     view?.destroy();
+    if ($tabsState.activeTabPath === null) {
+      clearCursorPosition();
+    }
   });
 
   // Reconfigures the theme compartment in place on a theme change, instead
@@ -130,15 +156,19 @@
     });
   });
 
-  // Forces a fresh CodeMirror measurement when this tab's pane actually
-  // becomes visible. Every open tab's `EditorPane` is mounted immediately
+  // Forces a fresh CodeMirror measurement and pushes this pane's cursor
+  // position into `editorStatus.ts` when this tab's pane actually becomes
+  // visible. Every open tab's `EditorPane` is mounted immediately
   // (`App.svelte` keeps inactive tabs' panes in the DOM, hidden via
   // `display: none`), so a background tab's `EditorView` can take its first
   // layout measurement against a zero-size container and lock in a wrong
   // content width that CodeMirror won't shrink back down on its own — only a
   // later, differently-sized measurement (reliably, the first scroll) forces
-  // the correction. Guarded like the view-mode effect above so it only fires
-  // on an actual activation, not on every unrelated tab-store update.
+  // the correction. The cursor-position push here covers switching tabs
+  // without touching the keyboard, which the `updateListener` set up in
+  // `onMount` never fires for on its own. Guarded like the view-mode effect
+  // above so it only fires on an actual activation, not on every unrelated
+  // tab-store update.
   $effect(() => {
     const isActive = $tabsState.activeTabPath === filePath;
     if (!view || isActive === lastAppliedActive) {
@@ -147,6 +177,7 @@
     lastAppliedActive = isActive;
     if (isActive) {
       view.requestMeasure();
+      setCursorPosition(computeCursorPosition(view.state));
     }
   });
 

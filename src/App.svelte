@@ -5,6 +5,7 @@
   import TerminalPane from "./lib/terminal/TerminalPane.svelte";
   import WelcomeScreen from "./lib/welcome/WelcomeScreen.svelte";
   import SearchOverlay from "./lib/search/SearchOverlay.svelte";
+  import StatusBar from "./lib/shell/StatusBar.svelte";
   import { workspace, openWorkspacePath } from "./lib/stores/workspace";
   import {
     tabsState,
@@ -157,6 +158,7 @@
   <WelcomeScreen />
 {:else}
 <SearchOverlay />
+<div class="app-shell">
 <main class="app">
   {#if $explorerVisible}
     <div class="explorer" style={`width: ${explorerWidth}px`}>
@@ -319,13 +321,22 @@
     {/each}
   </div>
 </main>
+<StatusBar />
+</div>
 {/if}
 
 <style>
-  .app {
+  .app-shell {
     display: flex;
+    flex-direction: column;
     height: 100vh;
     width: 100vw;
+    overflow: hidden;
+  }
+  .app {
+    display: flex;
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
   }
   .explorer {

@@ -106,3 +106,60 @@ describe("project-wide search", () => {
     );
   });
 });
+
+describe("status bar", () => {
+  it("shows the active file's path and cursor position, and updates as the caret moves", async () => {
+    const statusBar = await $(".status-bar");
+    await statusBar.waitForExist({ timeout: 5000 });
+
+    const pathIndicator = await $(".status-bar .path");
+    await expect(pathIndicator).toHaveText("note.md");
+
+    const cursorIndicator = await $(".status-bar .status-item.mono:not(.path)");
+    const before = await cursorIndicator.getText();
+
+    const editor = await $(".cm-content");
+    await editor.click();
+    await browser.keys(["End"]);
+
+    await browser.waitUntil(async () => (await cursorIndicator.getText()) !== before, {
+      timeout: 5000,
+      timeoutMsg: "expected the cursor-position indicator to update after moving the caret",
+    });
+  });
+
+  it("clicking the status-bar search button opens the search overlay", async () => {
+    const searchButton = await $('.status-bar button[aria-label="Search (Cmd/Ctrl+Shift+F)"]');
+    await searchButton.click();
+
+    const panel = await $(".search-panel");
+    await panel.waitForExist({ timeout: 5000 });
+
+    await browser.keys(["Escape"]);
+    await panel.waitForExist({ timeout: 5000, reverse: true });
+  });
+
+  it("clicking the explorer toggle button hides and reshows the file explorer", async () => {
+    const toggleButton = await $('.status-bar button[aria-label="Toggle Explorer (Cmd/Ctrl+B)"]');
+    const explorer = await $(".explorer");
+    await explorer.waitForExist({ timeout: 5000 });
+
+    await toggleButton.click();
+    await explorer.waitForExist({ timeout: 5000, reverse: true });
+
+    await toggleButton.click();
+    await explorer.waitForExist({ timeout: 5000 });
+  });
+
+  it("clicking the terminal toggle button hides and reshows the terminal panel", async () => {
+    const toggleButton = await $('.status-bar button[aria-label="Toggle Terminal (Cmd/Ctrl+R)"]');
+    const terminalArea = await $(".terminal-area");
+    await terminalArea.waitForDisplayed({ timeout: 5000 });
+
+    await toggleButton.click();
+    await terminalArea.waitForDisplayed({ timeout: 5000, reverse: true });
+
+    await toggleButton.click();
+    await terminalArea.waitForDisplayed({ timeout: 5000 });
+  });
+});
