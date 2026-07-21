@@ -88,6 +88,54 @@ describe("SearchOverlay", () => {
     });
   });
 
+  it("does not search below the minimum query length, and shows a hint instead", async () => {
+    render(SearchOverlay);
+    searchOverlay.set({ open: true });
+    await tick();
+
+    const input = await screen.findByPlaceholderText(PLACEHOLDER);
+    await fireEvent.input(input, { target: { value: "fo" } });
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(commands.searchWorkspace).not.toHaveBeenCalled();
+    expect(await screen.findByText("Type at least 3 characters to search")).toBeTruthy();
+
+    await fireEvent.input(input, { target: { value: "foo" } });
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(commands.searchWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  it("discards a search response that resolves after the query was cleared or shortened below the minimum", async () => {
+    const first = deferred<SearchResults>();
+    vi.mocked(commands.searchWorkspace).mockReturnValueOnce(first.promise);
+
+    render(SearchOverlay);
+    searchOverlay.set({ open: true });
+    await tick();
+
+    const input = await screen.findByPlaceholderText(PLACEHOLDER);
+    await fireEvent.input(input, { target: { value: "foo" } });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(commands.searchWorkspace).toHaveBeenCalledTimes(1);
+
+    // The user clears the query before the in-flight "foo" search resolves.
+    await fireEvent.input(input, { target: { value: "" } });
+    await vi.advanceTimersByTimeAsync(150);
+
+    first.resolve(
+      results([
+        { path: "/proj/a.txt", line: 1, column: 1, lineText: "foo", matchStart: 0, matchEnd: 3 },
+      ]),
+    );
+    await tick();
+
+    // The stale "foo" response must not repopulate results now that the
+    // query is empty again.
+    expect(screen.queryByText("a.txt")).toBeNull();
+    expect(screen.queryByText(/result/)).toBeNull();
+  });
+
   it("re-fires a query with updated options when a toggle changes", async () => {
     vi.mocked(commands.searchWorkspace).mockResolvedValue(results([]));
     render(SearchOverlay);

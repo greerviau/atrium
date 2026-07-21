@@ -10,6 +10,10 @@
   import { workspace } from "../stores/workspace";
 
   const DEBOUNCE_MS = 150;
+  // Below this, a query is too low-selectivity to be worth a workspace-wide
+  // search (a 1-2 character query matches almost everything in most
+  // projects) and firing one just produces slow, throwaway results.
+  const MIN_QUERY_LENGTH = 3;
 
   let query = $state("");
   let caseSensitive = $state(false);
@@ -59,9 +63,9 @@
     wasOpen = isOpen;
   });
 
-  async function runSearch(): Promise<void> {
+  async function runSearch(myRequestId: number): Promise<void> {
     const q = query;
-    if (q === "") {
+    if (q === "" || q.length < MIN_QUERY_LENGTH) {
       results = [];
       truncated = false;
       errorMessage = null;
@@ -69,7 +73,6 @@
       selectedIndex = 0;
       return;
     }
-    const myRequestId = ++requestId;
     try {
       const response = await searchWorkspace(localWorkspaceId(), q, {
         caseSensitive,
@@ -95,15 +98,28 @@
     }
   }
 
-  // Debounce on the frontend and discard-stale-by-request-id on the
-  // response (section 4.3) — no query cancellation on the backend.
+  // Every keystroke (or toggle change) bumps `requestId` immediately, not
+  // just when a new backend call actually fires. That's what makes a
+  // still-running search's response get ignored the instant it's
+  // superseded — including when the query is cleared or shortened below
+  // `MIN_QUERY_LENGTH` before that response ever arrives, which previously
+  // let a stale response repopulate the results list after the user had
+  // already moved on. The backend call itself stays debounced by
+  // `DEBOUNCE_MS`; only the invalidation is immediate. `LocalWorkspace::search`
+  // (src-tauri) mirrors this with its own generation counter, so a
+  // superseded search is also abandoned mid-walk on the backend instead of
+  // running to completion for a result nobody will use.
   $effect(() => {
     void query;
     void caseSensitive;
     void regexMode;
+    requestId += 1;
+    const myRequestId = requestId;
     if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => void runSearch(), DEBOUNCE_MS);
+    debounceTimer = setTimeout(() => void runSearch(myRequestId), DEBOUNCE_MS);
   });
+
+  let belowMinLength = $derived(query.length > 0 && query.length < MIN_QUERY_LENGTH);
 
   interface ResultGroup {
     path: string;
@@ -203,6 +219,8 @@
 
       {#if errorMessage}
         <div class="search-error">{errorMessage}</div>
+      {:else if belowMinLength}
+        <div class="search-empty">Type at least {MIN_QUERY_LENGTH} characters to search</div>
       {:else if hasSearched}
         {#if results.length === 0}
           <div class="search-empty">No results</div>
