@@ -374,11 +374,14 @@ export function buildDecorations(
         if (name === "Table") {
           // Handled as one unit (see decorateTable) so alignment is parsed
           // once and each row's container stays visible regardless of
-          // where the cursor is elsewhere in the same table; returning
-          // `false` skips the default descent into its already-handled
-          // TableHeader/TableRow/TableCell/TableDelimiter children.
+          // where the cursor is elsewhere in the same table. Descent
+          // continues (bare `return`, not `false`) so inline content nested
+          // inside a TableCell — Emphasis, StrongEmphasis, Link, etc. — still
+          // reaches the switch below and gets decorated the same way it
+          // would inside a paragraph; TableHeader/TableRow/TableCell/
+          // TableDelimiter have no case there, so revisiting them is a no-op.
           decorateTable(state, ref.node, decorations);
-          return false;
+          return;
         }
 
         if (name in HEADING_LEVELS) {
