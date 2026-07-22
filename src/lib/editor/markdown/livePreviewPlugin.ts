@@ -1,5 +1,5 @@
 import type { Extension, Transaction } from "@codemirror/state";
-import { StateField } from "@codemirror/state";
+import { StateEffect, StateField } from "@codemirror/state";
 import { EditorView, ViewPlugin, ViewUpdate, lineNumbers, type DecorationSet } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -8,11 +8,48 @@ import { buildDecorations, buildMermaidWidgetDecorations } from "./decorations";
 import { handleLinkClick } from "./widgets";
 
 /**
+ * Tracks whether the editor's `contentDOM` currently has DOM focus, driven
+ * by real `focus`/`blur` events rather than anything derivable from
+ * `EditorState.selection` — the selection is always present and doesn't
+ * change when focus moves elsewhere, so "under cursor" decorations need
+ * this as an independent signal to know when to stop revealing raw markup.
+ * Defaults to `false`: `EditorPane.svelte` never calls `view.focus()` on
+ * mount, so this starts in the state the DOM genuinely starts in.
+ */
+const setEditorFocus = StateEffect.define<boolean>();
+
+const editorFocusField = StateField.define<boolean>({
+  create: () => false,
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(setEditorFocus)) value = effect.value;
+    }
+    return value;
+  },
+});
+
+/**
+ * `focus`/`blur` are non-bubbling DOM events, but `domEventHandlers`
+ * attaches directly to `contentDOM` — the exact element that gains/loses
+ * focus — so no capture-phase workaround is needed.
+ */
+const focusTrackingHandlers = EditorView.domEventHandlers({
+  focus(_event, view) {
+    view.dispatch({ effects: setEditorFocus.of(true) });
+  },
+  blur(_event, view) {
+    view.dispatch({ effects: setEditorFocus.of(false) });
+  },
+});
+
+/**
  * Recomputes decorations on doc changes, selection changes (cursor-reveal),
- * viewport changes (scrolling reveals previously-unvisited nodes), and
- * syntax-tree-identity changes (the background parser finishing a chunk
- * outside the initial synchronous parse window) — never on anything else,
- * since walking the syntax tree is the main perf risk for large files.
+ * viewport changes (scrolling reveals previously-unvisited nodes), focus
+ * changes (an unfocused editor never reveals raw markup, regardless of
+ * where the selection sits), and syntax-tree-identity changes (the
+ * background parser finishing a chunk outside the initial synchronous parse
+ * window) — never on anything else, since walking the syntax tree is the
+ * main perf risk for large files.
  */
 function livePreviewPlugin(documentPath: string) {
   return ViewPlugin.fromClass(
@@ -20,17 +57,24 @@ function livePreviewPlugin(documentPath: string) {
       decorations: DecorationSet;
 
       constructor(view: EditorView) {
-        this.decorations = buildDecorations(view.state, view.visibleRanges, documentPath);
+        this.decorations = buildDecorations(view.state, view.visibleRanges, documentPath, view.state.field(editorFocusField));
       }
 
       update(update: ViewUpdate) {
+        const focusChanged = update.startState.field(editorFocusField) !== update.state.field(editorFocusField);
         if (
           update.docChanged ||
           update.selectionSet ||
           update.viewportChanged ||
+          focusChanged ||
           syntaxTree(update.startState) !== syntaxTree(update.state)
         ) {
-          this.decorations = buildDecorations(update.state, update.view.visibleRanges, documentPath);
+          this.decorations = buildDecorations(
+            update.state,
+            update.view.visibleRanges,
+            documentPath,
+            update.state.field(editorFocusField),
+          );
         }
       }
     },
@@ -47,15 +91,24 @@ function livePreviewPlugin(documentPath: string) {
  * `RangeError: Block decorations may not be specified via plugins` at
  * runtime otherwise), so this is a separate extension from
  * `livePreviewPlugin` above, recomputed on the same doc-change/
- * selection-change/tree-identity triggers.
+ * selection-change/focus-change/tree-identity triggers.
  */
 const mermaidWidgetField = StateField.define<DecorationSet>({
   create(state) {
-    return buildMermaidWidgetDecorations(state);
+    return buildMermaidWidgetDecorations(state, state.field(editorFocusField));
   },
   update(decorations, tr: Transaction) {
-    if (tr.docChanged || tr.selection || syntaxTree(tr.startState) !== syntaxTree(tr.state)) {
-      return buildMermaidWidgetDecorations(tr.state);
+    // `tr.startState.field(editorFocusField, false)` (not the throwing
+    // 2-arg-omitted form): when the view-mode compartment reconfigures
+    // `editorFocusField` back into the config (source → rendered), this
+    // `update` still runs against the pre-reconfigure `tr.startState`,
+    // which genuinely doesn't have the field yet — CodeMirror always
+    // derives a reconfigured state's final values via each field's
+    // `update`, even for a field that was just freshly created moments
+    // earlier in the same transaction's intermediate reconfigure step.
+    const focusChanged = tr.startState.field(editorFocusField, false) !== tr.state.field(editorFocusField);
+    if (tr.docChanged || tr.selection || focusChanged || syntaxTree(tr.startState) !== syntaxTree(tr.state)) {
+      return buildMermaidWidgetDecorations(tr.state, tr.state.field(editorFocusField));
     }
     return decorations.map(tr.changes);
   },
@@ -102,11 +155,23 @@ const linkClickHandler = EditorView.domEventHandlers({
  * lists, strikethrough, autolinks are all part of `markdownLanguage`),
  * fenced-code nested highlighting via `@codemirror/language-data` (colored
  * by the syntax highlight style shared through `EditorPane.svelte`'s theme
- * `Compartment`), and the live-preview decoration plugin.
+ * `Compartment`), focus tracking, and the live-preview decoration plugin.
+ *
+ * `editorFocusField` must come before `mermaidWidgetField`: CodeMirror
+ * computes `StateField`s in declaration order within a transaction, and
+ * `mermaidWidgetField.update` reads `editorFocusField`'s value via
+ * `tr.state.field(...)`, which only sees the current transaction's
+ * already-updated value if `editorFocusField` was declared earlier.
+ * `livePreviewPlugin`'s `ViewPlugin` has no such ordering hazard (it reads
+ * a fully-resolved `EditorState`, not a `StateField` computing its own
+ * value), but keeping `editorFocusField` first for both is simplest to
+ * reason about.
  */
 export function markdownExtensions(documentPath: string): Extension[] {
   return [
     markdown({ base: markdownLanguage, codeLanguages: languages }),
+    editorFocusField,
+    focusTrackingHandlers,
     livePreviewPlugin(documentPath),
     mermaidWidgetField,
     linkClickHandler,

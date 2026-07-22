@@ -33,8 +33,8 @@ interface CollectedDecoration {
   widget?: unknown;
 }
 
-function collect(state: EditorState, documentPath = "test.md"): CollectedDecoration[] {
-  const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], documentPath);
+function collect(state: EditorState, documentPath = "test.md", hasFocus = true): CollectedDecoration[] {
+  const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], documentPath, hasFocus);
   const out: CollectedDecoration[] = [];
   decorations.between(0, state.doc.length, (from, to, deco) => {
     out.push({
@@ -173,7 +173,7 @@ describe("buildDecorations: links", () => {
   it("hides brackets/url and marks the link text with the target url", () => {
     const doc = "[click here](https://example.com/page)\nsecond line";
     const state = stateFor(doc, doc.length);
-    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md");
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", true);
     let found: { from: number; to: number; href?: string } | undefined;
     decorations.between(0, state.doc.length, (from, to, deco) => {
       if (deco.spec.class === "cm-link") {
@@ -198,7 +198,7 @@ describe("buildDecorations: images", () => {
   it("replaces the whole image node with an ImageWidget", () => {
     const doc = "![alt text](./local.png)\nsecond line";
     const state = stateFor(doc, doc.length);
-    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "notes/test.md");
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "notes/test.md", true);
     let widget: ImageWidget | undefined;
     decorations.between(0, state.doc.length, (_f, _t, deco) => {
       if (deco.spec.widget instanceof ImageWidget) {
@@ -213,7 +213,7 @@ describe("buildDecorations: images", () => {
   it("still fully un-renders (no ImageWidget) when the cursor is on the image's line", () => {
     const doc = "![alt text](./local.png)\nsecond line";
     const state = stateFor(doc, doc.indexOf("alt"));
-    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "notes/test.md");
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "notes/test.md", true);
     let widget: ImageWidget | undefined;
     decorations.between(0, state.doc.length, (_f, _t, deco) => {
       if (deco.spec.widget instanceof ImageWidget) {
@@ -229,7 +229,7 @@ describe("buildDecorations: task lists", () => {
   it("replaces unchecked and checked markers with CheckboxWidget regardless of cursor", () => {
     const doc = "- [ ] todo\n- [x] done";
     const state = stateFor(doc, 2); // cursor on the first task item's line
-    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md");
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", true);
     const widgets: CheckboxWidget[] = [];
     decorations.between(0, state.doc.length, (_f, _t, deco) => {
       if (deco.spec.widget instanceof CheckboxWidget) {
@@ -543,7 +543,7 @@ describe("buildDecorations: tables", () => {
   it("renders a link nested inside a table cell with cm-link (same underlying defect as #74)", () => {
     const doc = "| Name | Site |\n| --- | --- |\n| Alice | [site](https://x.com) |\n";
     const state = stateFor(doc, doc.length); // cursor away from the table
-    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md");
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", true);
     let found: { from: number; to: number; href?: string } | undefined;
     decorations.between(0, state.doc.length, (from, to, deco) => {
       if (deco.spec.class === "cm-link") {
@@ -562,8 +562,8 @@ describe("buildDecorations: tables", () => {
  * links describe block above, which reads `deco.spec.attributes`
  * directly rather than extending `collect()` for one attribute).
  */
-function collectCodeBlockStyles(state: EditorState): (string | undefined)[] {
-  const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md");
+function collectCodeBlockStyles(state: EditorState, hasFocus = true): (string | undefined)[] {
+  const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", hasFocus);
   const styles: (string | undefined)[] = [];
   decorations.between(0, state.doc.length, (from, to, deco) => {
     if (deco.spec.class === "cm-code-block") {
@@ -753,8 +753,8 @@ describe("buildDecorations: code blocks", () => {
  * decorations can't come from a `ViewPlugin`) rather than `buildDecorations`
  * itself — see `mermaidWidgetSource`'s doc comment in `decorations.ts`.
  */
-function collectMermaidWidgets(state: EditorState): CollectedDecoration[] {
-  const decorations = buildMermaidWidgetDecorations(state);
+function collectMermaidWidgets(state: EditorState, hasFocus = true): CollectedDecoration[] {
+  const decorations = buildMermaidWidgetDecorations(state, hasFocus);
   const out: CollectedDecoration[] = [];
   decorations.between(0, state.doc.length, (from, to, deco) => {
     out.push({
@@ -832,11 +832,116 @@ describe("buildDecorations: mermaid fenced blocks", () => {
   });
 });
 
+/**
+ * `hasFocus: false` must behave like "cursor is nowhere on this document" —
+ * raw markup stays hidden and widgets stay rendered — even when the stored
+ * selection sits exactly where it would normally trigger a cursor-reveal.
+ * This is the fix for issue #108 ("deselecting rendered markdown does not
+ * clear the line active edit"): CodeMirror's selection never becomes
+ * "empty," it just stops mattering once the editor loses DOM focus.
+ */
+describe("buildDecorations: hasFocus gating (issue #108)", () => {
+  it("hides the heading marker when hasFocus is false, even with the selection on that line", () => {
+    const doc = "# Hello\nSecond line";
+    const state = stateFor(doc, 3); // cursor inside "Hello" — would normally reveal
+    const decos = collect(state, "test.md", false);
+    const headingDeco = decos.find((d) => d.class === "cm-heading-1");
+    expect(headingDeco).toBeTruthy();
+    expect(headingDeco?.from).toBe(2); // after "# ", marker hidden
+    expect(headingDeco?.to).toBe(7);
+    expect(decos.some((d) => d.isReplace && !d.class)).toBe(true); // the hidden marker itself
+  });
+
+  it("hides emphasis and strong delimiters when hasFocus is false, even with the selection on that line", () => {
+    const doc = "plain *em* and **strong** text\nsecond line";
+    const state = stateFor(doc, doc.indexOf("em"));
+    const decos = collect(state, "test.md", false);
+    expect(decos.some((d) => d.class === "cm-em")).toBe(true);
+    expect(decos.some((d) => d.class === "cm-strong")).toBe(true);
+    expect(state.doc.toString()).toContain("*em*"); // doc unchanged, only decorations differ
+    const replaces = decos.filter((d) => d.isReplace && !d.class);
+    expect(replaces.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("hides strikethrough delimiters when hasFocus is false, even with the selection on that line", () => {
+    const doc = "plain ~~gone~~ text\nsecond line";
+    const state = stateFor(doc, doc.indexOf("gone"));
+    const decos = collect(state, "test.md", false);
+    expect(decos.some((d) => d.class === "cm-strikethrough")).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class)).toBe(true);
+  });
+
+  it("hides inline code backticks when hasFocus is false, even with the selection on that line", () => {
+    const doc = "use `code` here\nsecond line";
+    const state = stateFor(doc, doc.indexOf("code"));
+    const decos = collect(state, "test.md", false);
+    expect(decos.some((d) => d.class === "cm-inline-code")).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class)).toBe(true);
+  });
+
+  it("still renders a link as cm-link when hasFocus is false, even with the selection on its line", () => {
+    const doc = "[click here](https://example.com/page)\nsecond line";
+    const state = stateFor(doc, doc.indexOf("click"));
+    const decos = collect(state, "test.md", false);
+    const linkDeco = decos.find((d) => d.class === "cm-link");
+    expect(linkDeco).toBeTruthy();
+    expect(state.doc.sliceString(linkDeco!.from, linkDeco!.to)).toBe("click here");
+  });
+
+  it("still renders an ImageWidget when hasFocus is false, even with the selection on its line", () => {
+    const doc = "![alt text](./local.png)\nsecond line";
+    const state = stateFor(doc, doc.indexOf("alt"));
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "notes/test.md", false);
+    let widget: ImageWidget | undefined;
+    decorations.between(0, state.doc.length, (_f, _t, deco) => {
+      if (deco.spec.widget instanceof ImageWidget) {
+        widget = deco.spec.widget;
+      }
+    });
+    expect(widget).toBeTruthy();
+    expect(widget?.url).toBe("./local.png");
+  });
+
+  it("hides fenced code fence markers when hasFocus is false, even with the selection inside the block", () => {
+    const doc = "```js\nconst x = 1;\n```\n\nafter";
+    const state = stateFor(doc, doc.indexOf("const x"));
+    const decos = collect(state, "test.md", false);
+    const openLine = state.doc.line(1);
+    const closeLine = state.doc.line(3);
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === openLine.from && d.to === openLine.to)).toBe(
+      true,
+    );
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === closeLine.from && d.to === closeLine.to)).toBe(
+      true,
+    );
+  });
+
+  it("keeps a table cell's cm-table-cell class when hasFocus is false, even with the selection inside it", () => {
+    const doc = "| Name | Role |\n| --- | --- |\n| Alice | Engineer |\n";
+    const engineerFrom = doc.indexOf("Engineer");
+    const state = stateFor(doc, engineerFrom + 1); // cursor inside "Engineer" — would normally reveal the cell
+    const decos = collect(state, "test.md", false);
+    const engineerTo = engineerFrom + "Engineer".length;
+    expect(
+      decos.some(
+        (d) => d.class?.split(" ").includes("cm-table-cell") && d.from === engineerFrom && d.to === engineerTo,
+      ),
+    ).toBe(true);
+  });
+
+  it("still replaces a mermaid block with a MermaidWidget when hasFocus is false, even with the selection inside it", () => {
+    const doc = "```mermaid\ngraph TD;\nA-->B;\n```\n\nafter";
+    const state = stateFor(doc, doc.indexOf("A-->B")); // cursor inside the block — would normally fall back to raw
+    const widgets = collectMermaidWidgets(state, false).filter((d) => d.widget instanceof MermaidWidget);
+    expect(widgets).toHaveLength(1);
+  });
+});
+
 describe("buildDecorations: round-trip safety", () => {
   it("never mutates document content", () => {
     const doc = "# Heading\n\n*em* **strong** `code` [link](url) ![img](url)\n\n- [ ] task\n\n| a | b |\n|---|---|\n| 1 | 2 |\n";
     const state = stateFor(doc, 0);
-    buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md");
+    buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", true);
     expect(state.doc.toString()).toBe(doc);
   });
 });

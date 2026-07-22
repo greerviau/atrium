@@ -20,8 +20,12 @@ const HEADING_LEVELS: Record<string, 1 | 2 | 3 | 4 | 5 | 6> = {
  * True if any selection range overlaps the full line(s) spanned by
  * `[from, to)` — per Obsidian-style live preview, a node under the cursor
  * shows its raw markdown source instead of the rendered decoration.
+ * Gated on `hasFocus`: an unfocused editor never reveals raw markup,
+ * regardless of where the stored selection happens to sit, since there is
+ * no "active edit" without focus.
  */
-function isUnderCursor(state: EditorState, from: number, to: number): boolean {
+function isUnderCursor(state: EditorState, from: number, to: number, hasFocus: boolean): boolean {
+  if (!hasFocus) return false;
   const lineFrom = state.doc.lineAt(from).from;
   const lineTo = state.doc.lineAt(to).to;
   return state.selection.ranges.some((r) => r.from <= lineTo && r.to >= lineFrom);
@@ -32,9 +36,10 @@ function isUnderCursor(state: EditorState, from: number, to: number): boolean {
  * widening to the enclosing line. Used where a single line contains several
  * independently-editable spans (table cells) and gating on the whole line,
  * like `isUnderCursor` does, would reveal every sibling span at once.
+ * Gated on `hasFocus` for the same reason as `isUnderCursor`.
  */
-function overlapsSelection(state: EditorState, from: number, to: number): boolean {
-  return state.selection.ranges.some((r) => r.from <= to && r.to >= from);
+function overlapsSelection(state: EditorState, from: number, to: number, hasFocus: boolean): boolean {
+  return hasFocus && state.selection.ranges.some((r) => r.from <= to && r.to >= from);
 }
 
 function decorateHeading(
@@ -42,6 +47,7 @@ function decorateHeading(
   node: SyntaxNode,
   level: 1 | 2 | 3 | 4 | 5 | 6,
   out: Range<Decoration>[],
+  hasFocus: boolean,
 ): void {
   const mark = node.getChild("HeaderMark");
   if (!mark) {
@@ -50,7 +56,7 @@ function decorateHeading(
   // With the cursor on this line, keep the heading styled but reveal the
   // marker instead of hiding it (matches the fenced-code/table precedent:
   // container stays visible, only markup-hiding is cursor-gated).
-  if (isUnderCursor(state, node.from, node.to)) {
+  if (isUnderCursor(state, node.from, node.to, hasFocus)) {
     out.push(Decoration.mark({ class: headingClass(level) }).range(node.from, node.to));
     return;
   }
@@ -76,9 +82,10 @@ function decorateWrapped(
   markTypeName: string,
   cssClass: string,
   out: Range<Decoration>[],
+  hasFocus: boolean,
 ): void {
   out.push(Decoration.mark({ class: cssClass }).range(node.from, node.to));
-  if (isUnderCursor(state, node.from, node.to)) {
+  if (isUnderCursor(state, node.from, node.to, hasFocus)) {
     return;
   }
   let child = node.firstChild;
@@ -128,10 +135,11 @@ function decorateCodeBlock(
   node: SyntaxNode,
   isFenced: boolean,
   out: Range<Decoration>[],
+  hasFocus: boolean,
 ): void {
   const startLine = state.doc.lineAt(node.from).number;
   const endLine = state.doc.lineAt(node.to).number;
-  const hideMarkers = isFenced && !isUnderCursor(state, node.from, node.to);
+  const hideMarkers = isFenced && !isUnderCursor(state, node.from, node.to, hasFocus);
 
   const marks = node.getChildren("CodeMark");
   const info = node.getChild("CodeInfo");
@@ -191,9 +199,9 @@ function decorateCodeBlock(
  * widget decoration, from a `StateField` — see `mermaidWidgetField` in
  * `livePreviewPlugin.ts`).
  */
-function mermaidWidgetSource(state: EditorState, node: SyntaxNode): string | null {
+function mermaidWidgetSource(state: EditorState, node: SyntaxNode, hasFocus: boolean): string | null {
   const source = extractMermaidSource(state, node);
-  if (source === null || isUnderCursor(state, node.from, node.to)) {
+  if (source === null || isUnderCursor(state, node.from, node.to, hasFocus)) {
     return null;
   }
   return source;
@@ -218,12 +226,12 @@ const MERMAID_CONTAINER_NODES = new Set(["Blockquote", "BulletList", "OrderedLis
  * (`MERMAID_CONTAINER_NODES`) plus `FencedCode` itself, so realistic
  * documents (far more inline content than fenced blocks) stay cheap.
  */
-export function buildMermaidWidgetDecorations(state: EditorState): DecorationSet {
+export function buildMermaidWidgetDecorations(state: EditorState, hasFocus: boolean): DecorationSet {
   const decorations: Range<Decoration>[] = [];
   syntaxTree(state).iterate({
     enter(ref) {
       if (ref.name === "FencedCode") {
-        const source = mermaidWidgetSource(state, ref.node);
+        const source = mermaidWidgetSource(state, ref.node, hasFocus);
         if (source !== null) {
           decorations.push(
             Decoration.replace({ widget: new MermaidWidget(source, ref.from), block: true }).range(ref.from, ref.to),
@@ -279,6 +287,7 @@ function decorateTableRow(
   alignment: ColumnAlignment[],
   isHeader: boolean,
   out: Range<Decoration>[],
+  hasFocus: boolean,
 ): void {
   const rowClass = isHeader ? `${CLASS.tableRow} ${CLASS.tableHeaderRow}` : CLASS.tableRow;
   out.push(Decoration.line({ class: rowClass }).range(state.doc.lineAt(node.from).from));
@@ -289,9 +298,9 @@ function decorateTableRow(
   let child = node.firstChild;
   while (child) {
     if (child.type.name === "TableCell") {
-      const cellUnderCursor = overlapsSelection(state, child.from, child.to);
+      const cellUnderCursor = overlapsSelection(state, child.from, child.to, hasFocus);
       const gapUnderCursor =
-        cellUnderCursor || prevCellUnderCursor || overlapsSelection(state, prevEnd, child.from);
+        cellUnderCursor || prevCellUnderCursor || overlapsSelection(state, prevEnd, child.from, hasFocus);
       // Fully consume the gap since the previous cell (its `|` plus any
       // surrounding whitespace) rather than just the pipe character — a
       // leftover whitespace text node would become its own anonymous
@@ -317,7 +326,7 @@ function decorateTableRow(
     }
     child = child.nextSibling;
   }
-  if (node.to > prevEnd && !prevCellUnderCursor && !overlapsSelection(state, prevEnd, node.to)) {
+  if (node.to > prevEnd && !prevCellUnderCursor && !overlapsSelection(state, prevEnd, node.to, hasFocus)) {
     out.push(Decoration.replace({}).range(prevEnd, node.to));
   }
 }
@@ -331,7 +340,7 @@ function decorateTableRow(
  * once and shared across every row, and so the row container stays visible
  * even when the cursor is elsewhere in the same table.
  */
-function decorateTable(state: EditorState, node: SyntaxNode, out: Range<Decoration>[]): void {
+function decorateTable(state: EditorState, node: SyntaxNode, out: Range<Decoration>[], hasFocus: boolean): void {
   const delimiterNode = node.getChild("TableDelimiter");
   const alignment = delimiterNode
     ? parseColumnAlignment(state.doc.sliceString(delimiterNode.from, delimiterNode.to))
@@ -340,9 +349,9 @@ function decorateTable(state: EditorState, node: SyntaxNode, out: Range<Decorati
   let child = node.firstChild;
   while (child) {
     if (child.type.name === "TableHeader") {
-      decorateTableRow(state, child, alignment, true, out);
+      decorateTableRow(state, child, alignment, true, out, hasFocus);
     } else if (child.type.name === "TableRow") {
-      decorateTableRow(state, child, alignment, false, out);
+      decorateTableRow(state, child, alignment, false, out, hasFocus);
     } else if (child.type.name === "TableDelimiter" && child.from === delimiterNode?.from) {
       const line = state.doc.lineAt(child.from);
       out.push(Decoration.line({ class: CLASS.tableDelimiterLine }).range(line.from));
@@ -375,6 +384,7 @@ export function buildDecorations(
   state: EditorState,
   visibleRanges: readonly { from: number; to: number }[],
   documentPath: string,
+  hasFocus: boolean,
 ): DecorationSet {
   const decorations: Range<Decoration>[] = [];
   const tree = syntaxTree(state);
@@ -404,10 +414,10 @@ export function buildDecorations(
           // handling below. The container stays visible even while the
           // cursor is inside the block; only the fence markers/language tag
           // are cursor-gated.
-          if (name === "FencedCode" && mermaidWidgetSource(state, ref.node) !== null) {
+          if (name === "FencedCode" && mermaidWidgetSource(state, ref.node, hasFocus) !== null) {
             return;
           }
-          decorateCodeBlock(state, ref.node, name === "FencedCode", decorations);
+          decorateCodeBlock(state, ref.node, name === "FencedCode", decorations, hasFocus);
           return;
         }
 
@@ -420,36 +430,36 @@ export function buildDecorations(
           // reaches the switch below and gets decorated the same way it
           // would inside a paragraph; TableHeader/TableRow/TableCell/
           // TableDelimiter have no case there, so revisiting them is a no-op.
-          decorateTable(state, ref.node, decorations);
+          decorateTable(state, ref.node, decorations, hasFocus);
           return;
         }
 
         if (name in HEADING_LEVELS) {
-          decorateHeading(state, ref.node, HEADING_LEVELS[name], decorations);
+          decorateHeading(state, ref.node, HEADING_LEVELS[name], decorations, hasFocus);
           return;
         }
 
         switch (name) {
           case "Emphasis":
-            decorateWrapped(state, ref.node, "EmphasisMark", CLASS.emphasis, decorations);
+            decorateWrapped(state, ref.node, "EmphasisMark", CLASS.emphasis, decorations, hasFocus);
             break;
           case "StrongEmphasis":
-            decorateWrapped(state, ref.node, "EmphasisMark", CLASS.strong, decorations);
+            decorateWrapped(state, ref.node, "EmphasisMark", CLASS.strong, decorations, hasFocus);
             break;
           case "Strikethrough":
-            decorateWrapped(state, ref.node, "StrikethroughMark", CLASS.strikethrough, decorations);
+            decorateWrapped(state, ref.node, "StrikethroughMark", CLASS.strikethrough, decorations, hasFocus);
             break;
           case "InlineCode":
-            decorateWrapped(state, ref.node, "CodeMark", CLASS.inlineCode, decorations);
+            decorateWrapped(state, ref.node, "CodeMark", CLASS.inlineCode, decorations, hasFocus);
             break;
           case "Link":
-            if (isUnderCursor(state, ref.from, ref.to)) {
+            if (isUnderCursor(state, ref.from, ref.to, hasFocus)) {
               break;
             }
             decorateLink(state, ref.node, documentPath, decorations);
             break;
           case "Image":
-            if (isUnderCursor(state, ref.from, ref.to)) {
+            if (isUnderCursor(state, ref.from, ref.to, hasFocus)) {
               break;
             }
             decorateImage(state, ref.node, documentPath, decorations);
