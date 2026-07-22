@@ -1,9 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { tick } from "svelte";
 import { render, cleanup } from "@testing-library/svelte";
-import { Compartment } from "@codemirror/state";
+import { Compartment, type StateEffect } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import EditorPane from "../../src/lib/editor/EditorPane.svelte";
 import { tabsState, toggleMarkdownViewMode, markDirty, type Tab } from "../../src/lib/stores/tabs";
+
+// `StateEffect.type` is a real runtime field (used internally by `.is()`)
+// but isn't part of `@codemirror/state`'s public `.d.ts`, hence the cast.
+function effectTypeOf(effect: StateEffect<unknown> | undefined): unknown {
+  return (effect as unknown as { type: unknown } | undefined)?.type;
+}
 
 const FILE_PATH = "/notes.md";
 // Blank first line keeps the default cursor (position 0, on line 1) off the
@@ -12,37 +19,17 @@ const FILE_PATH = "/notes.md";
 // `decorations.test.ts` uses for its own heading assertions.
 const FIXTURE_DOC = "\n\n# Heading\n\n- [ ] todo\n";
 
-// Long enough to be viewport-limited even under jsdom's synthetic layout —
-// smaller documents end up entirely within `visibleRanges` regardless of
-// view mode and don't reproduce the toggle/cold-mount discrepancy.
-const LONG_FIXTURE_DOC =
-  "\n\n" +
-  Array.from(
-    { length: 400 },
-    (_, i) =>
-      `# Heading ${i + 1}\n\nBody paragraph for heading ${i + 1}, padding out the document height.\n`,
-  ).join("\n");
-
-function seedMarkdownTab(viewMode: "rendered" | "source" = "rendered", doc: string = FIXTURE_DOC): Tab {
+function seedMarkdownTab(): Tab {
   const tab: Tab = {
     path: FILE_PATH,
     mode: "markdown",
-    savedDoc: doc,
+    savedDoc: FIXTURE_DOC,
     isDirty: false,
     hasExternalConflict: false,
-    viewMode,
+    viewMode: "rendered",
   };
   tabsState.set({ tabs: [tab], activeTabPath: FILE_PATH });
   return tab;
-}
-
-// Extracts the heading numbers ("# Heading N") that currently carry the
-// live-preview heading decoration, in document order.
-function decoratedHeadingNumbers(container: HTMLElement): number[] {
-  return Array.from(container.querySelectorAll(".cm-heading-1")).map((el) => {
-    const match = el.textContent?.match(/Heading (\d+)/);
-    return match ? Number(match[1]) : NaN;
-  });
 }
 
 describe("EditorPane: markdown view-mode toggle", () => {
@@ -109,30 +96,45 @@ describe("EditorPane: markdown view-mode toggle", () => {
     expect(reconfigureSpy.mock.calls.length).toBe(callsAfterMount + 1);
   });
 
-  it("decorates the same headings whether rendered mode is reached cold or via a toggle", async () => {
-    // Scenario A: mount directly with viewMode "rendered" (the "cold" baseline).
-    seedMarkdownTab("rendered", LONG_FIXTURE_DOC);
-    const coldMount = render(EditorPane, { filePath: FILE_PATH });
+  // Regression guard for issue #87 (stale/incomplete decorations after
+  // toggling back to rendered view). The actual bug is a CodeMirror viewport
+  // staleness that only manifests through real DOM layout: without real,
+  // mode-dependent line-height measurements, jsdom's viewport sizing ends up
+  // mode-independent regardless of whether the fix is present, so a
+  // decoration-coverage comparison here can't reliably distinguish fixed
+  // from unfixed code (confirmed empirically — see PR discussion). Reliably
+  // mocking CodeMirror's real measurement path (`getBoundingClientRect` plus
+  // the `Range` APIs it also depends on) to recreate the divergence isn't
+  // practical under jsdom either. This test instead verifies the fix's
+  // mechanism directly and deterministically: that toggling view mode
+  // dispatches a scroll-anchoring effect (`EditorView.scrollIntoView` or the
+  // equivalent `view.scrollSnapshot()`) in the *same* transaction as the compartment
+  // reconfigure — the specific thing the root-cause analysis identifies as
+  // forcing CodeMirror's `ViewState.update()` to recompute the viewport
+  // instead of carrying over a stale one. Confirming the actual decoration
+  // outcome still requires a real browser (see `tests/e2e`).
+  it("dispatches a scroll-anchoring effect in the same transaction as the view-mode reconfigure (issue #87)", async () => {
+    // Installed before `render`, like the `Compartment.prototype.reconfigure`
+    // spy above — installing it after `render` misses calls the component's
+    // own `@codemirror/view` module instance makes (a Vite module-resolution
+    // quirk this file already works around for the reconfigure spy).
+    const dispatchSpy = vi.spyOn(EditorView.prototype, "dispatch");
+    render(EditorPane, { filePath: FILE_PATH });
     await tick();
-    const coldHeadings = decoratedHeadingNumbers(coldMount.container);
-    coldMount.unmount();
-    tabsState.set({ tabs: [], activeTabPath: null });
+    const callsAfterMount = dispatchSpy.mock.calls.length;
 
-    // Scenario B: mount with viewMode "source", then toggle to rendered, with
-    // no click or scroll in between.
-    seedMarkdownTab("source", LONG_FIXTURE_DOC);
-    const toggled = render(EditorPane, { filePath: FILE_PATH });
-    await tick();
     toggleMarkdownViewMode(FILE_PATH);
     await tick();
-    const toggledHeadings = decoratedHeadingNumbers(toggled.container);
 
-    // Sanity check: the fixture is actually viewport-limited in this
-    // environment, so this test would be vacuous if either scenario
-    // decorated the entire 400-heading document.
-    expect(coldHeadings.length).toBeGreaterThan(0);
-    expect(coldHeadings.length).toBeLessThan(400);
+    // `EditorView.scrollIntoView` and `view.scrollSnapshot()` both produce a
+    // `StateEffect` of the same internal type, so this matches either
+    // implementation of the fix.
+    const scrollAnchorType = effectTypeOf(EditorView.scrollIntoView(0, {}));
+    const toggleDispatch = dispatchSpy.mock.calls.slice(callsAfterMount).find(([spec]) => {
+      const effects = Array.isArray(spec?.effects) ? spec.effects : spec?.effects ? [spec.effects] : [];
+      return effects.some((effect) => effectTypeOf(effect as StateEffect<unknown> | undefined) === scrollAnchorType);
+    });
 
-    expect(toggledHeadings).toEqual(coldHeadings);
+    expect(toggleDispatch).toBeDefined();
   });
 });

@@ -158,24 +158,25 @@
   // decorations, not the `ViewPlugin`-supplied ones `livePreviewPlugin` uses
   // for live-preview styling, so it doesn't see this transition as
   // height-relevant and never recomputes the viewport on its own. Dispatching
-  // `EditorView.scrollIntoView` alongside the reconfigure forces a correct
-  // viewport recomputation anchored on the current selection head, and the
-  // explicit `requestMeasure()` after dispatch (same pattern as the
-  // background-tab fix below) guarantees a fresh measure pass re-derives the
-  // viewport from actual rendered DOM heights rather than relying on
-  // CodeMirror's implicit, best-effort async convergence.
+  // a scroll-anchoring effect alongside the reconfigure forces a correct
+  // viewport recomputation as part of the same transaction. `scrollSnapshot()`
+  // anchors on the view's current scroll offset rather than the selection
+  // head, so a toggle can't itself cause a visible scroll jump when the
+  // cursor and the user's scroll position have diverged (e.g. reading further
+  // down the rendered preview without clicking). The explicit
+  // `requestMeasure()` after dispatch (same pattern as the background-tab fix
+  // below) guarantees a fresh measure pass re-derives the viewport from
+  // actual rendered DOM heights rather than relying on CodeMirror's implicit,
+  // best-effort async convergence.
   $effect(() => {
     const current = tab;
     if (!view || !current || current.viewMode === lastAppliedViewMode) {
       return;
     }
     lastAppliedViewMode = current.viewMode;
-    const head = view.state.selection.main.head;
+    const scrollSnapshot = view.scrollSnapshot();
     view.dispatch({
-      effects: [
-        viewModeCompartment.reconfigure(viewModeExtensions(current.mode, current.viewMode)),
-        EditorView.scrollIntoView(head, { y: "nearest" }),
-      ],
+      effects: [viewModeCompartment.reconfigure(viewModeExtensions(current.mode, current.viewMode)), scrollSnapshot],
     });
     view.requestMeasure();
   });
