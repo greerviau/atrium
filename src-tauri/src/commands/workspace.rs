@@ -83,6 +83,11 @@ pub fn workspace_remove_recent(app: AppHandle, path: String) -> Result<(), AppEr
     recents::remove_recent(&app, &path)
 }
 
+#[tauri::command]
+pub fn workspace_clear_recents(app: AppHandle) -> Result<(), AppError> {
+    recents::clear_recents(&app)
+}
+
 /// Consumes the path from a Dock-menu pick received before the frontend had
 /// mounted its event listeners (the cold-launch case in plan section 4.3).
 /// Called once by the frontend on startup; returns `None` on every other

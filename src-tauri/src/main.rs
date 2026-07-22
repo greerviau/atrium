@@ -16,28 +16,31 @@ use state::AppState;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager};
 
-/// Builds the native menu bar: `Atrium` (About, Quit), `File` (Open Folder,
-/// Save, New Terminal Tab), `Edit` (standard Undo/Redo/Cut/Copy/Paste/Select
-/// All, plus Find in Files), `View` (Toggle File Explorer, Toggle Terminal,
-/// Split Terminal, Zoom In, Zoom Out, Reset Zoom), `Window` (standard), and
-/// `Theme` (Auto plus the three built-in themes). Menu items that need
-/// frontend behavior (Open Folder, Save, New Terminal Tab, Find in Files,
-/// both View toggles, Split Terminal, all three zoom items, every Theme
-/// option) emit a `menu:*` event;
+/// Builds the native menu bar: `Atrium` (About, Settings…, Quit), `File`
+/// (Open Folder, Save, New Terminal Tab), `Edit` (standard
+/// Undo/Redo/Cut/Copy/Paste/Select All, plus Find in Files), `View` (Toggle
+/// File Explorer, Toggle Terminal, Split Terminal, Zoom In, Zoom Out, Reset
+/// Zoom), `Window` (standard), and `Theme` (Auto plus the three built-in
+/// themes). Menu items that need frontend behavior (Settings, Open Folder,
+/// Save, New Terminal Tab, Find in Files, both View toggles, Split Terminal,
+/// all three zoom items, every Theme option) emit a `menu:*` event;
 /// `App.svelte` / `MenuBar.ts` listen for these and dispatch to the active
-/// pane, the search overlay, the panel-visibility store, the zoom store, or
-/// the theme store, since the menu itself has no notion of "the active
-/// editor," "the current theme," "is the panel shown," or "the current zoom
-/// level" (no checkmark on the active Theme item yet — the menu is built
-/// once in Rust, before the WebView and its `localStorage` selection are
-/// available).
+/// pane, the search overlay, the settings dialog, the panel-visibility
+/// store, the zoom store, or the theme store, since the menu itself has no
+/// notion of "the active editor," "the current theme," "is the panel
+/// shown," or "the current zoom level" (no checkmark on the active Theme
+/// item yet — the menu is built once in Rust, before the WebView and its
+/// `localStorage` selection are available).
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let settings = MenuItem::with_id(app, "menu:settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
     let app_menu = Submenu::with_items(
         app,
         "Atrium",
         true,
         &[
             &PredefinedMenuItem::about(app, None, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &settings,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::quit(app, None)?,
         ],
@@ -236,6 +239,7 @@ fn main() {
             commands::workspace::workspace_set_root,
             commands::workspace::workspace_get_recents,
             commands::workspace::workspace_remove_recent,
+            commands::workspace::workspace_clear_recents,
             commands::workspace::workspace_take_pending_open,
             commands::fs::fs_list_dir,
             commands::fs::fs_read_file,

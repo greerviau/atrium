@@ -110,6 +110,16 @@ pub fn remove_recent<R: Runtime>(app: &AppHandle<R>, path: &str) -> Result<(), A
     write_store(app, &recents)
 }
 
+/// Removes every entry from the recents list.
+pub fn clear_recents<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
+    write_store(app, &clear(read_store(app)?))
+}
+
+/// Empties a recents list unconditionally.
+fn clear(_recents: Vec<RecentProject>) -> Vec<RecentProject> {
+    Vec::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,6 +193,29 @@ mod tests {
 
         assert_eq!(pruned.len(), 1);
         assert_eq!(pruned[0].name, "keep");
+    }
+
+    #[test]
+    fn clear_empties_a_populated_list() {
+        let recents = vec![
+            RecentProject {
+                path: "/a".into(),
+                name: "a".into(),
+                last_opened_at: 1,
+            },
+            RecentProject {
+                path: "/b".into(),
+                name: "b".into(),
+                last_opened_at: 2,
+            },
+        ];
+
+        assert!(clear(recents).is_empty());
+    }
+
+    #[test]
+    fn clear_is_a_no_op_on_an_already_empty_list() {
+        assert!(clear(vec![]).is_empty());
     }
 
     #[test]
