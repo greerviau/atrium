@@ -58,6 +58,18 @@ describe("movementAwareMouseSelectionStyle: Part 1 (issue #161)", () => {
     expect(sel.main.to).toBe(20);
   });
 
+  it("still builds a range for a small (sub-10px) real drag, matching upstream's lack of a minimum drag distance", () => {
+    const v = makeView("word1 word2 word3\nline two\nline three");
+    stubResolvedPositions(v, [5, 6]);
+    const mousedown = mouseEvent("mousedown", { clientX: 10, clientY: 10, detail: 1 });
+    const style = movementAwareMouseSelectionStyle(v, mousedown);
+    const moveEvent = mouseEvent("mousemove", { clientX: 11, clientY: 10, detail: 1 }); // 1px, well under CM6's own 10px click-vs-drag gate
+    const sel = style.get(moveEvent, false, false);
+
+    expect(sel.main.from).toBe(5);
+    expect(sel.main.to).toBe(6);
+  });
+
   it("places a plain collapsed cursor for an ordinary stationary click", () => {
     const v = makeView("word1 word2 word3");
     stubResolvedPositions(v, [7]);

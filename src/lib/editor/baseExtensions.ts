@@ -16,11 +16,22 @@ import { autocompletion } from "@codemirror/autocomplete";
 // vendored adaptation of upstream (MIT-licensed) that additionally requires
 // real on-screen pointer movement before treating the gesture as a drag.
 
-/** Matches `@codemirror/view`'s own threshold (its internal `dist()`/`MouseSelection.move()`) for "the pointer actually moved, this is a drag." */
-const DRAG_MOVEMENT_THRESHOLD_PX = 10;
-
 function pointerDistance(a: { clientX: number; clientY: number }, b: { clientX: number; clientY: number }): number {
   return Math.max(Math.abs(a.clientX - b.clientX), Math.abs(a.clientY - b.clientY));
+}
+
+/**
+ * Upstream's own `basicMouseSelection` has no minimum drag distance at all
+ * for ordinary range selection — any pointer movement that resolves to a
+ * different position starts building a range (its 10px `dist()` gate is a
+ * different decision entirely: whether a click *inside* an existing
+ * selection is a click-to-place-cursor or a drag-to-move-it). Issue #161 is
+ * a pointer that never moved on screen at all (distance exactly 0), so
+ * requiring only "moved by more than zero" fully fixes it without touching
+ * real drag-select of any size.
+ */
+function hasPointerMoved(a: { clientX: number; clientY: number }, b: { clientX: number; clientY: number }): boolean {
+  return pointerDistance(a, b) > 0;
 }
 
 /**
@@ -118,8 +129,7 @@ export function movementAwareMouseSelectionStyle(view: EditorView, startEvent: M
     get(curEvent, extend, multiple) {
       const cur = view.posAndSideAtCoords({ x: curEvent.clientX, y: curEvent.clientY }, false);
       let range = rangeForClick(view, cur.pos, cur.assoc, clickCount);
-      const moved = pointerDistance(startEvent, curEvent) >= DRAG_MOVEMENT_THRESHOLD_PX;
-      if (start.pos !== cur.pos && moved && !extend) {
+      if (start.pos !== cur.pos && hasPointerMoved(startEvent, curEvent) && !extend) {
         const startRange = rangeForClick(view, start.pos, start.assoc, clickCount);
         const from = Math.min(startRange.from, range.from);
         const to = Math.max(startRange.to, range.to);
@@ -156,7 +166,7 @@ export function movementAwareMouseSelectionStyle(view: EditorView, startEvent: M
 // selection logic as any other click.
 
 /** 3-4x the measured real scroll-settle window (~15-40ms): enough margin to never miss the race, without widening far enough to interfere with an intentional fast double-click. */
-const RECENT_SCROLL_WINDOW_MS = 120;
+export const RECENT_SCROLL_WINDOW_MS = 120;
 
 class WheelTracker {
   lastWheelTime = -Infinity;
@@ -175,50 +185,80 @@ class WheelTracker {
   }
 }
 
-const wheelTracker = ViewPlugin.fromClass(WheelTracker);
+export const wheelTracker = ViewPlugin.fromClass(WheelTracker);
 
 /** Marks a `mousedown` this extension has already redispatched once (after the settle delay), so it isn't deferred a second time. */
 const deferredMouseEvents = new WeakSet<MouseEvent>();
 
-function replayMousedownNextFrame(view: EditorView, event: MouseEvent, target: EventTarget): void {
-  requestAnimationFrame(() => {
-    const replay = new MouseEvent("mousedown", {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      detail: event.detail,
-      clientX: event.clientX,
-      clientY: event.clientY,
-      button: event.button,
-      buttons: event.buttons,
-      shiftKey: event.shiftKey,
-      ctrlKey: event.ctrlKey,
-      altKey: event.altKey,
-      metaKey: event.metaKey,
-    });
-    deferredMouseEvents.add(replay);
-    target.dispatchEvent(replay);
+function cloneMouseEvent(type: string, source: MouseEvent): MouseEvent {
+  return new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    view: source.view,
+    detail: source.detail,
+    clientX: source.clientX,
+    clientY: source.clientY,
+    button: source.button,
+    buttons: source.buttons,
+    shiftKey: source.shiftKey,
+    ctrlKey: source.ctrlKey,
+    altKey: source.altKey,
+    metaKey: source.metaKey,
   });
 }
 
 /**
- * Registered via `EditorView.domEventHandlers`, which — like the existing
- * `linkClickHandler` in `livePreviewPlugin.ts` — runs before CodeMirror's own
- * built-in `mousedown` handling, so returning `true` here pre-empts it for
- * this event only.
+ * Defers `event` by one animation frame, then replays it as a fresh
+ * `mousedown` on `target`. A click that lands inside the *existing*
+ * selection isn't resolved into a selection at `mousedown` at all (only on
+ * the following `mouseup`, per upstream's own ambiguous click-vs-drag
+ * handling) — so a real mouseup arriving faster than one animation frame
+ * would otherwise fire before the deferred `mousedown` has even built the
+ * selection object meant to receive it, silently swallowing the click. A
+ * capturing listener grabs that early `mouseup`, if there is one, and
+ * replays it immediately after the deferred `mousedown` so it's never lost.
  */
-const scrollSettleMouseHandler = EditorView.domEventHandlers({
-  mousedown(event, view) {
-    if (deferredMouseEvents.has(event)) {
-      return false;
+function replayMousedownNextFrame(view: EditorView, event: MouseEvent, target: EventTarget): void {
+  const doc = view.contentDOM.ownerDocument;
+  let earlyMouseup: MouseEvent | null = null;
+  const captureEarlyMouseup = (e: MouseEvent) => {
+    earlyMouseup = e;
+  };
+  doc.addEventListener("mouseup", captureEarlyMouseup, { capture: true });
+
+  requestAnimationFrame(() => {
+    doc.removeEventListener("mouseup", captureEarlyMouseup, { capture: true });
+
+    const replayedMousedown = cloneMouseEvent("mousedown", event);
+    deferredMouseEvents.add(replayedMousedown);
+    target.dispatchEvent(replayedMousedown);
+
+    if (earlyMouseup) {
+      target.dispatchEvent(cloneMouseEvent("mouseup", earlyMouseup));
     }
-    const sinceWheel = Date.now() - (view.plugin(wheelTracker)?.lastWheelTime ?? -Infinity);
-    if (sinceWheel >= RECENT_SCROLL_WINDOW_MS) {
-      return false;
-    }
-    replayMousedownNextFrame(view, event, event.target ?? view.contentDOM);
-    return true;
-  },
+  });
+}
+
+/**
+ * `mousedown` handler passed to `EditorView.domEventHandlers`, which — like
+ * the existing `linkClickHandler` in `livePreviewPlugin.ts` — runs before
+ * CodeMirror's own built-in `mousedown` handling, so returning `true` here
+ * pre-empts it for this event only.
+ */
+export function handleScrollSettleMousedown(event: MouseEvent, view: EditorView): boolean {
+  if (deferredMouseEvents.has(event)) {
+    return false;
+  }
+  const sinceWheel = Date.now() - (view.plugin(wheelTracker)?.lastWheelTime ?? -Infinity);
+  if (sinceWheel >= RECENT_SCROLL_WINDOW_MS) {
+    return false;
+  }
+  replayMousedownNextFrame(view, event, event.target ?? view.contentDOM);
+  return true;
+}
+
+export const scrollSettleMouseHandler = EditorView.domEventHandlers({
+  mousedown: handleScrollSettleMousedown,
 });
 
 /**
