@@ -5,6 +5,7 @@ import { setTheme } from "../stores/theme";
 import { toggleExplorerVisible, toggleTerminalVisible } from "../stores/layout";
 import { zoomIn, zoomOut, resetZoom } from "../stores/textSize";
 import { openSearch } from "../search/searchOverlay";
+import { openSettings } from "../stores/settingsOverlay";
 import { get } from "svelte/store";
 
 /**
@@ -15,6 +16,8 @@ import { get } from "svelte/store";
  * `menu:split-terminal` call the same functions their in-app buttons would;
  * `menu:find-in-files` opens the search overlay, guarded on a workspace
  * being open the same way `menu:save` is guarded on an active tab;
+ * `menu:settings` opens the settings dialog unconditionally, since it's
+ * reachable whether or not a workspace is open;
  * `menu:toggle-explorer` and `menu:toggle-terminal` call the same
  * panel-visibility store actions a status-bar button would;
  * `menu:zoom-in`/`menu:zoom-out`/`menu:zoom-reset` call the zoom store's
@@ -23,6 +26,7 @@ import { get } from "svelte/store";
  */
 export async function initMenuBar(onNewTerminalTab: () => void, onSplitTerminal: () => void): Promise<void> {
   await onMenuEvent("menu:open-folder", () => void openWorkspaceFolder());
+  await onMenuEvent("menu:settings", () => openSettings());
   await onMenuEvent("menu:save", () => {
     const active = get(tabsState).activeTabPath;
     if (active) {
