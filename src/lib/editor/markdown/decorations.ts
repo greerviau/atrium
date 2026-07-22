@@ -222,6 +222,60 @@ function decorateCodeBlock(
 }
 
 /**
+ * Decorates a `Blockquote` node's full line span with `cm-blockquote`,
+ * modeled on `decorateCodeBlock`'s line-span loop. Computed from the node's
+ * own `[from, to)` range rather than from `QuoteMark` positions, because a
+ * lazy-continuation line (no marker of its own, see `decorateQuoteMark`'s
+ * docstring) is still part of the block and still needs its left
+ * border/indent.
+ */
+function decorateBlockquote(state: EditorState, node: SyntaxNode, out: Range<Decoration>[]): void {
+  const startLine = state.doc.lineAt(node.from).number;
+  const endLine = state.doc.lineAt(node.to).number;
+  for (let n = startLine; n <= endLine; n++) {
+    out.push(Decoration.line({ class: CLASS.blockquote }).range(state.doc.line(n).from));
+  }
+}
+
+/**
+ * Hides one blockquote `>` marker (plus its optional following space —
+ * unlike an ATX heading's `#`, the grammar doesn't require a space after
+ * `>`, so it's only consumed when actually present), gated per-line through
+ * `isUnderCursor` rather than per-node: a `QuoteMark` is always exactly one
+ * character on exactly one line, so gating each one individually already
+ * produces the right per-line granularity for a blockquote spanning many
+ * lines, without the fenced-code precedent's "reveal the whole block" being
+ * a much bigger disruption here.
+ *
+ * Skips itself when `decorateTableRow`'s own leading "gap" decoration
+ * already owns this marker's span — a table row's gap is anchored at the
+ * physical line's start specifically to swallow a preceding `>` marker or
+ * list indent, so a second, independent replace decoration here would
+ * overlap it. This is true exactly when the marker's parent is `Table`
+ * (the per-row-marker case) or its next sibling is a `Table` starting on
+ * the same physical line (the lazy-leading-marker case).
+ */
+function decorateQuoteMark(state: EditorState, node: SyntaxNode, out: Range<Decoration>[], hasFocus: boolean): void {
+  if (node.parent?.type.name === "Table") {
+    return;
+  }
+  const next = node.nextSibling;
+  if (
+    next &&
+    next.type.name === "Table" &&
+    state.doc.lineAt(next.from).number === state.doc.lineAt(node.from).number
+  ) {
+    return;
+  }
+  if (isUnderCursor(state, node.from, node.to, hasFocus)) {
+    return;
+  }
+  const hasTrailingSpace = state.doc.sliceString(node.to, node.to + 1) === " ";
+  const hideTo = hasTrailingSpace ? node.to + 1 : node.to;
+  out.push(Decoration.replace({}).range(node.from, hideTo));
+}
+
+/**
  * The Mermaid source for `node`, but only when it should actually be
  * replaced by a diagram widget: tagged ` ```mermaid ` and the cursor is
  * elsewhere. `null` covers both "not a mermaid block" and "mermaid block
@@ -526,6 +580,14 @@ export function buildDecorations(
           return;
         }
 
+        if (name === "Blockquote") {
+          // Bare `return` (not `false`) so descent continues into nested
+          // content — paragraphs, lists, tables, nested blockquotes all
+          // still need their own decoration, same reasoning as Table above.
+          decorateBlockquote(state, ref.node, decorations);
+          return;
+        }
+
         if (name in HEADING_LEVELS) {
           decorateHeading(state, ref.node, HEADING_LEVELS[name], decorations, hasFocus);
           return;
@@ -543,6 +605,9 @@ export function buildDecorations(
             break;
           case "InlineCode":
             decorateWrapped(state, ref.node, "CodeMark", CLASS.inlineCode, decorations, hasFocus);
+            break;
+          case "QuoteMark":
+            decorateQuoteMark(state, ref.node, decorations, hasFocus);
             break;
           case "Link":
             if (isRevealTarget(state, ref.node, hasFocus)) {

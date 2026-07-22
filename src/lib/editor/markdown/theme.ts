@@ -20,6 +20,7 @@ export const CLASS = {
   tableAlignCenter: "cm-table-align-center",
   tableAlignRight: "cm-table-align-right",
   codeBlock: "cm-code-block",
+  blockquote: "cm-blockquote",
   mermaidDiagram: "cm-mermaid-diagram",
   mermaidError: "cm-mermaid-error",
 } as const;

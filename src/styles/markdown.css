@@ -86,6 +86,11 @@
   box-sizing: content-box;
 }
 
+.cm-blockquote {
+  border-left: 3px solid var(--atrium-border);
+  padding-left: 0.6em;
+}
+
 /* Block-level widget replacing a `mermaid` fenced code block. `text-align:
    center` centers the rendered <svg>. A diagram wider than the pane isn't
    clipped or wrapped — like a long code line or table row above, it scrolls
