@@ -316,30 +316,129 @@ describe("buildDecorations: tables", () => {
     expect(cursor).toBe(headerLine.to);
   });
 
-  it("reveals raw pipes on the row under the cursor while other rows stay decorated", () => {
-    const state = stateFor(alignedDoc, alignedDoc.indexOf("Alice"));
+  it("reveals raw markdown for only the cell under the cursor, keeping sibling cells decorated", () => {
+    const engineerFrom = alignedDoc.indexOf("Engineer");
+    const engineerTo = engineerFrom + "Engineer".length;
+    const state = stateFor(alignedDoc, engineerFrom + 1); // cursor inside "Engineer"
     const decos = collect(state);
     const aliceLine = state.doc.line(3);
-    // The cursor's row keeps its cm-table-row container...
+
+    // The row still keeps its cm-table-row container.
     expect(decos.some((d) => d.class?.split(" ").includes("cm-table-row") && d.from === aliceLine.from)).toBe(true);
-    // ...but has no cell marks or hidden-gap replacements inside it.
+    expect(state.doc.sliceString(aliceLine.from, aliceLine.to)).toBe("| Alice | Engineer | 92 |");
+
+    // "Engineer" itself has no cell mark...
+    expect(
+      decos.some(
+        (d) => d.class?.split(" ").includes("cm-table-cell") && d.from === engineerFrom && d.to === engineerTo,
+      ),
+    ).toBe(false);
+
+    // ...but "Alice" and "92" — the other two cells on the same row — keep theirs.
+    const aliceFrom = alignedDoc.indexOf("Alice");
+    const aliceTo = aliceFrom + "Alice".length;
+    expect(
+      decos.some((d) => d.class?.split(" ").includes("cm-table-cell") && d.from === aliceFrom && d.to === aliceTo),
+    ).toBe(true);
+    const scoreFrom = alignedDoc.lastIndexOf("92");
+    const scoreTo = scoreFrom + "92".length;
     expect(
       decos.some(
         (d) =>
-          d.from >= aliceLine.from &&
-          d.to <= aliceLine.to &&
-          (d.class?.split(" ").includes("cm-table-cell") || (d.isReplace && !d.class)),
+          d.class?.split(" ").includes("cm-table-cell") &&
+          d.class?.split(" ").includes("cm-table-align-right") &&
+          d.from === scoreFrom &&
+          d.to === scoreTo,
       ),
-    ).toBe(false);
-    expect(state.doc.sliceString(aliceLine.from, aliceLine.to)).toBe("| Alice | Engineer | 92 |");
+    ).toBe(true);
+
+    // The gaps bordering "Engineer" (on both sides) are revealed, not hidden.
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === aliceTo && d.to === engineerFrom)).toBe(false);
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === engineerTo && d.to === scoreFrom)).toBe(false);
 
     // Every other row is still fully decorated.
     const bobLine = state.doc.line(4);
     expect(decos.some((d) => d.class?.split(" ").includes("cm-table-header-cell") && d.to <= state.doc.line(1).to))
       .toBe(true);
-    expect(decos.some((d) => d.class?.split(" ").includes("cm-table-cell") && d.from >= bobLine.from && d.to <= bobLine.to)).toBe(
-      true,
-    );
+    expect(
+      decos.some((d) => d.class?.split(" ").includes("cm-table-cell") && d.from >= bobLine.from && d.to <= bobLine.to),
+    ).toBe(true);
+  });
+
+  it("reveals the leading gap when the cursor is in the first cell of a row", () => {
+    const aliceFrom = alignedDoc.indexOf("Alice");
+    const aliceTo = aliceFrom + "Alice".length;
+    const state = stateFor(alignedDoc, aliceFrom + 1); // cursor inside "Alice"
+    const decos = collect(state);
+    const aliceLine = state.doc.line(3);
+
+    // No hidden-gap replacement between the start of the row and "Alice".
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === aliceLine.from && d.to === aliceFrom)).toBe(false);
+    // "Alice" itself has no cell mark.
+    expect(
+      decos.some((d) => d.class?.split(" ").includes("cm-table-cell") && d.from === aliceFrom && d.to === aliceTo),
+    ).toBe(false);
+
+    // "Engineer" still gets its cell mark — the gap shared with "Alice" reveals,
+    // but "Engineer" itself stays decorated.
+    const engineerFrom = alignedDoc.indexOf("Engineer");
+    const engineerTo = engineerFrom + "Engineer".length;
+    expect(
+      decos.some(
+        (d) => d.class?.split(" ").includes("cm-table-cell") && d.from === engineerFrom && d.to === engineerTo,
+      ),
+    ).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === aliceTo && d.to === engineerFrom)).toBe(false);
+  });
+
+  it("reveals the trailing gap to end of line when the cursor is in the last cell of a row", () => {
+    const scoreFrom = alignedDoc.lastIndexOf("92");
+    const scoreTo = scoreFrom + "92".length;
+    const state = stateFor(alignedDoc, scoreFrom + 1); // cursor inside "92"
+    const decos = collect(state);
+    const aliceLine = state.doc.line(3);
+
+    // "92" itself has no cell mark.
+    expect(
+      decos.some((d) => d.class?.split(" ").includes("cm-table-cell") && d.from === scoreFrom && d.to === scoreTo),
+    ).toBe(false);
+    // No hidden-gap replacement between "92" and the end of the line.
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === scoreTo && d.to === aliceLine.to)).toBe(false);
+
+    // "Engineer" still gets its cell mark; the gap shared with "92" reveals.
+    const engineerFrom = alignedDoc.indexOf("Engineer");
+    const engineerTo = engineerFrom + "Engineer".length;
+    expect(
+      decos.some(
+        (d) => d.class?.split(" ").includes("cm-table-cell") && d.from === engineerFrom && d.to === engineerTo,
+      ),
+    ).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === engineerTo && d.to === scoreFrom)).toBe(false);
+  });
+
+  it("treats a cursor exactly on a cell/gap boundary as touching the bordering cell", () => {
+    const aliceFrom = alignedDoc.indexOf("Alice");
+    const aliceTo = aliceFrom + "Alice".length;
+    // Cursor sits exactly at "Alice"'s end offset — the shared boundary between
+    // the cell and the gap that follows it.
+    const state = stateFor(alignedDoc, aliceTo);
+    const decos = collect(state);
+
+    // "Alice" is treated as under the cursor (boundary is inclusive)...
+    expect(
+      decos.some((d) => d.class?.split(" ").includes("cm-table-cell") && d.from === aliceFrom && d.to === aliceTo),
+    ).toBe(false);
+    // ...and the gap immediately after it reveals too.
+    const engineerFrom = alignedDoc.indexOf("Engineer");
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === aliceTo && d.to === engineerFrom)).toBe(false);
+
+    // "Engineer" itself is unaffected — the boundary sits before its own range.
+    const engineerTo = engineerFrom + "Engineer".length;
+    expect(
+      decos.some(
+        (d) => d.class?.split(" ").includes("cm-table-cell") && d.from === engineerFrom && d.to === engineerTo,
+      ),
+    ).toBe(true);
   });
 
   it("keeps two separate tables' alignment independent", () => {
