@@ -62,9 +62,25 @@ const mermaidWidgetField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
-/** Single click handler for every `cm-link` mark, reading the URL/document path stashed in its attributes. */
+/**
+ * Modifier+click (Cmd on macOS, Ctrl elsewhere — the platform convention for
+ * "open this link") on a `cm-link` mark navigates instead of placing the
+ * cursor there. This runs on `mousedown`, not `click`: CodeMirror's own
+ * built-in mousedown handler places the cursor synchronously and runs
+ * *after* plugin-registered `domEventHandlers` (base handlers are appended
+ * last), so intercepting here and returning `true` skips it entirely.
+ * Skipping it matters because the built-in handler would otherwise move the
+ * cursor onto the link's line, which drops its `cm-link` decoration back to
+ * raw `[text](url)` source (`decorations.ts`'s `Link` case) before a `click`
+ * handler ever got a chance to see the mark. A non-modifier click falls
+ * through unhandled here, so it still reaches that built-in handler and
+ * gets the normal cursor-placement/raw-source-reveal behavior.
+ */
 const linkClickHandler = EditorView.domEventHandlers({
-  click(event) {
+  mousedown(event) {
+    if (event.button !== 0 || !(event.metaKey || event.ctrlKey)) {
+      return false;
+    }
     const target = event.target as HTMLElement | null;
     const link = target?.closest<HTMLElement>(".cm-link");
     if (!link) {
@@ -75,6 +91,7 @@ const linkClickHandler = EditorView.domEventHandlers({
     if (!url || documentPath === undefined) {
       return false;
     }
+    event.preventDefault();
     handleLinkClick(url, documentPath);
     return true;
   },
