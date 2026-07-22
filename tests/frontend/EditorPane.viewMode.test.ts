@@ -1,9 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { tick } from "svelte";
 import { render, cleanup } from "@testing-library/svelte";
-import { Compartment } from "@codemirror/state";
+import { Compartment, type StateEffect } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
 import EditorPane from "../../src/lib/editor/EditorPane.svelte";
 import { tabsState, toggleMarkdownViewMode, markDirty, type Tab } from "../../src/lib/stores/tabs";
+
+// `StateEffect.type` is a real runtime field (used internally by `.is()`)
+// but isn't part of `@codemirror/state`'s public `.d.ts`, hence the cast.
+function effectTypeOf(effect: StateEffect<unknown> | undefined): unknown {
+  return (effect as unknown as { type: unknown } | undefined)?.type;
+}
 
 const FILE_PATH = "/notes.md";
 // Blank first line keeps the default cursor (position 0, on line 1) off the
@@ -87,5 +94,69 @@ describe("EditorPane: markdown view-mode toggle", () => {
     toggleMarkdownViewMode(FILE_PATH);
     await tick();
     expect(reconfigureSpy.mock.calls.length).toBe(callsAfterMount + 1);
+  });
+
+  // Regression guard for issue #87 (stale/incomplete decorations after
+  // toggling back to rendered view). The actual bug is a CodeMirror viewport
+  // staleness that only manifests through real DOM layout: without real,
+  // mode-dependent line-height measurements, jsdom's viewport sizing ends up
+  // mode-independent regardless of whether the fix is present, so a
+  // decoration-coverage comparison here can't reliably distinguish fixed
+  // from unfixed code (confirmed empirically — see PR discussion). Reliably
+  // mocking CodeMirror's real measurement path (`getBoundingClientRect` plus
+  // the `Range` APIs it also depends on) to recreate the divergence isn't
+  // practical under jsdom either. This test instead verifies the fix's
+  // mechanism directly and deterministically. Two things must both hold:
+  //
+  // 1. The compartment reconfigure and a scroll-anchoring effect
+  //    (`EditorView.scrollIntoView`, anchored on the selection head) are
+  //    dispatched in the *same* transaction — the thing that forces
+  //    `ViewState.update()` to recompute the viewport instead of carrying
+  //    over a stale one. `view.scrollSnapshot()`'s anchor is constructed to
+  //    already sit inside the current viewport, so it doesn't reliably force
+  //    this recompute on its own — the head does, since it's off-screen in
+  //    the case that matters (scrolled away from the cursor without moving
+  //    it, which defaults to position 0 on open).
+  // 2. A further dispatch with a scroll-anchoring effect and no reconfigure
+  //    follows — a `scrollSnapshot()` captured before the toggle, which
+  //    supersedes the head-anchored target before it's ever applied to the
+  //    real DOM, so the visible scroll position lands where the user
+  //    actually was, not at the cursor.
+  //
+  // Confirming the actual decoration outcome, and that the real DOM scroll
+  // position doesn't visibly jump, still requires a real browser (see
+  // `tests/e2e`) — `EditorView`'s scroll application is itself gated behind
+  // a real, nonzero `editorHeight` that jsdom never provides.
+  it("forces the viewport recompute via an off-screen scroll target, then supersedes it with the actual scroll position (issue #87)", async () => {
+    // Installed before `render`, like the `Compartment.prototype.reconfigure`
+    // spy above — installing it after `render` misses calls the component's
+    // own `@codemirror/view` module instance makes (a Vite module-resolution
+    // quirk this file already works around for the reconfigure spy).
+    const dispatchSpy = vi.spyOn(EditorView.prototype, "dispatch");
+    render(EditorPane, { filePath: FILE_PATH });
+    await tick();
+    const callsAfterMount = dispatchSpy.mock.calls.length;
+
+    toggleMarkdownViewMode(FILE_PATH);
+    await tick();
+
+    // `EditorView.scrollIntoView` and `view.scrollSnapshot()` both produce a
+    // `StateEffect` of the same internal type, so this matches either.
+    const scrollAnchorType = effectTypeOf(EditorView.scrollIntoView(0, {}));
+    const reconfigureType = effectTypeOf(Compartment.prototype.reconfigure.call(new Compartment(), []));
+
+    const toggleCalls = dispatchSpy.mock.calls.slice(callsAfterMount).map(([spec]) => {
+      const effects = Array.isArray(spec?.effects) ? spec.effects : spec?.effects ? [spec.effects] : [];
+      return {
+        hasReconfigure: effects.some((effect) => effectTypeOf(effect as StateEffect<unknown> | undefined) === reconfigureType),
+        hasScrollAnchor: effects.some((effect) => effectTypeOf(effect as StateEffect<unknown> | undefined) === scrollAnchorType),
+      };
+    });
+
+    const forcingDispatch = toggleCalls.find((call) => call.hasReconfigure && call.hasScrollAnchor);
+    expect(forcingDispatch).toBeDefined();
+
+    const supersedingDispatch = toggleCalls.find((call) => !call.hasReconfigure && call.hasScrollAnchor);
+    expect(supersedingDispatch).toBeDefined();
   });
 });
