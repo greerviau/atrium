@@ -317,84 +317,88 @@
           style={terminalPosition === "bottom" ? `height: ${terminalHeight}px` : `width: ${terminalWidth}px`}
         >
           <div class="tab-strip">
-            {#each terminalTabs as tab (tab.id)}
-              <div
-                class="tab"
-                class:active={tab.id === activeTabId}
-                onclick={() => (activeTabId = tab.id)}
-                onkeydown={(e) => e.key === "Enter" && (activeTabId = tab.id)}
-                role="tab"
-                tabindex="0"
-                aria-selected={tab.id === activeTabId}
-              >
-                <span class="tab-name" title={findLeaf(tab.paneTree, tab.activePaneId)?.title}>
-                  {findLeaf(tab.paneTree, tab.activePaneId)?.title ?? ""}
-                </span>
-                <button
-                  class="tab-close"
-                  onclick={(e) => {
-                    e.stopPropagation();
-                    closeTerminalTab(tab.id);
-                  }}
-                  aria-label="Close terminal"
+            <div class="tab-list">
+              {#each terminalTabs as tab (tab.id)}
+                <div
+                  class="tab"
+                  class:active={tab.id === activeTabId}
+                  onclick={() => (activeTabId = tab.id)}
+                  onkeydown={(e) => e.key === "Enter" && (activeTabId = tab.id)}
+                  role="tab"
+                  tabindex="0"
+                  aria-selected={tab.id === activeTabId}
                 >
-                  ×
-                </button>
-              </div>
-            {/each}
-            {#if activeTab && activeTab.paneTree.type === "leaf"}
-              <div class="dock-controls" role="group" aria-label="Split terminal">
-                <button
-                  class="dock-btn"
-                  onclick={() => splitActivePane("row")}
-                  aria-label="Split terminal right"
-                  title="Split right (Cmd/Ctrl+\)"
-                >
-                  ⬒
-                </button>
-                <button
-                  class="dock-btn"
-                  onclick={() => splitActivePane("column")}
-                  aria-label="Split terminal down"
-                  title="Split down"
-                >
-                  ⬓
-                </button>
-              </div>
-            {/if}
-            <div class="dock-controls" role="group" aria-label="Terminal dock position">
-              <button
-                class="dock-btn"
-                class:active={terminalPosition === "bottom"}
-                onclick={() => setTerminalPosition("bottom")}
-                aria-label="Dock terminal to bottom"
-                aria-pressed={terminalPosition === "bottom"}
-                title="Dock bottom"
-              >
-                ⬇
-              </button>
-              <button
-                class="dock-btn"
-                class:active={terminalPosition === "left"}
-                onclick={() => setTerminalPosition("left")}
-                aria-label="Dock terminal to left"
-                aria-pressed={terminalPosition === "left"}
-                title="Dock left"
-              >
-                ⬅
-              </button>
-              <button
-                class="dock-btn"
-                class:active={terminalPosition === "right"}
-                onclick={() => setTerminalPosition("right")}
-                aria-label="Dock terminal to right"
-                aria-pressed={terminalPosition === "right"}
-                title="Dock right"
-              >
-                ➡
-              </button>
+                  <span class="tab-name" title={findLeaf(tab.paneTree, tab.activePaneId)?.title}>
+                    {findLeaf(tab.paneTree, tab.activePaneId)?.title ?? ""}
+                  </span>
+                  <button
+                    class="tab-close"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      closeTerminalTab(tab.id);
+                    }}
+                    aria-label="Close terminal"
+                  >
+                    ×
+                  </button>
+                </div>
+              {/each}
+              <button class="tab new-tab" onclick={newTerminalTab}>+</button>
             </div>
-            <button class="tab new-tab" onclick={newTerminalTab}>+</button>
+            <div class="tab-strip-controls">
+              {#if activeTab && activeTab.paneTree.type === "leaf"}
+                <div class="dock-controls" role="group" aria-label="Split terminal">
+                  <button
+                    class="dock-btn"
+                    onclick={() => splitActivePane("row")}
+                    aria-label="Split terminal right"
+                    title="Split right (Cmd/Ctrl+\)"
+                  >
+                    ⬒
+                  </button>
+                  <button
+                    class="dock-btn"
+                    onclick={() => splitActivePane("column")}
+                    aria-label="Split terminal down"
+                    title="Split down"
+                  >
+                    ⬓
+                  </button>
+                </div>
+              {/if}
+              <div class="dock-controls" role="group" aria-label="Terminal dock position">
+                <button
+                  class="dock-btn"
+                  class:active={terminalPosition === "bottom"}
+                  onclick={() => setTerminalPosition("bottom")}
+                  aria-label="Dock terminal to bottom"
+                  aria-pressed={terminalPosition === "bottom"}
+                  title="Dock bottom"
+                >
+                  ⬇
+                </button>
+                <button
+                  class="dock-btn"
+                  class:active={terminalPosition === "left"}
+                  onclick={() => setTerminalPosition("left")}
+                  aria-label="Dock terminal to left"
+                  aria-pressed={terminalPosition === "left"}
+                  title="Dock left"
+                >
+                  ⬅
+                </button>
+                <button
+                  class="dock-btn"
+                  class:active={terminalPosition === "right"}
+                  onclick={() => setTerminalPosition("right")}
+                  aria-label="Dock terminal to right"
+                  aria-pressed={terminalPosition === "right"}
+                  title="Dock right"
+                >
+                  ➡
+                </button>
+              </div>
+            </div>
           </div>
           <div class="terminal-panes">
             {#each terminalTabs as tab (tab.id)}
@@ -476,7 +480,17 @@
   .tab-strip {
     display: flex;
     border-bottom: 1px solid var(--atrium-border);
+    flex-shrink: 0;
+  }
+  .tab-list {
+    display: flex;
+    flex: 1;
+    min-width: 0;
     overflow-x: auto;
+  }
+  .tab-strip-controls {
+    display: flex;
+    align-items: center;
     flex-shrink: 0;
   }
   .tab {
