@@ -3,11 +3,16 @@
   import { toggleExpanded } from "../stores/fileTree";
   import { openFile } from "../stores/tabs";
   import { openContextMenu } from "./contextMenu";
+  import { editingPath, pendingCreate, commitRename, commitCreate } from "./inlineEdit";
   import ExplorerIcon from "./icons/ExplorerIcon.svelte";
+  import InlineNameInput from "./InlineNameInput.svelte";
+  import NewEntryRow from "./NewEntryRow.svelte";
   import FileTreeNode from "./FileTreeNode.svelte";
   import { EXPLORER_PATH_DRAG_TYPE } from "../util/dragDropTypes";
 
   let { node, depth = 0 }: { node: TreeNode; depth?: number } = $props();
+
+  let isEditing = $derived($editingPath === node.entry.path);
 
   function onClick(): void {
     if (node.entry.isDir) {
@@ -41,21 +46,51 @@
   <div
     class="row"
     style={`padding-left: ${depth * 14 + 6}px`}
-    onclick={onClick}
-    onkeydown={onKeydown}
-    oncontextmenu={onContextMenu}
-    draggable="true"
-    ondragstart={onDragStart}
+    onclick={isEditing ? undefined : onClick}
+    onkeydown={isEditing ? undefined : onKeydown}
+    oncontextmenu={isEditing ? undefined : onContextMenu}
+    draggable={!isEditing}
+    ondragstart={isEditing ? undefined : onDragStart}
     role="treeitem"
     aria-selected="false"
     aria-expanded={node.entry.isDir ? node.expanded : undefined}
     tabindex="0"
   >
     <ExplorerIcon entry={node.entry} expanded={node.expanded} />
-    <span class="name" class:symlink={node.entry.isSymlink}>{node.entry.name}</span>
+    {#if isEditing}
+      <InlineNameInput
+        initialValue={node.entry.name}
+        selectBaseNameOnly={!node.entry.isDir}
+        onCommit={(value) => commitRename(node.entry.path, value)}
+        onCancel={() => editingPath.set(null)}
+      />
+    {:else}
+      <span class="name" class:symlink={node.entry.isSymlink}>{node.entry.name}</span>
+    {/if}
   </div>
   {#if node.entry.isDir && node.expanded && node.children}
-    {#each node.children as child (child.entry.path)}
+    {@const splitIdx = node.children.findIndex((c) => !c.entry.isDir)}
+    {@const dirEnd = splitIdx === -1 ? node.children.length : splitIdx}
+    {#if $pendingCreate?.parentPath === node.entry.path && $pendingCreate.isDir}
+      <NewEntryRow
+        depth={depth + 1}
+        isDir={true}
+        onCommit={(v) => commitCreate(node.entry.path, true, v)}
+        onCancel={() => pendingCreate.set(null)}
+      />
+    {/if}
+    {#each node.children.slice(0, dirEnd) as child (child.entry.path)}
+      <FileTreeNode node={child} depth={depth + 1} />
+    {/each}
+    {#if $pendingCreate?.parentPath === node.entry.path && !$pendingCreate.isDir}
+      <NewEntryRow
+        depth={depth + 1}
+        isDir={false}
+        onCommit={(v) => commitCreate(node.entry.path, false, v)}
+        onCancel={() => pendingCreate.set(null)}
+      />
+    {/if}
+    {#each node.children.slice(dirEnd) as child (child.entry.path)}
       <FileTreeNode node={child} depth={depth + 1} />
     {/each}
   {/if}

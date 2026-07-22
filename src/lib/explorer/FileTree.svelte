@@ -1,17 +1,15 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { fileTree, loadRoot } from "../stores/fileTree";
+  import { fileTree, loadRoot, loadChildren } from "../stores/fileTree";
   import { workspace } from "../stores/workspace";
   import {
     contextMenu,
     closeContextMenu,
     openContextMenu,
-    newFile,
-    newFolder,
-    rename,
     deletePath,
     revealInFinder,
   } from "./contextMenu";
+  import { editingPath, pendingCreate, settleActiveEdit } from "./inlineEdit";
   import FileTreeNode from "./FileTreeNode.svelte";
   import ContextMenu from "../ui/ContextMenu.svelte";
   import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
@@ -24,12 +22,6 @@
   });
   onDestroy(() => detach?.());
 
-  let promptState = $state<
-    | { kind: "new-file"; dir: string; value: string }
-    | { kind: "new-folder"; dir: string; value: string }
-    | { kind: "rename"; path: string; value: string }
-    | null
-  >(null);
   let deleteTarget = $state<{ path: string; isDir: boolean } | null>(null);
   let isRootContextMenu = $derived($contextMenu?.path === $fileTree.root?.entry.path);
 
@@ -44,25 +36,39 @@
     return idx <= 0 ? path : path.slice(0, idx);
   }
 
-  function startNewFile(): void {
-    if (!$contextMenu) return;
-    const dir = $contextMenu.isDir ? $contextMenu.path : dirOf($contextMenu.path);
-    promptState = { kind: "new-file", dir, value: "" };
+  async function beginCreate(dir: string, isDir: boolean): Promise<void> {
     closeContextMenu();
+    settleActiveEdit();
+    try {
+      // Ensures the target directory is expanded/loaded so the new row is visible.
+      await loadChildren(dir);
+    } catch (err) {
+      console.error("atrium: failed to load directory for new entry", err);
+      return;
+    }
+    editingPath.set(null);
+    pendingCreate.set({ parentPath: dir, isDir });
   }
 
-  function startNewFolder(): void {
+  async function startNewFile(): Promise<void> {
     if (!$contextMenu) return;
     const dir = $contextMenu.isDir ? $contextMenu.path : dirOf($contextMenu.path);
-    promptState = { kind: "new-folder", dir, value: "" };
-    closeContextMenu();
+    await beginCreate(dir, false);
+  }
+
+  async function startNewFolder(): Promise<void> {
+    if (!$contextMenu) return;
+    const dir = $contextMenu.isDir ? $contextMenu.path : dirOf($contextMenu.path);
+    await beginCreate(dir, true);
   }
 
   function startRename(): void {
     if (!$contextMenu) return;
-    const name = $contextMenu.path.replace(/\\/g, "/").split("/").pop() ?? "";
-    promptState = { kind: "rename", path: $contextMenu.path, value: name };
+    const path = $contextMenu.path;
     closeContextMenu();
+    settleActiveEdit();
+    pendingCreate.set(null);
+    editingPath.set(path);
   }
 
   function startDelete(): void {
@@ -76,22 +82,6 @@
     const path = $contextMenu.path;
     closeContextMenu();
     await revealInFinder(path);
-  }
-
-  async function submitPrompt(): Promise<void> {
-    const current = promptState;
-    if (!current || current.value.trim() === "") {
-      promptState = null;
-      return;
-    }
-    if (current.kind === "new-file") {
-      await newFile(current.dir, current.value.trim());
-    } else if (current.kind === "new-folder") {
-      await newFolder(current.dir, current.value.trim());
-    } else {
-      await rename(current.path, current.value.trim());
-    }
-    promptState = null;
   }
 
   async function confirmDelete(): Promise<void> {
@@ -128,26 +118,6 @@
     {/if}
     <button role="menuitem" onclick={() => void reveal()}>Reveal in Finder</button>
   </ContextMenu>
-{/if}
-
-{#if promptState}
-  <div class="modal-backdrop">
-    <div class="modal">
-      <p>
-        {#if promptState.kind === "new-file"}New file name{:else if promptState.kind === "new-folder"}New folder name{:else}Rename to{/if}
-      </p>
-      <!-- svelte-ignore a11y_autofocus -->
-      <input
-        bind:value={promptState.value}
-        onkeydown={(e) => e.key === "Enter" && submitPrompt()}
-        autofocus
-      />
-      <div class="actions">
-        <button onclick={() => (promptState = null)}>Cancel</button>
-        <button onclick={submitPrompt}>OK</button>
-      </div>
-    </div>
-  </div>
 {/if}
 
 {#if deleteTarget}
