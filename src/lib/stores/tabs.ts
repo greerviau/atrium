@@ -39,25 +39,48 @@ export const tabsState = writable<TabsState>({ tabs: [], activeTabPath: null });
  */
 export const saveRequest = writable<string | null>(null);
 
-const pendingSaveResolvers = new Map<string, () => void>();
+interface SaveWaiter {
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
+
+// A list per path, not a single slot: `saveRequest.set(path)` is a no-op
+// (via svelte/store's equality check) while a save for that same path is
+// already in flight, so a second `requestSave(path)` call that lands before
+// the first resolves (e.g. the native Cmd+S menu firing mid-`Save All`)
+// rides the same underlying save rather than triggering a second one — but
+// still needs its own waiter recorded so it resolves/rejects too, instead
+// of overwriting (and stranding) the first caller's.
+const pendingSaveResolvers = new Map<string, SaveWaiter[]>();
 
 /**
  * Requests a save for `path` and resolves once the owning `EditorPane` has
- * actually finished saving (via `notifySaveComplete`). The `File > Save`
- * menu caller doesn't need this and can keep ignoring the returned promise;
- * the unsaved-changes close flow awaits it to sequence "save, then close".
+ * actually finished saving (via `notifySaveComplete`), or rejects if the
+ * save failed (via `notifySaveFailed`). The `File > Save` menu caller
+ * doesn't need this and can keep ignoring the returned promise; the
+ * unsaved-changes close flow awaits it to sequence "save, then close".
  */
 export function requestSave(path: string): Promise<void> {
   saveRequest.set(path);
-  return new Promise((resolve) => {
-    pendingSaveResolvers.set(path, resolve);
+  return new Promise((resolve, reject) => {
+    const waiters = pendingSaveResolvers.get(path) ?? [];
+    waiters.push({ resolve, reject });
+    pendingSaveResolvers.set(path, waiters);
   });
 }
 
-/** Resolves the pending `requestSave` promise for `path`, if any. */
+/** Resolves every pending `requestSave` promise for `path`, if any. */
 export function notifySaveComplete(path: string): void {
-  pendingSaveResolvers.get(path)?.();
+  const waiters = pendingSaveResolvers.get(path);
   pendingSaveResolvers.delete(path);
+  waiters?.forEach((w) => w.resolve());
+}
+
+/** Rejects every pending `requestSave` promise for `path`, if any. */
+export function notifySaveFailed(path: string, error: unknown): void {
+  const waiters = pendingSaveResolvers.get(path);
+  pendingSaveResolvers.delete(path);
+  waiters?.forEach((w) => w.reject(error));
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   requestCloseTab,
   requestSave,
   notifySaveComplete,
+  notifySaveFailed,
   type Tab,
 } from "../../src/lib/stores/tabs";
 import { closePrompt } from "../../src/lib/stores/closePrompt";
@@ -270,5 +271,47 @@ describe("requestSave / notifySaveComplete", () => {
     await Promise.resolve();
 
     expect(resolved).toBe(true);
+  });
+
+  it("resolves every concurrent requestSave call for the same path from a single notifySaveComplete", async () => {
+    // Regresses a bug where a second requestSave(path) call, arriving while
+    // the first is still in flight for that same path (e.g. the native
+    // Cmd+S menu firing mid-"Save All"), overwrote the first call's
+    // resolver and left it hanging forever once the underlying save
+    // completed.
+    let firstResolved = false;
+    let secondResolved = false;
+    const first = requestSave("/a.md").then(() => {
+      firstResolved = true;
+    });
+    const second = requestSave("/a.md").then(() => {
+      secondResolved = true;
+    });
+
+    notifySaveComplete("/a.md");
+    await first;
+    await second;
+
+    expect(firstResolved).toBe(true);
+    expect(secondResolved).toBe(true);
+  });
+
+  it("rejects every concurrent requestSave call for the same path from a single notifySaveFailed", async () => {
+    const error = new Error("disk full");
+    let firstError: unknown;
+    let secondError: unknown;
+    const first = requestSave("/a.md").catch((err: unknown) => {
+      firstError = err;
+    });
+    const second = requestSave("/a.md").catch((err: unknown) => {
+      secondError = err;
+    });
+
+    notifySaveFailed("/a.md", error);
+    await first;
+    await second;
+
+    expect(firstError).toBe(error);
+    expect(secondError).toBe(error);
   });
 });

@@ -11,6 +11,7 @@
     clearPendingSelection,
     toggleMarkdownViewMode,
     notifySaveComplete,
+    notifySaveFailed,
   } from "../stores/tabs";
   import { theme as themeStore } from "../stores/theme";
   import { buildCmTheme, buildHighlightStyle } from "../theme/cmTheme";
@@ -229,10 +230,15 @@
 
   $effect(() => {
     if ($saveRequest === filePath) {
-      void save().then(() => {
-        saveRequest.set(null);
-        notifySaveComplete(filePath);
-      });
+      void save()
+        .then(() => {
+          saveRequest.set(null);
+          notifySaveComplete(filePath);
+        })
+        .catch((err: unknown) => {
+          saveRequest.set(null);
+          notifySaveFailed(filePath, err);
+        });
     }
   });
 </script>
