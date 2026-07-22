@@ -902,6 +902,188 @@ describe("buildDecorations: code blocks", () => {
   });
 });
 
+// Regression coverage for issues #140/#137 (duplicates): a blockquote used
+// to get no live-preview treatment at all — no border/indent and the raw
+// `>` marker left as bare text. See decorations.ts's `decorateBlockquote`/
+// `decorateQuoteMark` for the design this covers.
+describe("buildDecorations: blockquotes", () => {
+  it("gives a single-line blockquote's line cm-blockquote and hides the marker plus its trailing space, cursor elsewhere", () => {
+    const doc = "> quoted text\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const decos = collect(state);
+    const line = state.doc.line(1);
+    expect(decos.some((d) => d.class === "cm-blockquote" && d.from === line.from)).toBe(true);
+    const hidden = decos.find((d) => d.isReplace && !d.class && d.from === line.from);
+    expect(hidden).toBeTruthy();
+    expect(state.doc.sliceString(hidden!.from, hidden!.to)).toBe("> ");
+  });
+
+  it("reveals the marker (leaves it un-hidden) when the cursor is on the blockquote's line", () => {
+    const doc = "> quoted text\nafter";
+    const state = stateFor(doc, doc.indexOf("quoted"));
+    const decos = collect(state);
+    const line = state.doc.line(1);
+    expect(decos.some((d) => d.class === "cm-blockquote" && d.from === line.from)).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === line.from)).toBe(false);
+    expect(state.doc.toString()).toContain("> quoted text");
+  });
+
+  it("doesn't eat the first content character when there's no space after the marker", () => {
+    const doc = ">no-space-here\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const decos = collect(state);
+    const line = state.doc.line(1);
+    const hidden = decos.find((d) => d.isReplace && !d.class && d.from === line.from);
+    expect(hidden).toBeTruthy();
+    expect(state.doc.sliceString(hidden!.from, hidden!.to)).toBe(">");
+    expect(state.doc.sliceString(hidden!.to, line.to)).toBe("no-space-here");
+  });
+
+  it("decorates both lines of a two-line blockquote paragraph, revealing only the cursor's own line's marker", () => {
+    const doc = "> line one\n> line two";
+    const state = stateFor(doc, doc.indexOf("line one"));
+    const decos = collect(state);
+    const line1 = state.doc.line(1);
+    const line2 = state.doc.line(2);
+    expect(decos.some((d) => d.class === "cm-blockquote" && d.from === line1.from)).toBe(true);
+    expect(decos.some((d) => d.class === "cm-blockquote" && d.from === line2.from)).toBe(true);
+    // The cursor sits on line 1: its own marker is revealed...
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === line1.from)).toBe(false);
+    // ...but line 2's marker — nested inside the shared Paragraph node, not
+    // a sibling of Blockquote — stays hidden, per-line as designed.
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === line2.from)).toBe(true);
+  });
+
+  it("still gives a lazy-continuation line cm-blockquote even though it has no QuoteMark of its own", () => {
+    const doc = "> line one\nlazy continuation";
+    const state = stateFor(doc, doc.indexOf("line one"));
+    const decos = collect(state);
+    const line2 = state.doc.line(2);
+    expect(decos.some((d) => d.class === "cm-blockquote" && d.from === line2.from)).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class && d.from >= line2.from && d.to <= line2.to)).toBe(false);
+  });
+
+  it("still decorates inline content nested inside a blockquote (descent isn't blocked)", () => {
+    const doc = "> some *emphasis* text";
+    const state = stateFor(doc, doc.length);
+    const decos = collect(state);
+    expect(decos.some((d) => d.class === "cm-blockquote")).toBe(true);
+    const emDeco = decos.find((d) => d.class === "cm-em");
+    expect(emDeco).toBeTruthy();
+    expect(state.doc.sliceString(emDeco!.from, emDeco!.to)).toBe("*emphasis*");
+  });
+
+  // Regression coverage for the #126 table-in-blockquote interaction: a
+  // second, independent QuoteMark replace decoration must not overlap
+  // decorateTableRow's own leading gap, which already swallows a preceding
+  // `>` marker. Both tree shapes below were confirmed directly against the
+  // parser (see the plan's "Confirmed syntax-tree shapes" section) rather
+  // than assumed.
+  describe("table nested in a blockquote (issue #126 interaction)", () => {
+    it("tiles the header row with no gap or overlap, and gets both cm-table-row and cm-blockquote line decorations (explicit > on every row)", () => {
+      const doc = "> | a | b |\n> | - | - |\n> | 1 | 2 |";
+      const state = stateFor(doc, doc.length);
+      const decos = collect(state);
+      const headerLine = state.doc.line(1);
+      const cellsAndGaps = decos
+        .filter(
+          (d) =>
+            d.from >= headerLine.from &&
+            d.to <= headerLine.to &&
+            (d.class?.split(" ").includes("cm-table-cell") || d.tableGap),
+        )
+        .sort((a, b) => a.from - b.from);
+      let pos = headerLine.from;
+      for (const d of cellsAndGaps) {
+        expect(d.from).toBe(pos);
+        pos = d.to;
+      }
+      expect(pos).toBe(headerLine.to);
+      // CodeMirror merges same-position Decoration.line classes into one
+      // element only at DOM-render time (verified in the plan against a
+      // real mounted EditorView) — buildDecorations itself still produces
+      // them as two separate line decorations at the same position, so
+      // both are asserted for individually rather than as one merged class.
+      expect(decos.some((d) => d.from === headerLine.from && d.class?.split(" ").includes("cm-table-row"))).toBe(
+        true,
+      );
+      expect(decos.some((d) => d.from === headerLine.from && d.class === "cm-blockquote")).toBe(true);
+    });
+
+    it("tiles the header row with no gap or overlap, and gets both cm-table-row and cm-blockquote line decorations (lazy leading marker)", () => {
+      const doc = "> | A | B |\n| --- | --- |\n| 1 | 2 |\n";
+      const state = stateFor(doc, doc.length);
+      const decos = collect(state);
+      const headerLine = state.doc.line(1);
+      const cellsAndGaps = decos
+        .filter(
+          (d) =>
+            d.from >= headerLine.from &&
+            d.to <= headerLine.to &&
+            (d.class?.split(" ").includes("cm-table-cell") || d.tableGap),
+        )
+        .sort((a, b) => a.from - b.from);
+      let pos = headerLine.from;
+      for (const d of cellsAndGaps) {
+        expect(d.from).toBe(pos);
+        pos = d.to;
+      }
+      expect(pos).toBe(headerLine.to);
+      // CodeMirror merges same-position Decoration.line classes into one
+      // element only at DOM-render time (verified in the plan against a
+      // real mounted EditorView) — buildDecorations itself still produces
+      // them as two separate line decorations at the same position, so
+      // both are asserted for individually rather than as one merged class.
+      expect(decos.some((d) => d.from === headerLine.from && d.class?.split(" ").includes("cm-table-row"))).toBe(
+        true,
+      );
+      expect(decos.some((d) => d.from === headerLine.from && d.class === "cm-blockquote")).toBe(true);
+    });
+
+    // Regression coverage for a review finding on the original PR: a table
+    // nested inside a *nested* blockquote (two or more `>` markers before
+    // the row) defeated the original guard, which only recognized "marker's
+    // parent is Table" and "marker's next sibling is Table" — for the
+    // outermost of several nested markers, the next sibling is the *inner*
+    // Blockquote, not Table, so neither branch matched and it emitted a
+    // stray replace decoration overlapping decorateTableRow's own leading
+    // gap. `lineOwnedByTableRow` fixes this by checking whether the row (or
+    // the table's alignment-delimiter row) starts on the marker's physical
+    // line at all, regardless of nesting depth or tree shape.
+    it("tiles the header and delimiter rows with no gap or overlap when the table sits inside a nested blockquote", () => {
+      const doc = "> > | a | b |\n> > | - | - |";
+      const state = stateFor(doc, doc.length);
+      const decos = collect(state);
+      for (const lineNum of [1, 2]) {
+        const line = state.doc.line(lineNum);
+        const covering = decos
+          .filter((d) => d.from >= line.from && d.to <= line.to && (d.isReplace || d.tableGap))
+          .sort((a, b) => a.from - b.from);
+        let pos = line.from;
+        for (const d of covering) {
+          expect(d.from).toBeGreaterThanOrEqual(pos); // no overlap with the previous decoration
+          pos = Math.max(pos, d.to);
+        }
+      }
+      // The header row's line decoration still gets both classes.
+      const headerLine = state.doc.line(1);
+      expect(decos.some((d) => d.from === headerLine.from && d.class?.split(" ").includes("cm-table-row"))).toBe(
+        true,
+      );
+      expect(decos.some((d) => d.from === headerLine.from && d.class === "cm-blockquote")).toBe(true);
+    });
+  });
+
+  it("keeps the marker hidden when hasFocus is false, even with the selection on that line", () => {
+    const doc = "> quoted text\nafter";
+    const state = stateFor(doc, doc.indexOf("quoted"));
+    const decos = collect(state, "test.md", false);
+    const line = state.doc.line(1);
+    expect(decos.some((d) => d.class === "cm-blockquote" && d.from === line.from)).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === line.from)).toBe(true);
+  });
+});
+
 /**
  * `MermaidWidget` decorations come from `buildMermaidWidgetDecorations` (a
  * `StateField`, per CodeMirror's own requirement that block-level replace

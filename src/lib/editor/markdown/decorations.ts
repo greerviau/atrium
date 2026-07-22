@@ -222,6 +222,83 @@ function decorateCodeBlock(
 }
 
 /**
+ * Decorates a `Blockquote` node's full line span with `cm-blockquote`,
+ * modeled on `decorateCodeBlock`'s line-span loop. Computed from the node's
+ * own `[from, to)` range rather than from `QuoteMark` positions, because a
+ * lazy-continuation line (no marker of its own, see `decorateQuoteMark`'s
+ * docstring) is still part of the block and still needs its left
+ * border/indent.
+ */
+function decorateBlockquote(state: EditorState, node: SyntaxNode, out: Range<Decoration>[]): void {
+  const startLine = state.doc.lineAt(node.from).number;
+  const endLine = state.doc.lineAt(node.to).number;
+  for (let n = startLine; n <= endLine; n++) {
+    out.push(Decoration.line({ class: CLASS.blockquote }).range(state.doc.line(n).from));
+  }
+}
+
+/**
+ * The three node types `decorateTableRow`/`decorateTable` treat as owning
+ * an entire physical line's leading span: `TableHeader`/`TableRow` (a data
+ * row, via `decorateTableRow`'s gap) and `TableDelimiter` (the alignment
+ * row, via `decorateTable`'s own line-replace). Any of the three starting
+ * on a given physical line means that line's leading span — including a
+ * preceding `>` marker or list indent, at any nesting depth — is already
+ * spoken for.
+ */
+const TABLE_ROW_NODE_NAMES = new Set(["TableHeader", "TableRow", "TableDelimiter"]);
+
+/**
+ * True when physical line `lineNumber` is the start of a table row or the
+ * table's own alignment-delimiter row — i.e. a line `decorateTableRow`'s
+ * leading gap (or `decorateTable`'s delimiter-line replace) already fully
+ * owns from the line's start. Resolves into the tree at the line's own end
+ * (innermost node first) and walks up, rather than walking down from a
+ * known ancestor, because for a leading `>` marker the table node is a
+ * later sibling in the tree, not a descendant or ancestor of the marker.
+ */
+function lineOwnedByTableRow(state: EditorState, lineNumber: number): boolean {
+  const line = state.doc.line(lineNumber);
+  let n: SyntaxNode | null = syntaxTree(state).resolveInner(line.to, -1);
+  while (n) {
+    if (TABLE_ROW_NODE_NAMES.has(n.type.name) && state.doc.lineAt(n.from).number === lineNumber) {
+      return true;
+    }
+    n = n.parent;
+  }
+  return false;
+}
+
+/**
+ * Hides one blockquote `>` marker (plus its optional following space —
+ * unlike an ATX heading's `#`, the grammar doesn't require a space after
+ * `>`, so it's only consumed when actually present), gated per-line through
+ * `isUnderCursor` rather than per-node: a `QuoteMark` is always exactly one
+ * character on exactly one line, so gating each one individually already
+ * produces the right per-line granularity for a blockquote spanning many
+ * lines, without the fenced-code precedent's "reveal the whole block" being
+ * a much bigger disruption here.
+ *
+ * Skips itself whenever `lineOwnedByTableRow` says this marker's physical
+ * line is already owned by a table row's own leading span — a second,
+ * independent replace decoration here would overlap it. This holds
+ * regardless of blockquote nesting depth: a marker on a table-owned line is
+ * always inside that line's leading span, whether it's the sole marker or
+ * one of several nested `>` markers preceding the row.
+ */
+function decorateQuoteMark(state: EditorState, node: SyntaxNode, out: Range<Decoration>[], hasFocus: boolean): void {
+  if (lineOwnedByTableRow(state, state.doc.lineAt(node.from).number)) {
+    return;
+  }
+  if (isUnderCursor(state, node.from, node.to, hasFocus)) {
+    return;
+  }
+  const hasTrailingSpace = state.doc.sliceString(node.to, node.to + 1) === " ";
+  const hideTo = hasTrailingSpace ? node.to + 1 : node.to;
+  out.push(Decoration.replace({}).range(node.from, hideTo));
+}
+
+/**
  * The Mermaid source for `node`, but only when it should actually be
  * replaced by a diagram widget: tagged ` ```mermaid ` and the cursor is
  * elsewhere. `null` covers both "not a mermaid block" and "mermaid block
@@ -526,6 +603,14 @@ export function buildDecorations(
           return;
         }
 
+        if (name === "Blockquote") {
+          // Bare `return` (not `false`) so descent continues into nested
+          // content — paragraphs, lists, tables, nested blockquotes all
+          // still need their own decoration, same reasoning as Table above.
+          decorateBlockquote(state, ref.node, decorations);
+          return;
+        }
+
         if (name in HEADING_LEVELS) {
           decorateHeading(state, ref.node, HEADING_LEVELS[name], decorations, hasFocus);
           return;
@@ -543,6 +628,9 @@ export function buildDecorations(
             break;
           case "InlineCode":
             decorateWrapped(state, ref.node, "CodeMark", CLASS.inlineCode, decorations, hasFocus);
+            break;
+          case "QuoteMark":
+            decorateQuoteMark(state, ref.node, decorations, hasFocus);
             break;
           case "Link":
             if (isRevealTarget(state, ref.node, hasFocus)) {
