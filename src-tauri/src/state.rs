@@ -28,7 +28,7 @@ impl AppState {
     pub fn new(app_handle: AppHandle) -> Self {
         Self {
             workspaces: Mutex::new(HashMap::new()),
-            pty: PtyManager::default(),
+            pty: PtyManager::new(),
             app_handle,
             pending_open: Mutex::new(None),
         }

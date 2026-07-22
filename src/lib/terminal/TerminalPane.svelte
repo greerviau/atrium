@@ -10,7 +10,7 @@
   import { theme as themeStore } from "../stores/theme";
   import { buildXtermTheme } from "../theme/xtermTheme";
   import { zoom } from "../stores/textSize";
-  import { computeTabTitle, parseOsc7Cwd, reduceTitleState, type TitleState } from "./tabTitle";
+  import { computeTabTitle, reduceTitleState, type TitleState } from "./tabTitle";
   import { handleTerminalKeyEvent } from "./terminalKeyHandling";
   import { shellQuotePaths } from "./shellQuote";
   import { EXPLORER_PATH_DRAG_TYPE } from "../util/dragDropTypes";
@@ -43,8 +43,6 @@
   let fitAddon: FitAddon;
   let terminalId: string | undefined;
   let resizeObserver: ResizeObserver;
-  let osc7Disposable: { dispose(): void };
-  let osc133Disposable: { dispose(): void };
   let titleChangeDisposable: { dispose(): void };
 
   let titleState: TitleState;
@@ -110,7 +108,7 @@
   }
 
   onMount(() => {
-    titleState = { cwd, commandRunning: false, processTitle: null };
+    titleState = { cwd, program: null, explicitTitle: null, explicitTitleIsFresh: false };
     lastEmittedTitle = computeTabTitle(titleState);
 
     terminal = new Terminal({
@@ -146,28 +144,19 @@
 
     registerLinkProviders(terminal, workspaceId, cwd);
 
-    osc7Disposable = terminal.parser.registerOscHandler(7, (data) => {
-      const parsedCwd = parseOsc7Cwd(data);
-      if (parsedCwd) {
-        dispatch({ type: "cwd", cwd: parsedCwd });
-      }
-      return true;
-    });
-
-    osc133Disposable = terminal.parser.registerOscHandler(133, (data) => {
-      if (data.startsWith("C")) {
-        dispatch({ type: "commandStart" });
-      } else if (data.startsWith("D")) {
-        dispatch({ type: "commandFinish" });
-      }
-      return true;
-    });
-
     titleChangeDisposable = terminal.onTitleChange((title) => {
       dispatch({ type: "title", title });
     });
 
     terminal.onData((data) => {
+      // xterm sends a raw "\r" for the Enter key. Marking that moment lets
+      // the reducer tell an explicit title the just-started program set for
+      // itself (arrives after this) apart from a stale one left over from
+      // the shell's own idle prompt (set before it) once the backend's next
+      // poll tick confirms the new foreground process.
+      if (data.includes("\r")) {
+        dispatch({ type: "commandSubmitted" });
+      }
       if (terminalId) {
         void ptyWrite(terminalId, data);
       }
@@ -187,6 +176,8 @@
           terminal.write(base64ToBytes(event.data));
         } else if (event.type === "exit") {
           onExit?.(performance.now() - spawnedAt);
+        } else if (event.type === "title") {
+          dispatch({ type: "backendTitle", cwd: event.cwd, program: event.program });
         }
       });
     })();
@@ -205,8 +196,6 @@
   onDestroy(() => {
     unregisterDropTarget?.();
     resizeObserver?.disconnect();
-    osc7Disposable?.dispose();
-    osc133Disposable?.dispose();
     titleChangeDisposable?.dispose();
     if (terminalId) {
       void ptyKill(terminalId);

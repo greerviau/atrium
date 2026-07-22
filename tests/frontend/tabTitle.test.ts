@@ -1,41 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  parseOsc7Cwd,
-  folderName,
-  computeTabTitle,
-  reduceTitleState,
-  type TitleState,
-} from "../../src/lib/terminal/tabTitle";
-
-describe("parseOsc7Cwd", () => {
-  it("parses a well-formed file:// URL with a hostname", () => {
-    expect(parseOsc7Cwd("file://hostname/Users/greer/github/atrium")).toBe(
-      "/Users/greer/github/atrium",
-    );
-  });
-
-  it("decodes a percent-encoded path", () => {
-    expect(parseOsc7Cwd("file://hostname/Users/greer/My%20Projects/caf%C3%A9")).toBe(
-      "/Users/greer/My Projects/café",
-    );
-  });
-
-  it("parses a payload with no hostname", () => {
-    expect(parseOsc7Cwd("file:///path/to/dir")).toBe("/path/to/dir");
-  });
-
-  it("returns null for a non-file:// URL", () => {
-    expect(parseOsc7Cwd("https://example.com/path")).toBeNull();
-  });
-
-  it("returns null for input that isn't a URL at all", () => {
-    expect(parseOsc7Cwd("not a url")).toBeNull();
-  });
-
-  it("returns null for an empty string", () => {
-    expect(parseOsc7Cwd("")).toBeNull();
-  });
-});
+import { folderName, computeTabTitle, reduceTitleState, type TitleState } from "../../src/lib/terminal/tabTitle";
 
 describe("folderName", () => {
   it("returns the last segment of a multi-segment path", () => {
@@ -56,60 +20,107 @@ describe("folderName", () => {
 });
 
 describe("computeTabTitle", () => {
-  it("returns the folder alone when idle, regardless of a stale processTitle", () => {
+  it("returns the folder alone when idle (program: null)", () => {
     expect(
-      computeTabTitle({ cwd: "/Users/greer/github/atrium", commandRunning: false, processTitle: "npm" }),
+      computeTabTitle({
+        cwd: "/Users/greer/github/atrium",
+        program: null,
+        explicitTitle: null,
+        explicitTitleIsFresh: false,
+      }),
     ).toBe("atrium");
   });
 
-  it("returns `folder — processTitle` when a command is running and has a title", () => {
+  it("returns `folder — program` when running with no explicitTitle", () => {
     expect(
-      computeTabTitle({ cwd: "/Users/greer/github/atrium", commandRunning: true, processTitle: "npm" }),
+      computeTabTitle({
+        cwd: "/Users/greer/github/atrium",
+        program: "npm",
+        explicitTitle: null,
+        explicitTitleIsFresh: false,
+      }),
     ).toBe("atrium — npm");
   });
 
-  it("returns the folder alone when running but the command hasn't set a title yet", () => {
+  it("returns `folder — explicitTitle` in place of the raw program name when set", () => {
     expect(
-      computeTabTitle({ cwd: "/Users/greer/github/atrium", commandRunning: true, processTitle: null }),
+      computeTabTitle({
+        cwd: "/Users/greer/github/atrium",
+        program: "vim",
+        explicitTitle: "vim: README.md",
+        explicitTitleIsFresh: true,
+      }),
+    ).toBe("atrium — vim: README.md");
+  });
+
+  it("ignores a stale explicitTitle while idle (program: null)", () => {
+    expect(
+      computeTabTitle({
+        cwd: "/Users/greer/github/atrium",
+        program: null,
+        explicitTitle: "npm",
+        explicitTitleIsFresh: false,
+      }),
     ).toBe("atrium");
   });
 });
 
 describe("reduceTitleState", () => {
-  const initial: TitleState = { cwd: "/Users/greer/github/atrium", commandRunning: false, processTitle: null };
+  const initial: TitleState = {
+    cwd: "/Users/greer/github/atrium",
+    program: null,
+    explicitTitle: null,
+    explicitTitleIsFresh: false,
+  };
 
-  it("stays idle forever when OSC 133 is never received, even after a title arrives", () => {
-    const state = reduceTitleState(initial, { type: "title", title: "some-idle-prompt-title" });
-    expect(computeTabTitle(state)).toBe("atrium");
-    expect(state.commandRunning).toBe(false);
+  it("an explicit title set right after the triggering Enter survives the poller's later backendTitle confirmation", () => {
+    // Real ordering: the user hits Enter, the newly-started program sets
+    // its own OSC 0/2 title within milliseconds, and only up to a second
+    // later does the backend's poll tick confirm the foreground process.
+    let state = reduceTitleState(initial, { type: "commandSubmitted" });
+    state = reduceTitleState(state, { type: "title", title: "README.md (~/github/atrium) - VIM" });
+    state = reduceTitleState(state, { type: "backendTitle", cwd: initial.cwd, program: "vim" });
+    expect(computeTabTitle(state)).toBe("atrium — README.md (~/github/atrium) - VIM");
   });
 
-  it("commandStart -> title -> shows folder — title", () => {
-    let state = reduceTitleState(initial, { type: "commandStart" });
-    state = reduceTitleState(state, { type: "title", title: "npm" });
+  it("an explicit title set before the triggering Enter (the shell's own idle prompt title) does not bleed into the next program", () => {
+    let state = reduceTitleState(initial, { type: "title", title: "atrium — zsh" });
+    state = reduceTitleState(state, { type: "commandSubmitted" });
+    state = reduceTitleState(state, { type: "backendTitle", cwd: initial.cwd, program: "npm" });
     expect(computeTabTitle(state)).toBe("atrium — npm");
+    expect(state.explicitTitle).toBeNull();
   });
 
-  it("commandStart -> title -> commandFinish -> back to folder alone", () => {
-    let state = reduceTitleState(initial, { type: "commandStart" });
-    state = reduceTitleState(state, { type: "title", title: "npm" });
-    state = reduceTitleState(state, { type: "commandFinish" });
+  it("a backendTitle transition from a program back to null clears a stale explicitTitle", () => {
+    let state = reduceTitleState(initial, { type: "commandSubmitted" });
+    state = reduceTitleState(state, { type: "backendTitle", cwd: initial.cwd, program: "npm" });
+    state = reduceTitleState(state, { type: "title", title: "npm run dev" });
+    state = reduceTitleState(state, { type: "commandSubmitted" });
+    state = reduceTitleState(state, { type: "backendTitle", cwd: initial.cwd, program: null });
+    expect(state.explicitTitle).toBeNull();
     expect(computeTabTitle(state)).toBe("atrium");
   });
 
-  it("commandFinish -> commandStart does not leak the prior command's title into the new one", () => {
-    let state = reduceTitleState(initial, { type: "commandStart" });
-    state = reduceTitleState(state, { type: "title", title: "vim" });
-    state = reduceTitleState(state, { type: "commandFinish" });
-    state = reduceTitleState(state, { type: "commandStart" });
-    expect(computeTabTitle(state)).toBe("atrium");
-    expect(state.processTitle).toBeNull();
+  it("a backendTitle event with the same program leaves explicitTitle untouched", () => {
+    let state = reduceTitleState(initial, { type: "commandSubmitted" });
+    state = reduceTitleState(state, { type: "backendTitle", cwd: initial.cwd, program: "npm" });
+    state = reduceTitleState(state, { type: "title", title: "npm run dev" });
+    state = reduceTitleState(state, {
+      type: "backendTitle",
+      cwd: "/Users/greer/github/wingman",
+      program: "npm",
+    });
+    expect(computeTabTitle(state)).toBe("wingman — npm run dev");
   });
 
-  it("cwd events update the folder independently of command-running state", () => {
-    let state = reduceTitleState(initial, { type: "commandStart" });
-    state = reduceTitleState(state, { type: "title", title: "npm" });
-    state = reduceTitleState(state, { type: "cwd", cwd: "/Users/greer/github/wingman" });
+  it("cwd updates independently of program/explicitTitle state", () => {
+    let state = reduceTitleState(initial, { type: "commandSubmitted" });
+    state = reduceTitleState(state, { type: "backendTitle", cwd: initial.cwd, program: "npm" });
+    state = reduceTitleState(state, {
+      type: "backendTitle",
+      cwd: "/Users/greer/github/wingman",
+      program: "npm",
+    });
     expect(computeTabTitle(state)).toBe("wingman — npm");
   });
 });

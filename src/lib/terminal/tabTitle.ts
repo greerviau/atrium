@@ -1,22 +1,3 @@
-/**
- * Extracts the local filesystem path from an OSC 7 `file://host/path` payload.
- * Returns null when the payload isn't a well-formed `file://` URL.
- */
-export function parseOsc7Cwd(payload: string): string | null {
-  let url: URL;
-  try {
-    url = new URL(payload);
-  } catch {
-    return null;
-  }
-  if (url.protocol !== "file:") return null;
-  try {
-    return decodeURIComponent(url.pathname);
-  } catch {
-    return null;
-  }
-}
-
 /** Last path segment, with any trailing slash stripped; falls back to the full path for "/" or a single-segment path. */
 export function folderName(path: string): string {
   const trimmed = path.endsWith("/") && path !== "/" ? path.slice(0, -1) : path;
@@ -26,48 +7,64 @@ export function folderName(path: string): string {
   return segment === "" ? trimmed : segment;
 }
 
-/** Composes the display title: `folder`, or `folder — processTitle` when a command is running and has a title. */
-export function computeTabTitle(params: {
-  cwd: string;
-  commandRunning: boolean;
-  processTitle: string | null;
-}): string {
-  const folder = folderName(params.cwd);
-  if (params.commandRunning && params.processTitle) {
-    return `${folder} — ${params.processTitle}`;
-  }
-  return folder;
-}
-
 export interface TitleState {
   cwd: string;
-  commandRunning: boolean;
-  processTitle: string | null;
+  /** The foreground program's name, from the backend's OS-level `Title` event. */
+  program: string | null;
+  /** From OSC 0/2 (`terminal.onTitleChange`); overrides the bare `program` name when set. */
+  explicitTitle: string | null;
+  /**
+   * Whether `explicitTitle` was set after the most recent `commandSubmitted`
+   * event (an Enter keypress). A program's own OSC 0/2 title normally
+   * arrives within milliseconds of it starting, well before the backend's
+   * next poll tick confirms the new foreground process — so at the moment
+   * `backendTitle` reports that transition, an `explicitTitle` set since the
+   * triggering Enter plausibly belongs to the program that just started,
+   * while one set before it is the idle shell's own prompt title (many
+   * shells, e.g. Debian/Ubuntu bash and macOS zsh by default, set one) and
+   * must not bleed into the next program's label.
+   */
+  explicitTitleIsFresh: boolean;
 }
 
-export type OscEvent =
-  | { type: "cwd"; cwd: string }
-  | { type: "commandStart" }
-  | { type: "commandFinish" }
-  | { type: "title"; title: string };
+/** Composes the display title: `folder`, or `folder — label` when a program is running. */
+export function computeTabTitle(state: TitleState): string {
+  const folder = folderName(state.cwd);
+  const label = state.program ? (state.explicitTitle ?? state.program) : null;
+  return label ? `${folder} — ${label}` : folder;
+}
+
+export type TitleEvent =
+  | { type: "backendTitle"; cwd: string; program: string | null }
+  | { type: "title"; title: string }
+  | { type: "commandSubmitted" };
 
 /**
- * Pure reducer for the OSC 7 (cwd) / OSC 133 (command-start/finish) / OSC 0-2 (title)
- * state a terminal tab tracks. `commandStart` clears any `processTitle` left over from
- * the previous command, so a command that never sets its own title can't inherit a
- * stale one — this is the gating behavior `computeTabTitle` relies on to never show a
- * false process label on a shell without OSC 133 support (that shell simply never emits
- * `commandStart`, so `commandRunning` stays false forever).
+ * Pure reducer for the OS-reported `(cwd, program)` pair and the OSC 0/2
+ * explicit-title override a terminal tab tracks.
+ *
+ * A `backendTitle` event whose `program` differs from the current one
+ * (including a transition to or from `null`) clears `explicitTitle` unless
+ * it's still fresh (set since the last `commandSubmitted`) — a stale title
+ * left over from the previous program, or from the shell's own idle
+ * prompt, can't bleed into the new one, while a title the just-started
+ * program set for itself survives the backend's later confirmation of it.
  */
-export function reduceTitleState(state: TitleState, event: OscEvent): TitleState {
+export function reduceTitleState(state: TitleState, event: TitleEvent): TitleState {
   switch (event.type) {
-    case "cwd":
-      return { ...state, cwd: event.cwd };
-    case "commandStart":
-      return { ...state, commandRunning: true, processTitle: null };
-    case "commandFinish":
-      return { ...state, commandRunning: false };
+    case "backendTitle":
+      if (event.program === state.program) {
+        return { ...state, cwd: event.cwd };
+      }
+      return {
+        ...state,
+        cwd: event.cwd,
+        program: event.program,
+        explicitTitle: state.explicitTitleIsFresh ? state.explicitTitle : null,
+      };
     case "title":
-      return { ...state, processTitle: event.title };
+      return { ...state, explicitTitle: event.title, explicitTitleIsFresh: true };
+    case "commandSubmitted":
+      return { ...state, explicitTitleIsFresh: false };
   }
 }
