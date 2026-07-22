@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { writable, get } from "svelte/store";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { applyThemeToDocument } from "../theme/cssVars";
 import { atriumDark, themeById, type Theme } from "../theme/tokens";
@@ -29,14 +29,13 @@ function saveSelection(id: string): void {
   }
 }
 
-let selection = loadSelection();
 let unlistenThemeChanged: (() => void) | undefined;
 
 /** The current resolved `Theme` (never the "auto" sentinel itself — Auto is always resolved to a concrete theme before landing here). */
 export const theme = writable<Theme>(atriumDark);
 
-/** The raw selection id (`"auto"`, or a built-in theme id), reactive and kept in step with the private `selection` variable — lets UI (e.g. the settings dialog) show which of the four options is active, distinguishing "Auto resolved to dark" from "explicitly Atrium Dark." */
-export const themeSelection = writable<string>(selection);
+/** The raw selection id (`"auto"`, or a built-in theme id) — the single source of truth for the current selection, letting UI (e.g. the settings dialog) show which of the four options is active, distinguishing "Auto resolved to dark" from "explicitly Atrium Dark." */
+export const themeSelection = writable<string>(loadSelection());
 
 /** Resolves Auto to Atrium Dark/Light based on the OS's live window appearance, falling back to Atrium Dark if the window-theme API is unavailable (e.g. outside a Tauri window). */
 async function resolveAuto(): Promise<Theme> {
@@ -49,6 +48,7 @@ async function resolveAuto(): Promise<Theme> {
 }
 
 async function resolveAndApply(): Promise<void> {
+  const selection = get(themeSelection);
   const resolved = selection === AUTO ? await resolveAuto() : (themeById(selection) ?? atriumDark);
   theme.set(resolved);
   applyThemeToDocument(resolved);
@@ -58,7 +58,7 @@ async function resolveAndApply(): Promise<void> {
 async function syncAutoSubscription(): Promise<void> {
   unlistenThemeChanged?.();
   unlistenThemeChanged = undefined;
-  if (selection !== AUTO) {
+  if (get(themeSelection) !== AUTO) {
     return;
   }
   try {
@@ -81,7 +81,6 @@ export function setTheme(id: string): void {
   if (!isKnownSelection(id)) {
     return;
   }
-  selection = id;
   saveSelection(id);
   themeSelection.set(id);
   void resolveAndApply();

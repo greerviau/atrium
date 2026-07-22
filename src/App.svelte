@@ -289,6 +289,12 @@
     if (mainEl) {
       terminalHeight = clampToContainer(terminalHeight, HEIGHT_MIN, mainEl.clientHeight);
       terminalWidth = clampToContainer(terminalWidth, WIDTH_MIN, mainEl.clientWidth);
+      // Persists the clamp immediately, not just in memory: otherwise a
+      // later position change (from DockSettingsMenu or the settings
+      // dialog) would read the pre-clamp, potentially oversized dimension
+      // straight back out of localStorage via setTerminalPosition, undoing
+      // the clamp this mount just applied.
+      saveTerminalLayout({ position: $terminalPosition, height: terminalHeight, width: terminalWidth });
     }
     void initMenuBar(newTerminalTab, () => splitFocusedPane("right"));
     void onFsChanged((event) => {
