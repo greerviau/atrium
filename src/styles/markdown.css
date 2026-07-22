@@ -86,25 +86,13 @@
   box-sizing: content-box;
 }
 
-/* Counteracts a flexbox pitfall: `.cm-content` (CodeMirror's own flex item
-   holding every line) defaults to `min-width: auto`, which lets a single
-   overlong code line's declared `ch` width force the whole flex item to
-   grow past the scroller's available width — dragging every other line's
-   `scrollWidth` along with it. Pinning `min-width: 0` keeps `.cm-content`
-   capped at the scroller's width, so a too-wide line overflows only the
-   one shared `.cm-scroller { overflow-x: auto }` document-level container,
-   not every line in the document. */
-.cm-content {
-  min-width: 0;
-}
-
 /* Block-level widget replacing a `mermaid` fenced code block. `text-align:
    center` centers the rendered <svg>. A diagram wider than the pane isn't
    clipped or wrapped — like a long code line or table row above, it scrolls
    via CodeMirror's own `.cm-scroller { overflow-x: auto }`, not a container
    of its own; `overflow-x: auto` here is a no-op today (this box's width
-   always matches its content, same as `.cm-code-block` above) kept as a
-   defensive match to that same precedent. */
+   always matches its content) kept as a defensive fallback in case that
+   ever stops being true. */
 .cm-mermaid-diagram {
   display: block;
   overflow-x: auto;

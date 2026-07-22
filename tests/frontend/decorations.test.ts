@@ -1187,12 +1187,4 @@ describe("markdown.css: code block width cap", () => {
     expect(body).not.toMatch(/overflow-x/);
     expect(body).toMatch(/white-space:\s*pre/);
   });
-
-  // Without this, `.cm-content` (CodeMirror's flex item holding every line)
-  // grows to fit a single overlong code line's declared width, dragging
-  // every other line's scrollWidth along with it (issue #135).
-  it(".cm-content stops the flex item growing past the scroller's width", () => {
-    const body = ruleBodyFor(".cm-content");
-    expect(body).toMatch(/min-width:\s*0/);
-  });
 });
