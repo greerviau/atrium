@@ -412,8 +412,6 @@
       {:else}
         <div
           class="terminal-area"
-          class:dock-left={$terminalPosition === "left"}
-          class:dock-right={$terminalPosition === "right"}
           class:hidden={!$terminalVisible}
           style={$terminalPosition === "bottom" ? `height: ${terminalHeight}px` : `width: ${terminalWidth}px`}
         >
@@ -616,15 +614,6 @@
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    border-top: 1px solid var(--atrium-border);
-  }
-  .terminal-area.dock-left {
-    border-top: none;
-    border-right: 1px solid var(--atrium-border);
-  }
-  .terminal-area.dock-right {
-    border-top: none;
-    border-left: 1px solid var(--atrium-border);
   }
   .terminal-area.hidden {
     display: none;

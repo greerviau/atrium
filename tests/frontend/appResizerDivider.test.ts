@@ -131,4 +131,19 @@ describe("App resizer divider (#130)", () => {
     expect(explorerRuleMatch).not.toBeNull();
     expect(explorerRuleMatch![1]).not.toMatch(/border-right/);
   });
+
+  it("does not double up the editor/terminal divider with .terminal-area's own border", async () => {
+    workspace.set({ id: "local", root: "/projects/demo" });
+
+    render(App);
+    await tick();
+
+    const css = collectComponentCss();
+    const terminalAreaRuleMatch = css.match(/\.terminal-area[^{,]*\{([^}]*)\}/);
+    expect(terminalAreaRuleMatch).not.toBeNull();
+    expect(terminalAreaRuleMatch![1]).not.toMatch(/border-top/);
+
+    expect(css).not.toMatch(/\.terminal-area\.dock-left/);
+    expect(css).not.toMatch(/\.terminal-area\.dock-right/);
+  });
 });
