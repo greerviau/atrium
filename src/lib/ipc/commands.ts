@@ -65,6 +65,10 @@ export function workspaceRemoveRecent(path: string): Promise<void> {
   return invoke("workspace_remove_recent", { path });
 }
 
+export function workspaceClearRecents(): Promise<void> {
+  return invoke("workspace_clear_recents");
+}
+
 /** Consumes a pending Dock-menu-picked path from a cold launch, if any (macOS only). */
 export function workspaceTakePendingOpen(): Promise<string | null> {
   return invoke("workspace_take_pending_open");
