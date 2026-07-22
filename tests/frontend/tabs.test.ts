@@ -1,6 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { get } from "svelte/store";
-import { tabsState, openFile, toggleMarkdownViewMode, type Tab } from "../../src/lib/stores/tabs";
+import {
+  tabsState,
+  openFile,
+  toggleMarkdownViewMode,
+  markDirty,
+  reconcileExternalChange,
+  reloadFromDisk,
+  dismissConflict,
+  type Tab,
+} from "../../src/lib/stores/tabs";
 import * as commands from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
@@ -97,5 +106,95 @@ describe("openFile", () => {
     const tab = get(tabsState).tabs.find((t) => t.path === "/main.rs");
     expect(tab?.mode).toBe("code");
     expect(tab?.viewMode).toBeUndefined();
+  });
+});
+
+describe("reconcileExternalChange / reloadFromDisk / dismissConflict", () => {
+  beforeEach(() => {
+    tabsState.set({ tabs: [], activeTabPath: null });
+    vi.mocked(commands.fsReadFile).mockReset();
+  });
+
+  it("reconcileExternalChange silently updates savedDoc for a clean tab and never sets hasExternalConflict", async () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md", { savedDoc: "old", isDirty: false })],
+      activeTabPath: "/notes.md",
+    });
+    vi.mocked(commands.fsReadFile).mockResolvedValue("new disk contents");
+
+    await reconcileExternalChange("/notes.md");
+
+    const tab = get(tabsState).tabs[0];
+    expect(tab.savedDoc).toBe("new disk contents");
+    expect(tab.isDirty).toBe(false);
+    expect(tab.hasExternalConflict).toBe(false);
+  });
+
+  it("reconcileExternalChange on a dirty tab sets hasExternalConflict and leaves savedDoc/isDirty untouched", async () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md", { savedDoc: "original", isDirty: true })],
+      activeTabPath: "/notes.md",
+    });
+
+    await reconcileExternalChange("/notes.md");
+
+    const tab = get(tabsState).tabs[0];
+    expect(tab.hasExternalConflict).toBe(true);
+    expect(tab.savedDoc).toBe("original");
+    expect(tab.isDirty).toBe(true);
+    expect(commands.fsReadFile).not.toHaveBeenCalled();
+  });
+
+  it("reloadFromDisk on a conflicted tab clears isDirty and hasExternalConflict and adopts disk contents", async () => {
+    tabsState.set({
+      tabs: [
+        codeTab("/notes.md", { savedDoc: "original", isDirty: true, hasExternalConflict: true }),
+      ],
+      activeTabPath: "/notes.md",
+    });
+    vi.mocked(commands.fsReadFile).mockResolvedValue("disk contents");
+
+    await reloadFromDisk("/notes.md");
+
+    const tab = get(tabsState).tabs[0];
+    expect(tab.savedDoc).toBe("disk contents");
+    expect(tab.isDirty).toBe(false);
+    expect(tab.hasExternalConflict).toBe(false);
+  });
+
+  it("dismissConflict on a conflicted tab clears only hasExternalConflict, keeping the local edit", () => {
+    tabsState.set({
+      tabs: [
+        codeTab("/notes.md", { savedDoc: "my edits", isDirty: true, hasExternalConflict: true }),
+      ],
+      activeTabPath: "/notes.md",
+    });
+
+    dismissConflict("/notes.md");
+
+    const tab = get(tabsState).tabs[0];
+    expect(tab.hasExternalConflict).toBe(false);
+    expect(tab.savedDoc).toBe("my edits");
+    expect(tab.isDirty).toBe(true);
+  });
+
+  it("markDirty followed by a repeated reconcileExternalChange stays a no-op on savedDoc/isDirty (regression guard for issue #76)", async () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md", { savedDoc: "original", isDirty: false })],
+      activeTabPath: "/notes.md",
+    });
+    markDirty("/notes.md");
+    vi.mocked(commands.fsReadFile).mockResolvedValue("changed once");
+
+    await reconcileExternalChange("/notes.md");
+    expect(get(tabsState).tabs[0].hasExternalConflict).toBe(true);
+
+    vi.mocked(commands.fsReadFile).mockResolvedValue("changed twice");
+    await reconcileExternalChange("/notes.md");
+
+    const tab = get(tabsState).tabs[0];
+    expect(tab.savedDoc).toBe("original");
+    expect(tab.isDirty).toBe(true);
+    expect(tab.hasExternalConflict).toBe(true);
   });
 });

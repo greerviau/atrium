@@ -12,6 +12,8 @@
     setActiveTab,
     closeTab,
     reconcileExternalChange,
+    reloadFromDisk,
+    dismissConflict,
     toggleMarkdownViewMode,
   } from "./lib/stores/tabs";
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
@@ -287,7 +289,8 @@
                 {#if tab.hasExternalConflict}
                   <div class="conflict-banner">
                     File changed on disk.
-                    <button onclick={() => reconcileExternalChange(tab.path)}>Reload</button>
+                    <button onclick={() => reloadFromDisk(tab.path)}>Reload</button>
+                    <button onclick={() => dismissConflict(tab.path)}>Keep mine</button>
                   </div>
                 {/if}
                 <EditorPane filePath={tab.path} />
