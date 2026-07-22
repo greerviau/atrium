@@ -434,6 +434,23 @@ describe("buildDecorations: tables", () => {
   });
 });
 
+/**
+ * The `width` inline style lives on `deco.spec.attributes`, which the
+ * shared `collect()` helper doesn't surface (same reasoning as the
+ * links describe block above, which reads `deco.spec.attributes`
+ * directly rather than extending `collect()` for one attribute).
+ */
+function collectCodeBlockStyles(state: EditorState): (string | undefined)[] {
+  const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md");
+  const styles: (string | undefined)[] = [];
+  decorations.between(0, state.doc.length, (from, to, deco) => {
+    if (deco.spec.class === "cm-code-block") {
+      styles.push(deco.spec.attributes?.style);
+    }
+  });
+  return styles;
+}
+
 describe("buildDecorations: code blocks", () => {
   it("gives a fenced block a cm-code-block line decoration on every line, cursor elsewhere", () => {
     const doc = "prose\n\n```js\nconst x = 1;\n```\n\nmore prose";
@@ -556,6 +573,55 @@ describe("buildDecorations: code blocks", () => {
     const indentedFrom = state.doc.line(5).from;
     const indentedTo = state.doc.line(6).to;
     expect(decos.some((d) => d.isReplace && !d.class && d.from >= indentedFrom && d.to <= indentedTo)).toBe(false);
+  });
+
+  it("sizes every line in the block to the block's longest line, not each line's own length", () => {
+    const shortLine = "const a = 1;";
+    const longLine = "const much_longer_name = 2;";
+    const doc = `prose\n\n\`\`\`js\n${shortLine}\n${longLine}\n\`\`\``;
+    const state = stateFor(doc, 0); // cursor on the "prose" line, outside the block
+    const styles = collectCodeBlockStyles(state);
+    expect(styles).toHaveLength(4); // open fence, both body lines, close fence
+    const expected = `width: ${longLine.length}ch`;
+    for (const style of styles) {
+      expect(style).toBe(expected);
+    }
+  });
+
+  it("does not let a hidden fence/language-tag line inflate the computed width", () => {
+    const bodyLine = "x;";
+    const doc = `\`\`\`javascript\n${bodyLine}\n\`\`\`\n\nafter`;
+    const state = stateFor(doc, doc.indexOf("after")); // cursor outside the block, fence hidden
+    const styles = collectCodeBlockStyles(state);
+    const expected = `width: ${bodyLine.length}ch`;
+    for (const style of styles) {
+      expect(style).toBe(expected);
+    }
+  });
+
+  it("recomputes the width to include the fence/language-tag line once the cursor reveals it", () => {
+    const bodyLine = "x;";
+    const doc = `\`\`\`javascript\n${bodyLine}\n\`\`\`\n\nafter`;
+    const state = stateFor(doc, doc.indexOf(bodyLine)); // cursor on the block, fence revealed
+    const styles = collectCodeBlockStyles(state);
+    const openFenceLength = "```javascript".length;
+    const expected = `width: ${openFenceLength}ch`;
+    for (const style of styles) {
+      expect(style).toBe(expected);
+    }
+  });
+
+  it("uses the full raw line length, including leading indent, for an indented block", () => {
+    const shortLine = "    def legacy():";
+    const longLine = "        return True";
+    const doc = `prose\n\n${shortLine}\n${longLine}\n\nmore`;
+    const state = stateFor(doc, 0); // cursor outside the block
+    const styles = collectCodeBlockStyles(state);
+    expect(styles).toHaveLength(2);
+    const expected = `width: ${longLine.length}ch`;
+    for (const style of styles) {
+      expect(style).toBe(expected);
+    }
   });
 });
 
@@ -722,5 +788,17 @@ describe("markdown.css: inline code and mermaid error font-family", () => {
 
   it(".cm-mermaid-error-message does not declare its own font-family", () => {
     expect(ruleBodyFor(".cm-mermaid-error-message")).not.toMatch(/font-family/);
+  });
+});
+
+describe("markdown.css: code block width cap", () => {
+  // .cm-code-block's computed `width: <N>ch` (set per-block in decorations.ts)
+  // must stay capped at the pane's own width and keep its existing
+  // horizontal-scroll behavior for a line wider than that cap (issue #29 / #89).
+  it(".cm-code-block caps its computed width and keeps its overflow/whitespace behavior", () => {
+    const body = ruleBodyFor(".cm-code-block");
+    expect(body).toMatch(/max-width:\s*100%/);
+    expect(body).toMatch(/overflow-x:\s*auto/);
+    expect(body).toMatch(/white-space:\s*pre/);
   });
 });

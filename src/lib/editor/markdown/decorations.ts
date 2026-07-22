@@ -121,21 +121,45 @@ function decorateCodeBlock(
 ): void {
   const startLine = state.doc.lineAt(node.from).number;
   const endLine = state.doc.lineAt(node.to).number;
-  for (let n = startLine; n <= endLine; n++) {
-    out.push(Decoration.line({ class: CLASS.codeBlock }).range(state.doc.line(n).from));
-  }
-
-  if (!isFenced || isUnderCursor(state, node.from, node.to)) {
-    return;
-  }
+  const hideMarkers = isFenced && !isUnderCursor(state, node.from, node.to);
 
   const marks = node.getChildren("CodeMark");
   const info = node.getChild("CodeInfo");
   const openMark = marks[0];
+  const closeMark = marks[marks.length - 1];
+  // While markers are hidden, the fence/language-tag line(s) they belong to
+  // are fully `Decoration.replace`d and render nothing, so they must not
+  // count toward the block's width. `.length` counts characters (a tab is
+  // one character in the doc, same as any other), matching the `ch` unit
+  // it feeds below.
+  const openMarkLine = hideMarkers && openMark ? state.doc.lineAt(openMark.from).number : -1;
+  const closeMarkLine =
+    hideMarkers && closeMark && closeMark !== openMark ? state.doc.lineAt(closeMark.from).number : -1;
+
+  let maxChars = 0;
+  for (let n = startLine; n <= endLine; n++) {
+    if (n === openMarkLine || n === closeMarkLine) {
+      continue;
+    }
+    maxChars = Math.max(maxChars, state.doc.line(n).length);
+  }
+
+  for (let n = startLine; n <= endLine; n++) {
+    out.push(
+      Decoration.line({
+        class: CLASS.codeBlock,
+        attributes: { style: `width: ${maxChars}ch` },
+      }).range(state.doc.line(n).from),
+    );
+  }
+
+  if (!hideMarkers) {
+    return;
+  }
+
   if (openMark) {
     out.push(Decoration.replace({}).range(openMark.from, info ? info.to : openMark.to));
   }
-  const closeMark = marks[marks.length - 1];
   if (closeMark && closeMark !== openMark) {
     out.push(Decoration.replace({}).range(closeMark.from, closeMark.to));
   }
