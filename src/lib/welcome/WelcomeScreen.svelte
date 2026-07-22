@@ -1,12 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { workspaceGetRecents, workspaceRemoveRecent, type RecentProject } from "../ipc/commands";
   import { openWorkspaceFolder, openWorkspacePath } from "../stores/workspace";
+  import { recents, loadRecents, removeRecent as removeRecentFromStore } from "../stores/recents";
 
-  let recents = $state<RecentProject[]>([]);
-
-  onMount(async () => {
-    recents = await workspaceGetRecents();
+  onMount(() => {
+    void loadRecents();
   });
 
   async function openRecent(path: string): Promise<void> {
@@ -15,8 +13,7 @@
 
   async function removeRecent(event: MouseEvent, path: string): Promise<void> {
     event.stopPropagation();
-    await workspaceRemoveRecent(path);
-    recents = recents.filter((r) => r.path !== path);
+    await removeRecentFromStore(path);
   }
 </script>
 
@@ -27,11 +24,11 @@
 
     <div class="recents">
       <h2>Recent</h2>
-      {#if recents.length === 0}
+      {#if $recents.length === 0}
         <p class="empty-state">No recent projects yet</p>
       {:else}
         <div role="list">
-          {#each recents as project (project.path)}
+          {#each $recents as project (project.path)}
             <div
               class="recent-row"
               onclick={() => void openRecent(project.path)}

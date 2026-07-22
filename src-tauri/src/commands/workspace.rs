@@ -83,6 +83,22 @@ pub fn workspace_remove_recent(app: AppHandle, path: String) -> Result<(), AppEr
     recents::remove_recent(&app, &path)
 }
 
+#[tauri::command]
+pub fn workspace_clear_recents(app: AppHandle) -> Result<(), AppError> {
+    recents::clear_recents(&app)?;
+
+    // Mirrors `workspace_set_root`'s `note_recent_document` pairing above:
+    // clearing only the JSON store would leave the system-level Apple-menu
+    // "Open Recent" list (and picking an entry from it) still pointing at
+    // projects Atrium itself no longer considers recent.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.run_on_main_thread(crate::macos_dock::clear_recent_documents);
+    }
+
+    Ok(())
+}
+
 /// Consumes the path from a Dock-menu pick received before the frontend had
 /// mounted its event listeners (the cold-launch case in plan section 4.3).
 /// Called once by the frontend on startup; returns `None` on every other

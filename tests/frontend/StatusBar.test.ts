@@ -27,6 +27,14 @@ vi.mock("../../src/lib/search/searchOverlay", async () => {
   };
 });
 
+vi.mock("../../src/lib/stores/settingsOverlay", async () => {
+  const { writable } = await import("svelte/store");
+  return {
+    settingsOverlay: writable({ open: false }),
+    openSettings: vi.fn(),
+  };
+});
+
 const ACTIVE_TAB: Tab = {
   path: "/proj/src/app.ts",
   mode: "code",
@@ -115,6 +123,15 @@ describe("StatusBar", () => {
     expect(openSearch).toHaveBeenCalledOnce();
   });
 
+  it("clicking the settings button calls openSettings", async () => {
+    const { openSettings } = await import("../../src/lib/stores/settingsOverlay");
+    render(StatusBar);
+
+    await fireEvent.click(screen.getByLabelText("Settings (Cmd/Ctrl+,)"));
+
+    expect(openSettings).toHaveBeenCalledOnce();
+  });
+
   it("clicking the explorer toggle calls toggleExplorerVisible and reflects aria-pressed from explorerVisible", async () => {
     const { toggleExplorerVisible } = await import("../../src/lib/stores/layout");
     render(StatusBar);
@@ -140,19 +157,20 @@ describe("StatusBar", () => {
     expect(toggleTerminalVisible).toHaveBeenCalledOnce();
   });
 
-  it("renders all three action-button icons as SVGs with matching width/height", () => {
+  it("renders all four action-button icons as SVGs with matching width/height", () => {
     const { container } = render(StatusBar);
 
     const icons = container.querySelectorAll(".status-group.actions .status-btn svg");
-    expect(icons).toHaveLength(3);
+    expect(icons).toHaveLength(4);
 
     const sizes = Array.from(icons).map((svg) => ({
       width: svg.getAttribute("width"),
       height: svg.getAttribute("height"),
     }));
 
-    expect(sizes[0]).toEqual(sizes[1]);
-    expect(sizes[1]).toEqual(sizes[2]);
+    for (const size of sizes.slice(1)) {
+      expect(size).toEqual(sizes[0]);
+    }
     expect(sizes[0].width).toBeTruthy();
     expect(sizes[0].width).toBe(sizes[0].height);
   });

@@ -84,6 +84,22 @@ export function saveTerminalLayout(layout: TerminalLayout): void {
   }
 }
 
+/**
+ * Canonical terminal dock position, initialized from `loadTerminalLayout()`.
+ * Height/width stay as `App.svelte`'s own local resize state rather than
+ * living here too — position is the one dimension a control outside the
+ * resize gesture itself (`DockSettingsMenu`, the settings dialog) needs to
+ * read and change directly.
+ */
+export const terminalPosition = writable<TerminalPosition>(loadTerminalLayout().position);
+
+/** Changes the terminal dock position and persists it, reading the current height/width fresh from storage since those aren't tracked as a store here. */
+export function setTerminalPosition(position: TerminalPosition): void {
+  terminalPosition.set(position);
+  const { height, width } = loadTerminalLayout();
+  saveTerminalLayout({ position, height, width });
+}
+
 export interface PanelVisibility {
   explorerVisible: boolean;
   terminalVisible: boolean;

@@ -10,6 +10,7 @@
     toggleTerminalVisible,
   } from "../stores/layout";
   import { openSearch } from "../search/searchOverlay";
+  import { openSettings } from "../stores/settingsOverlay";
 
   const activeTab = $derived($tabsState.tabs.find((t) => t.path === $tabsState.activeTabPath));
 
@@ -52,6 +53,16 @@
   </svg>
 {/snippet}
 
+{#snippet settingsIcon()}
+  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3">
+    <circle cx="8" cy="8" r="2.3" />
+    <path
+      d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.5 3.5l1.4 1.4M11.1 11.1l1.4 1.4M12.5 3.5l-1.4 1.4M4.9 11.1l-1.4 1.4"
+      stroke-linecap="round"
+    />
+  </svg>
+{/snippet}
+
 {#if $workspace.root}
   <div class="status-bar">
     <div class="status-group actions">
@@ -77,6 +88,9 @@
       </button>
       <button class="status-btn" onclick={openSearch} aria-label="Search (Cmd/Ctrl+Shift+F)" title="Search (Cmd/Ctrl+Shift+F)">
         {@render searchIcon()}
+      </button>
+      <button class="status-btn" onclick={openSettings} aria-label="Settings (Cmd/Ctrl+,)" title="Settings (Cmd/Ctrl+,)">
+        {@render settingsIcon()}
       </button>
     </div>
     {#if activeTab}

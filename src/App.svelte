@@ -6,6 +6,7 @@
   import WelcomeScreen from "./lib/welcome/WelcomeScreen.svelte";
   import SearchOverlay from "./lib/search/SearchOverlay.svelte";
   import UnsavedChangesDialog from "./lib/shell/UnsavedChangesDialog.svelte";
+  import SettingsDialog from "./lib/shell/SettingsDialog.svelte";
   import StatusBar from "./lib/shell/StatusBar.svelte";
   import DockSettingsMenu from "./lib/terminal/DockSettingsMenu.svelte";
   import { workspace, openWorkspacePath } from "./lib/stores/workspace";
@@ -32,7 +33,7 @@
     WIDTH_MIN,
     explorerVisible,
     terminalVisible,
-    type TerminalPosition,
+    terminalPosition,
   } from "./lib/stores/layout";
   import { folderName } from "./lib/terminal/tabTitle";
   import {
@@ -57,7 +58,6 @@
   const initialLayout = loadTerminalLayout();
 
   let explorerWidth = $state(240);
-  let terminalPosition = $state<TerminalPosition>(initialLayout.position);
   let terminalHeight = $state(initialLayout.height);
   let terminalWidth = $state(initialLayout.width);
   let mainEl: HTMLDivElement | undefined = $state();
@@ -231,7 +231,7 @@
   // array index — the terminal subtree (and its running PTY session) is
   // only ever moved, never torn down and recreated.
   let mainSlotOrder = $derived<MainSlot[]>(
-    terminalPosition === "left" ? ["terminal", "resizer", "editor"] : ["editor", "resizer", "terminal"],
+    $terminalPosition === "left" ? ["terminal", "resizer", "editor"] : ["editor", "resizer", "terminal"],
   );
 
   // Toggling the dock visible or opening a workspace are themselves
@@ -257,20 +257,15 @@
     }
   });
 
-  function setTerminalPosition(position: TerminalPosition): void {
-    terminalPosition = position;
-    saveTerminalLayout({ position: terminalPosition, height: terminalHeight, width: terminalWidth });
-  }
-
   function startDragTerminal(event: PointerEvent): void {
     event.preventDefault();
     function onUp(): void {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      saveTerminalLayout({ position: terminalPosition, height: terminalHeight, width: terminalWidth });
+      saveTerminalLayout({ position: $terminalPosition, height: terminalHeight, width: terminalWidth });
     }
     let onMove: (e: PointerEvent) => void;
-    if (terminalPosition === "bottom") {
+    if ($terminalPosition === "bottom") {
       const startY = event.clientY;
       const startHeight = terminalHeight;
       onMove = (e: PointerEvent): void => {
@@ -280,7 +275,7 @@
     } else {
       const startX = event.clientX;
       const startWidth = terminalWidth;
-      const sign = terminalPosition === "left" ? 1 : -1;
+      const sign = $terminalPosition === "left" ? 1 : -1;
       onMove = (e: PointerEvent): void => {
         const available = mainEl?.clientWidth ?? Infinity;
         terminalWidth = clampToContainer(startWidth + sign * (e.clientX - startX), WIDTH_MIN, available);
@@ -294,6 +289,12 @@
     if (mainEl) {
       terminalHeight = clampToContainer(terminalHeight, HEIGHT_MIN, mainEl.clientHeight);
       terminalWidth = clampToContainer(terminalWidth, WIDTH_MIN, mainEl.clientWidth);
+      // Persists the clamp immediately, not just in memory: otherwise a
+      // later position change (from DockSettingsMenu or the settings
+      // dialog) would read the pre-clamp, potentially oversized dimension
+      // straight back out of localStorage via setTerminalPosition, undoing
+      // the clamp this mount just applied.
+      saveTerminalLayout({ position: $terminalPosition, height: terminalHeight, width: terminalWidth });
     }
     void initMenuBar(newTerminalTab, () => splitFocusedPane("right"));
     void onFsChanged((event) => {
@@ -320,6 +321,7 @@
   });
 </script>
 
+<SettingsDialog />
 {#if !$workspace.root}
   <WelcomeScreen />
 {:else}
@@ -334,7 +336,7 @@
     <div class="resizer vertical" role="separator" aria-orientation="vertical" onpointerdown={startDragExplorer}></div>
   {/if}
 
-  <div class="main" class:row={terminalPosition !== "bottom"} bind:this={mainEl}>
+  <div class="main" class:row={$terminalPosition !== "bottom"} bind:this={mainEl}>
     {#each mainSlotOrder as slot (slot)}
       {#if slot === "editor"}
         <div class="editor-area">
@@ -396,23 +398,23 @@
       {:else if slot === "resizer"}
         <div
           class="resizer"
-          class:horizontal={terminalPosition === "bottom"}
-          class:vertical={terminalPosition !== "bottom"}
+          class:horizontal={$terminalPosition === "bottom"}
+          class:vertical={$terminalPosition !== "bottom"}
           class:hidden={!$terminalVisible}
           role="separator"
-          aria-orientation={terminalPosition === "bottom" ? "horizontal" : "vertical"}
+          aria-orientation={$terminalPosition === "bottom" ? "horizontal" : "vertical"}
           onpointerdown={startDragTerminal}
         ></div>
       {:else}
         <div
           class="terminal-area"
-          class:dock-left={terminalPosition === "left"}
-          class:dock-right={terminalPosition === "right"}
+          class:dock-left={$terminalPosition === "left"}
+          class:dock-right={$terminalPosition === "right"}
           class:hidden={!$terminalVisible}
-          style={terminalPosition === "bottom" ? `height: ${terminalHeight}px` : `width: ${terminalWidth}px`}
+          style={$terminalPosition === "bottom" ? `height: ${terminalHeight}px` : `width: ${terminalWidth}px`}
         >
           <div class="terminal-dock-header">
-            <DockSettingsMenu position={terminalPosition} onSetPosition={setTerminalPosition} />
+            <DockSettingsMenu />
           </div>
           <div class="terminal-panes">
             {#if terminalPaneTree}

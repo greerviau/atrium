@@ -153,3 +153,14 @@ pub fn note_recent_document(path: &str) {
     let url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(path), true);
     controller.noteNewRecentDocumentURL(&url);
 }
+
+/// The counterpart to `note_recent_document`: clears the system-level
+/// Apple-menu / Finder "Open Recent" list, so `workspace_clear_recents`
+/// empties the same two places `workspace_set_root` populates.
+pub fn clear_recent_documents() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let controller = NSDocumentController::sharedDocumentController(mtm);
+    unsafe { controller.clearRecentDocuments(None) };
+}

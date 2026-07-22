@@ -20,6 +20,7 @@ export function onFsChanged(
 export type MenuEventId =
   | "menu:open-folder"
   | "menu:save"
+  | "menu:settings"
   | "menu:new-terminal-tab"
   | "menu:split-terminal"
   | "menu:find-in-files"

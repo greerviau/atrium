@@ -1,6 +1,12 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { get } from "svelte/store";
 import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import DockSettingsMenu from "../../src/lib/terminal/DockSettingsMenu.svelte";
+import { terminalPosition } from "../../src/lib/stores/layout";
+
+beforeEach(() => {
+  terminalPosition.set("bottom");
+});
 
 afterEach(() => {
   cleanup();
@@ -8,7 +14,7 @@ afterEach(() => {
 
 describe("DockSettingsMenu", () => {
   it("opens the dropdown on click and closes it again on an outside click", async () => {
-    const { container } = render(DockSettingsMenu, { position: "bottom", onSetPosition: vi.fn() });
+    const { container } = render(DockSettingsMenu);
 
     await fireEvent.click(container.querySelector('button[aria-label="Terminal settings"]')!);
     expect(container.querySelector('[role="menuitemradio"]')).not.toBeNull();
@@ -17,8 +23,9 @@ describe("DockSettingsMenu", () => {
     expect(container.querySelector('[role="menuitemradio"]')).toBeNull();
   });
 
-  it("marks the current dock position as checked", async () => {
-    const { container } = render(DockSettingsMenu, { position: "left", onSetPosition: vi.fn() });
+  it("marks the current dock position (read from the shared store) as checked", async () => {
+    terminalPosition.set("left");
+    const { container } = render(DockSettingsMenu);
 
     await fireEvent.click(container.querySelector('button[aria-label="Terminal settings"]')!);
     const items = container.querySelectorAll('[role="menuitemradio"]');
@@ -27,15 +34,14 @@ describe("DockSettingsMenu", () => {
     expect(items[2].getAttribute("aria-checked")).toBe("false"); // Right
   });
 
-  it("calls onSetPosition with the chosen position and closes the dropdown", async () => {
-    const onSetPosition = vi.fn();
-    const { container } = render(DockSettingsMenu, { position: "bottom", onSetPosition });
+  it("sets the shared terminalPosition store when a position is chosen, and closes the dropdown", async () => {
+    const { container } = render(DockSettingsMenu);
 
     await fireEvent.click(container.querySelector('button[aria-label="Terminal settings"]')!);
     const items = container.querySelectorAll('[role="menuitemradio"]');
     await fireEvent.click(items[2]);
 
-    expect(onSetPosition).toHaveBeenCalledWith("right");
+    expect(get(terminalPosition)).toBe("right");
     expect(container.querySelector('[role="menuitemradio"]')).toBeNull();
   });
 });

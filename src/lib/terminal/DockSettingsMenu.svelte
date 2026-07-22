@@ -1,23 +1,23 @@
 <script lang="ts">
   import ContextMenu from "../ui/ContextMenu.svelte";
-  import type { TerminalPosition } from "../stores/layout";
+  import { terminalPosition, setTerminalPosition, type TerminalPosition } from "../stores/layout";
 
   /**
    * The terminal dock's settings gear: the only control for dock position
-   * (bottom/left/right), since that's dock-wide state rather than something
-   * that belongs on every individual panel. Manages its own open/closed
-   * state and its own outside-click listener, the same self-contained
-   * pattern `SplitMenu` uses.
+   * (bottom/left/right) that lives inside the terminal panel itself, since
+   * that's dock-wide state rather than something that belongs on every
+   * individual panel. Reads/writes the shared `terminalPosition` store
+   * directly (same store the settings dialog uses), so the two controls can
+   * never drift. Manages its own open/closed state and its own
+   * outside-click listener, the same self-contained pattern `SplitMenu`
+   * uses.
    */
-  let { position, onSetPosition }: { position: TerminalPosition; onSetPosition: (position: TerminalPosition) => void } =
-    $props();
-
   let open = $state(false);
   let rootEl: HTMLDivElement | undefined = $state();
   let buttonEl: HTMLButtonElement | undefined = $state();
 
   function choose(next: TerminalPosition): void {
-    onSetPosition(next);
+    setTerminalPosition(next);
     open = false;
   }
 
@@ -54,11 +54,11 @@
   </button>
   {#if open}
     <ContextMenu anchorEl={buttonEl}>
-      <button role="menuitemradio" aria-checked={position === "bottom"} onclick={() => choose("bottom")}>
+      <button role="menuitemradio" aria-checked={$terminalPosition === "bottom"} onclick={() => choose("bottom")}>
         Dock Bottom
       </button>
-      <button role="menuitemradio" aria-checked={position === "left"} onclick={() => choose("left")}>Dock Left</button>
-      <button role="menuitemradio" aria-checked={position === "right"} onclick={() => choose("right")}>
+      <button role="menuitemradio" aria-checked={$terminalPosition === "left"} onclick={() => choose("left")}>Dock Left</button>
+      <button role="menuitemradio" aria-checked={$terminalPosition === "right"} onclick={() => choose("right")}>
         Dock Right
       </button>
     </ContextMenu>
