@@ -274,11 +274,10 @@ function parseColumnAlignment(text: string): ColumnAlignment[] {
  * Decorates one table row (`TableHeader` or `TableRow`, always a single
  * physical line). The row gets an always-visible `Decoration.line`
  * container (`display: table-row`, matching the code-block precedent).
- * Cursor-gating applies per cell, not to the row as a whole: each
- * `TableCell` is checked against the cursor independently, so editing one
- * cell reveals only that cell (and its bordering pipe/gap) while every
- * other cell on the same row keeps its `cm-table-cell`/alignment styling.
- * The gap between two cells reveals if either bordering cell is under the
+ * Every `TableCell` always keeps its `cm-table-cell`/alignment `Decoration.mark`
+ * regardless of cursor position, so a cell's `display: table-cell` styling
+ * never drops out from under it — only the bordering pipe/gap between two
+ * cells is cursor-gated: it reveals if either bordering cell is under the
  * cursor, since the pipe visually belongs to both boundaries.
  */
 function decorateTableRow(
@@ -308,18 +307,16 @@ function decorateTableRow(
       if (child.from > prevEnd && !gapUnderCursor) {
         out.push(Decoration.replace({}).range(prevEnd, child.from));
       }
-      if (!cellUnderCursor) {
-        const classes: string[] = [CLASS.tableCell];
-        if (isHeader) {
-          classes.push(CLASS.tableHeaderCell);
-        }
-        if (alignment[column] === "center") {
-          classes.push(CLASS.tableAlignCenter);
-        } else if (alignment[column] === "right") {
-          classes.push(CLASS.tableAlignRight);
-        }
-        out.push(Decoration.mark({ class: classes.join(" ") }).range(child.from, child.to));
+      const classes: string[] = [CLASS.tableCell];
+      if (isHeader) {
+        classes.push(CLASS.tableHeaderCell);
       }
+      if (alignment[column] === "center") {
+        classes.push(CLASS.tableAlignCenter);
+      } else if (alignment[column] === "right") {
+        classes.push(CLASS.tableAlignRight);
+      }
+      out.push(Decoration.mark({ class: classes.join(" ") }).range(child.from, child.to));
       prevEnd = child.to;
       prevCellUnderCursor = cellUnderCursor;
       column++;

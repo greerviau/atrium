@@ -108,7 +108,7 @@ describe("live-preview decorations clear on blur, independent of selection (issu
 
     view.focus();
     view.dispatch({ selection: EditorSelection.cursor(doc.indexOf("Engineer") + 1) });
-    expect(container.querySelectorAll(".cm-table-cell")).toHaveLength(3); // Name, Role, Alice — Engineer's own cell is revealed
+    expect(container.querySelectorAll(".cm-table-cell")).toHaveLength(4); // every cell keeps its mark, including the focused one
 
     view.contentDOM.blur();
     expect(container.querySelectorAll(".cm-table-cell")).toHaveLength(4); // every cell decorated again

@@ -327,14 +327,14 @@ describe("buildDecorations: tables", () => {
     expect(decos.some((d) => d.class?.split(" ").includes("cm-table-row") && d.from === aliceLine.from)).toBe(true);
     expect(state.doc.sliceString(aliceLine.from, aliceLine.to)).toBe("| Alice | Engineer | 92 |");
 
-    // "Engineer" itself has no cell mark...
+    // "Engineer" itself keeps its cell mark...
     expect(
       decos.some(
         (d) => d.class?.split(" ").includes("cm-table-cell") && d.from === engineerFrom && d.to === engineerTo,
       ),
-    ).toBe(false);
+    ).toBe(true);
 
-    // ...but "Alice" and "92" — the other two cells on the same row — keep theirs.
+    // ...and "Alice" and "92" — the other two cells on the same row — keep theirs too.
     const aliceFrom = alignedDoc.indexOf("Alice");
     const aliceTo = aliceFrom + "Alice".length;
     expect(
@@ -374,10 +374,10 @@ describe("buildDecorations: tables", () => {
 
     // No hidden-gap replacement between the start of the row and "Alice".
     expect(decos.some((d) => d.isReplace && !d.class && d.from === aliceLine.from && d.to === aliceFrom)).toBe(false);
-    // "Alice" itself has no cell mark.
+    // "Alice" itself keeps its cell mark.
     expect(
       decos.some((d) => d.class?.split(" ").includes("cm-table-cell") && d.from === aliceFrom && d.to === aliceTo),
-    ).toBe(false);
+    ).toBe(true);
 
     // "Engineer" still gets its cell mark — the gap shared with "Alice" reveals,
     // but "Engineer" itself stays decorated.
@@ -398,10 +398,10 @@ describe("buildDecorations: tables", () => {
     const decos = collect(state);
     const aliceLine = state.doc.line(3);
 
-    // "92" itself has no cell mark.
+    // "92" itself keeps its cell mark.
     expect(
       decos.some((d) => d.class?.split(" ").includes("cm-table-cell") && d.from === scoreFrom && d.to === scoreTo),
-    ).toBe(false);
+    ).toBe(true);
     // No hidden-gap replacement between "92" and the end of the line.
     expect(decos.some((d) => d.isReplace && !d.class && d.from === scoreTo && d.to === aliceLine.to)).toBe(false);
 
@@ -424,10 +424,10 @@ describe("buildDecorations: tables", () => {
     const state = stateFor(alignedDoc, aliceTo);
     const decos = collect(state);
 
-    // "Alice" is treated as under the cursor (boundary is inclusive)...
+    // "Alice" is treated as under the cursor (boundary is inclusive), but still keeps its cell mark...
     expect(
       decos.some((d) => d.class?.split(" ").includes("cm-table-cell") && d.from === aliceFrom && d.to === aliceTo),
-    ).toBe(false);
+    ).toBe(true);
     // ...and the gap immediately after it reveals too.
     const engineerFrom = alignedDoc.indexOf("Engineer");
     expect(decos.some((d) => d.isReplace && !d.class && d.from === aliceTo && d.to === engineerFrom)).toBe(false);
@@ -512,11 +512,11 @@ describe("buildDecorations: tables", () => {
     const decos = collect(state);
     const bobLine = state.doc.line(4);
 
-    // The cursor's own cell loses its cm-table-cell wrapping (cursor-reveal), but the
-    // nested strong decoration still applies, with its `**` marks left visible. This
-    // only asserts about the cursor's own cell, not siblings in the same row, since
-    // whether a same-row sibling cell keeps its decoration is a separate concern
-    // (row- vs cell-level cursor-reveal granularity) from what this test covers.
+    // The cursor's own cell keeps its cm-table-cell wrapping, and the nested strong
+    // decoration still applies, with its `**` marks left visible. This only asserts
+    // about the cursor's own cell, not siblings in the same row, since whether a
+    // same-row sibling cell keeps its decoration is a separate concern (row- vs
+    // cell-level cursor-reveal granularity) from what this test covers.
     const aliceStrong = decos.find((d) => d.class === "cm-strong");
     expect(aliceStrong).toBeTruthy();
     expect(state.doc.sliceString(aliceStrong!.from, aliceStrong!.to)).toBe("**Alice**");
@@ -527,7 +527,7 @@ describe("buildDecorations: tables", () => {
           d.from <= aliceStrong!.from &&
           d.to >= aliceStrong!.to,
       ),
-    ).toBe(false);
+    ).toBe(true);
 
     // A different row in the same table still renders normally, no cross-row leakage.
     const bobStrong = decos.find((d) => d.class === "cm-strong" && d.from >= bobLine.from && d.to <= bobLine.to);
