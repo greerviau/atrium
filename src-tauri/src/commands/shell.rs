@@ -30,6 +30,30 @@ pub fn shell_open_external(app: tauri::AppHandle, url: String) -> Result<(), App
         .map_err(|e| AppError::Other(format!("failed to open URL: {e}")))
 }
 
+/// Any `http(s)://` URL — the shape a rendered markdown link's `href` is
+/// already guaranteed to have by the time it reaches this command
+/// (`handleLinkClick` in `widgets.ts` only calls `openExternalLink` when
+/// `/^https?:\/\//` already matched), re-checked here as the same kind of
+/// second, precise gate `is_pr_url` is for `shell_open_external` — so this
+/// command can't be used to launch a non-web scheme even if a compromised
+/// or buggy frontend path called it with something else.
+fn is_web_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.starts_with("https://") || lower.starts_with("http://")
+}
+
+#[tauri::command]
+pub fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), AppError> {
+    if !is_web_url(&url) {
+        return Err(AppError::InvalidPath(format!(
+            "refusing to open non-http(s) URL: {url}"
+        )));
+    }
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| AppError::Other(format!("failed to open URL: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -45,5 +69,19 @@ mod tests {
         assert!(!is_pr_url("https://evil.com/pull/1"));
         assert!(!is_pr_url("https://github.com/owner/repo/issues/1"));
         assert!(!is_pr_url("file:///etc/passwd"));
+    }
+
+    #[test]
+    fn accepts_valid_web_urls() {
+        assert!(is_web_url("https://example.com"));
+        assert!(is_web_url("http://example.com"));
+        assert!(is_web_url("HTTPS://example.com"));
+    }
+
+    #[test]
+    fn rejects_non_web_urls() {
+        assert!(!is_web_url("file:///etc/passwd"));
+        assert!(!is_web_url("javascript:alert(1)"));
+        assert!(!is_web_url("not a url"));
     }
 }

@@ -256,6 +256,7 @@ fn main() {
             commands::pty::pty_resize,
             commands::pty::pty_kill,
             commands::shell::shell_open_external,
+            commands::shell::open_external_link,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
