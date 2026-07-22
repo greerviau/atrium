@@ -456,10 +456,22 @@ impl Workspace for LocalWorkspace {
         let to_path = self.resolve_within_root(to)?;
         // `tokio::fs::rename` (POSIX `rename(2)`) silently replaces an existing
         // destination, unlike `create_file`/`create_dir` above, so a rename onto an
-        // existing name must be rejected the same way — except a no-op rename onto
-        // itself (an unchanged name submitted via Enter), which should still succeed.
-        if from_path != to_path && to_path.exists() {
-            return Err(AppError::AlreadyExists(to.to_string()));
+        // existing name must be rejected the same way — except when the destination
+        // is the very entry being renamed. A lexical `from_path != to_path` isn't
+        // enough for that: on a case-insensitive volume (default APFS, NTFS),
+        // renaming `Notes.md` to `notes.md` has `to_path.exists()` resolve to the
+        // same on-disk file even though the two `PathBuf`s differ byte-wise, which
+        // would misreport a case-only rename as a collision. Comparing canonicalized
+        // paths instead decides "is the destination a different entry?" by identity,
+        // which also covers the same-name no-op (an unchanged name resubmitted).
+        if to_path.exists() {
+            let same_entry = std::fs::canonicalize(&from_path)
+                .ok()
+                .zip(std::fs::canonicalize(&to_path).ok())
+                .is_some_and(|(a, b)| a == b);
+            if !same_entry {
+                return Err(AppError::AlreadyExists(to.to_string()));
+            }
         }
         tokio::fs::rename(&from_path, &to_path).await?;
         Ok(())

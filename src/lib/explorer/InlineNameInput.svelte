@@ -38,7 +38,7 @@
     return "an unknown error";
   }
 
-  function focusAndSelect(): void {
+  onMount(() => {
     if (!inputEl) return;
     inputEl.focus();
     if (selectBaseNameOnly) {
@@ -48,9 +48,7 @@
     } else {
       inputEl.select();
     }
-  }
-
-  onMount(focusAndSelect);
+  });
 
   async function commit(): Promise<void> {
     if (pending) return;
