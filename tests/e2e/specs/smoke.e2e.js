@@ -140,7 +140,7 @@ describe("terminal", () => {
     // `.xterm-screen` only disappears once `TerminalPane`'s `onDestroy` ->
     // `ptyKill` has actually run.
     const firstPanel = (await $$(".pane-leaf"))[0];
-    const closeButton = await firstPanel.$('button[aria-label="Close panel"]');
+    const closeButton = await firstPanel.$('button[aria-label="Close terminal"]');
     await closeButton.click();
 
     await browser.waitUntil(async () => (await $$(".xterm-screen")).length === 1, {
