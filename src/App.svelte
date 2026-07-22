@@ -472,7 +472,6 @@
   .explorer {
     flex-shrink: 0;
     overflow: auto;
-    border-right: 1px solid var(--atrium-border);
   }
   .resizer {
     background: transparent;

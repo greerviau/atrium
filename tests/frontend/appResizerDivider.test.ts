@@ -119,4 +119,16 @@ describe("App resizer divider (#130)", () => {
     expect(activeRuleMatch).not.toBeNull();
     expect(activeRuleMatch![1]).toMatch(/background:\s*var\(--atrium-accent\)/);
   });
+
+  it("does not double up the explorer/editor divider with .explorer's own border", async () => {
+    workspace.set({ id: "local", root: "/projects/demo" });
+
+    render(App);
+    await tick();
+
+    const css = collectComponentCss();
+    const explorerRuleMatch = css.match(/\.explorer[^{,]*\{([^}]*)\}/);
+    expect(explorerRuleMatch).not.toBeNull();
+    expect(explorerRuleMatch![1]).not.toMatch(/border-right/);
+  });
 });
