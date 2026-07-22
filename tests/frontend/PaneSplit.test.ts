@@ -40,6 +40,7 @@ const baseProps = {
   onClose: noop,
   onNewTab: noop,
   onCloseTab: noop,
+  onSessionExit: noop,
   onSetActiveTab: noop,
   onTitleChange: noop,
   onResizeSplit: noop,

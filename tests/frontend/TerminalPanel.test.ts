@@ -33,6 +33,7 @@ const baseProps = {
   onClosePanel: noop,
   onNewTab: noop,
   onCloseTab: noop,
+  onSessionExit: noop,
   onSetActiveTab: noop,
   onTitleChange: noop,
 };
@@ -79,6 +80,18 @@ describe("TerminalPanel", () => {
     const closeButtons = container.querySelectorAll(".tab-close");
     await fireEvent.click(closeButtons[1]);
     expect(onCloseTab).toHaveBeenCalledWith("s2");
+  });
+
+  it("routes a session's own PTY exit to onSessionExit, not onCloseTab", async () => {
+    const onSessionExit = vi.fn();
+    const onCloseTab = vi.fn();
+    const { container } = render(TerminalPanel, { tree: TWO_TABS, ...baseProps, onSessionExit, onCloseTab });
+
+    const exitTriggers = container.querySelectorAll(".terminal-pane-stub-exit");
+    await fireEvent.click(exitTriggers[0]);
+
+    expect(onSessionExit).toHaveBeenCalledWith("s1");
+    expect(onCloseTab).not.toHaveBeenCalled();
   });
 
   it("renders the split button and close-panel button inside .tab-strip-controls", () => {

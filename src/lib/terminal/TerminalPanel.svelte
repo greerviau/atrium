@@ -19,6 +19,7 @@
     onClosePanel,
     onNewTab,
     onCloseTab,
+    onSessionExit,
     onSetActiveTab,
     onTitleChange,
   }: {
@@ -28,7 +29,12 @@
     onSplit: (direction: SplitDirection) => void;
     onClosePanel: () => void;
     onNewTab: () => void;
+    // The tab's × button — a deliberate close.
     onCloseTab: (sessionId: string) => void;
+    // The session's own PTY exiting, wired to TerminalPane's onExit below —
+    // distinct from onCloseTab so a caller can tell a user-driven close
+    // apart from the shell exiting on its own.
+    onSessionExit: (sessionId: string) => void;
     onSetActiveTab: (sessionId: string) => void;
     onTitleChange: (sessionId: string, title: string) => void;
   } = $props();
@@ -75,7 +81,7 @@
         <TerminalPane
           cwd={session.cwd}
           {workspaceId}
-          onExit={() => onCloseTab(session.id)}
+          onExit={() => onSessionExit(session.id)}
           onTitleChange={(title) => onTitleChange(session.id, title)}
         />
       </div>
