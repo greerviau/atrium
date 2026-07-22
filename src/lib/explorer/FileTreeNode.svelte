@@ -5,6 +5,7 @@
   import { openContextMenu } from "./contextMenu";
   import ExplorerIcon from "./icons/ExplorerIcon.svelte";
   import FileTreeNode from "./FileTreeNode.svelte";
+  import { EXPLORER_PATH_DRAG_TYPE } from "../util/dragDropTypes";
 
   let { node, depth = 0 }: { node: TreeNode; depth?: number } = $props();
 
@@ -29,7 +30,7 @@
   }
 
   function onDragStart(event: DragEvent): void {
-    event.dataTransfer?.setData("text/plain", node.entry.path);
+    event.dataTransfer?.setData(EXPLORER_PATH_DRAG_TYPE, node.entry.path);
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = "copy";
     }

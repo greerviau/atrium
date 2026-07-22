@@ -13,6 +13,14 @@
   import { computeTabTitle, parseOsc7Cwd, reduceTitleState, type TitleState } from "./tabTitle";
   import { handleTerminalKeyEvent } from "./terminalKeyHandling";
   import { shellQuotePath } from "./shellQuote";
+  import { EXPLORER_PATH_DRAG_TYPE } from "../util/dragDropTypes";
+
+  // Wrapping a pty write in bracketed paste tells the shell to treat the
+  // whole payload as literal pasted text, regardless of embedded control
+  // characters (a newline is legal in a POSIX filename) — the same thing a
+  // real terminal emulator does for a drop or paste.
+  const BRACKETED_PASTE_START = "\x1b[200~";
+  const BRACKETED_PASTE_END = "\x1b[201~";
 
   // Tauri's `CmdOrCtrl` accelerator resolves to Cmd-only on macOS and
   // Ctrl-only elsewhere (never both on one platform), so the toggle-panel
@@ -69,24 +77,35 @@
 
   function insertPathAtCursor(path: string): void {
     if (!terminalId) return;
-    void ptyWrite(terminalId, shellQuotePath(path));
+    // A trailing space means two dropped paths become two shell words
+    // ("'/one/a' '/two/b'") instead of running together into one.
+    const text = `${shellQuotePath(path)} `;
+    void ptyWrite(terminalId, `${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}`);
     terminal.focus();
   }
 
   function onDragOver(event: DragEvent): void {
-    if (!event.dataTransfer?.types.includes("text/plain")) return;
+    // Refuse the drop while the pty is still spawning rather than silently
+    // swallowing it: with no preventDefault the browser never treats this
+    // element as a valid drop target, so no "drop" event follows.
+    if (!terminalId) return;
+    if (!event.dataTransfer?.types.includes(EXPLORER_PATH_DRAG_TYPE)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
     dropTargetActive = true;
   }
 
-  function onDragLeave(): void {
+  function onDragLeave(event: DragEvent): void {
+    // `dragleave` bubbles from xterm's own child elements as the pointer
+    // moves within the pane, so only clear the affordance once the pointer
+    // has actually left the pane's subtree.
+    if (event.relatedTarget instanceof Node && container.contains(event.relatedTarget)) return;
     dropTargetActive = false;
   }
 
   function onDrop(event: DragEvent): void {
     dropTargetActive = false;
-    const path = event.dataTransfer?.getData("text/plain");
+    const path = event.dataTransfer?.getData(EXPLORER_PATH_DRAG_TYPE);
     if (!path) return;
     event.preventDefault();
     insertPathAtCursor(path);
