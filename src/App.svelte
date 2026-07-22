@@ -70,9 +70,11 @@
   let focusedPaneId = $state<string | null>(null);
 
   // Blocks the auto-spawn effect (below) from immediately retrying right
-  // after a session's own shell exits, as opposed to its tab being closed
-  // via the × button: TerminalPane's onExit routes through exitTabInPane
-  // (not closeTabInPane), which sets this before removing the tab. Without
+  // after a session's own shell exits within CRASH_EXIT_WINDOW_MS of being
+  // spawned, as opposed to its tab being closed via the × button or a
+  // session the user actually worked in for a while: TerminalPane's onExit
+  // routes through exitTabInPane (not closeTabInPane), which sets this
+  // before removing the tab only when the exit looks like a crash. Without
   // it, a shell that exits right after starting (e.g. $SHELL pointing at a
   // binary that exits immediately, or an rc file that hits exit) would
   // respawn, exit, respawn — forever. Every explicit "open a terminal"
@@ -168,11 +170,19 @@
     removeTabFromPane(paneId, sessionId);
   }
 
+  // A shell that exits within this window of being spawned is treated as
+  // crash-looping (a broken $SHELL, or an rc file that hits exit) rather
+  // than a deliberate exit/Ctrl-D from a session the user was actually
+  // using — see exitTabInPane below.
+  const CRASH_EXIT_WINDOW_MS = 1000;
+
   // TerminalPane's onExit — the PTY itself exiting, not the user closing
-  // its tab — routes through here instead of closeTabInPane, leaving the
-  // guard set. See suppressAutoSpawn above.
-  function exitTabInPane(paneId: string, sessionId: string): void {
-    suppressAutoSpawn = true;
+  // its tab — routes through here instead of closeTabInPane. Only an exit
+  // within CRASH_EXIT_WINDOW_MS of spawning sets the guard; a session that
+  // ran long enough to be a deliberate close gets the same fresh respawn
+  // attempt closeTabInPane gives the × button. See suppressAutoSpawn above.
+  function exitTabInPane(paneId: string, sessionId: string, elapsedMs: number): void {
+    suppressAutoSpawn = elapsedMs < CRASH_EXIT_WINDOW_MS;
     removeTabFromPane(paneId, sessionId);
   }
 
@@ -411,7 +421,7 @@
                   onClose={(paneId) => closePanel(paneId)}
                   onNewTab={(paneId) => addTabToPane(paneId)}
                   onCloseTab={(paneId, sessionId) => closeTabInPane(paneId, sessionId)}
-                  onSessionExit={(paneId, sessionId) => exitTabInPane(paneId, sessionId)}
+                  onSessionExit={(paneId, sessionId, elapsedMs) => exitTabInPane(paneId, sessionId, elapsedMs)}
                   onSetActiveTab={(paneId, sessionId) => setActiveTabInPane(paneId, sessionId)}
                   onTitleChange={(paneId, sessionId, title) => setSessionTitle(paneId, sessionId, title)}
                   onResizeSplit={(splitId, index, delta, containerSizePx) =>

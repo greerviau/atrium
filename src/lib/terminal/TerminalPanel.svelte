@@ -33,8 +33,9 @@
     onCloseTab: (sessionId: string) => void;
     // The session's own PTY exiting, wired to TerminalPane's onExit below —
     // distinct from onCloseTab so a caller can tell a user-driven close
-    // apart from the shell exiting on its own.
-    onSessionExit: (sessionId: string) => void;
+    // apart from the shell exiting on its own. elapsedMs is how long the
+    // session had been alive when it exited.
+    onSessionExit: (sessionId: string, elapsedMs: number) => void;
     onSetActiveTab: (sessionId: string) => void;
     onTitleChange: (sessionId: string, title: string) => void;
   } = $props();
@@ -81,7 +82,7 @@
         <TerminalPane
           cwd={session.cwd}
           {workspaceId}
-          onExit={() => onSessionExit(session.id)}
+          onExit={(elapsedMs) => onSessionExit(session.id, elapsedMs)}
           onTitleChange={(title) => onTitleChange(session.id, title)}
         />
       </div>

@@ -28,7 +28,12 @@
     workspaceId,
     onExit,
     onTitleChange,
-  }: { cwd: string; workspaceId: string; onExit?: () => void; onTitleChange?: (title: string) => void } = $props();
+  }: {
+    cwd: string;
+    workspaceId: string;
+    onExit?: (elapsedMs: number) => void;
+    onTitleChange?: (title: string) => void;
+  } = $props();
 
   let container: HTMLDivElement;
   let terminal: Terminal;
@@ -124,6 +129,7 @@
       }
     });
 
+    const spawnedAt = Date.now();
     (async () => {
       const cols = terminal.cols;
       const rows = terminal.rows;
@@ -132,7 +138,7 @@
         if (event.type === "data") {
           terminal.write(base64ToBytes(event.data));
         } else if (event.type === "exit") {
-          onExit?.();
+          onExit?.(Date.now() - spawnedAt);
         }
       });
     })();

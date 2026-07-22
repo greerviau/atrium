@@ -90,7 +90,7 @@ describe("TerminalPanel", () => {
     const exitTriggers = container.querySelectorAll(".terminal-pane-stub-exit");
     await fireEvent.click(exitTriggers[0]);
 
-    expect(onSessionExit).toHaveBeenCalledWith("s1");
+    expect(onSessionExit).toHaveBeenCalledWith("s1", 60_000);
     expect(onCloseTab).not.toHaveBeenCalled();
   });
 
