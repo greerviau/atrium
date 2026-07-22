@@ -42,7 +42,7 @@ vi.mock("../../src/lib/ipc/events", () => ({
 }));
 
 /** Resets the shared workspace/layout stores to a fresh-install baseline (no persisted layout, dock visible by default) before each case. */
-function mockCommon(): void {
+function resetStores(): void {
   localStorage.clear();
   workspace.set({ id: "local", root: null });
   terminalVisible.set(true);
@@ -50,7 +50,7 @@ function mockCommon(): void {
 
 describe("App terminal auto-spawn", () => {
   beforeEach(() => {
-    mockCommon();
+    resetStores();
   });
 
   afterEach(() => {
@@ -73,8 +73,17 @@ describe("App terminal auto-spawn", () => {
 
   it("closing the dock's last remaining tab respawns a session instead of leaving the empty placeholder", async () => {
     workspace.set({ id: "local", root: "/projects/demo" });
+    terminalVisible.set(false);
 
     const { container } = render(App);
+    await tick();
+    expect(container.querySelectorAll(".terminal-pane-stub")).toHaveLength(0);
+
+    // Seed the first session via the hidden→visible toggle (the one
+    // transition the old effect already handled), so the assertions below
+    // prove gap 2 — closing the last tab — on their own, independent of
+    // gap 1.
+    terminalVisible.set(true);
     await tick();
     await tick();
     expect(container.querySelectorAll(".terminal-pane-stub")).toHaveLength(1);

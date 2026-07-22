@@ -14,6 +14,7 @@
     onClose,
     onNewTab,
     onCloseTab,
+    onSessionExit,
     onSetActiveTab,
     onTitleChange,
     onResizeSplit,
@@ -27,6 +28,7 @@
     onClose: (paneId: string) => void;
     onNewTab: (paneId: string) => void;
     onCloseTab: (paneId: string, sessionId: string) => void;
+    onSessionExit: (paneId: string, sessionId: string) => void;
     onSetActiveTab: (paneId: string, sessionId: string) => void;
     onTitleChange: (paneId: string, sessionId: string, title: string) => void;
     onResizeSplit: (splitId: string, index: number, delta: number, containerSizePx: number) => void;
@@ -100,6 +102,7 @@
           onClosePanel={() => onClose(leaf.id)}
           onNewTab={() => onNewTab(leaf.id)}
           onCloseTab={(sessionId) => onCloseTab(leaf.id, sessionId)}
+          onSessionExit={(sessionId) => onSessionExit(leaf.id, sessionId)}
           onSetActiveTab={(sessionId) => onSetActiveTab(leaf.id, sessionId)}
           onTitleChange={(sessionId, title) => onTitleChange(leaf.id, sessionId, title)}
         />

@@ -69,6 +69,18 @@
   let terminalPaneTree = $state<PaneNode | null>(null);
   let focusedPaneId = $state<string | null>(null);
 
+  // Blocks the auto-spawn effect (below) from immediately retrying right
+  // after a session's own shell exits, as opposed to its tab being closed
+  // via the × button: TerminalPane's onExit routes through exitTabInPane
+  // (not closeTabInPane), which sets this before removing the tab. Without
+  // it, a shell that exits right after starting (e.g. $SHELL pointing at a
+  // binary that exits immediately, or an rc file that hits exit) would
+  // respawn, exit, respawn — forever. Every explicit "open a terminal"
+  // gesture — closing/opening a tab through the UI, toggling the dock
+  // visible, or opening a workspace — clears it again, so each still gets
+  // its own single attempt.
+  let suppressAutoSpawn = $state(false);
+
   function genId(prefix: string): string {
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
@@ -92,6 +104,7 @@
   function newTerminalTab(): void {
     const root = $workspace.root;
     if (!root) return;
+    suppressAutoSpawn = false;
     if (!terminalPaneTree) {
       const paneId = genId("pane");
       const session = spawnSession(root);
@@ -132,18 +145,35 @@
   // "close panel" button, shown only once there's more than one panel).
   function closePanel(paneId: string): void {
     if (!terminalPaneTree) return;
+    suppressAutoSpawn = false;
     const nextFocus = focusedPaneId === paneId ? nextActivePane(terminalPaneTree, paneId) : focusedPaneId;
     terminalPaneTree = removePane(terminalPaneTree, paneId);
     focusedPaneId = terminalPaneTree ? (nextFocus ?? focusedPaneId) : null;
   }
 
-  function closeTabInPane(paneId: string, sessionId: string): void {
+  function removeTabFromPane(paneId: string, sessionId: string): void {
     if (!terminalPaneTree) return;
     const leaf = findLeaf(terminalPaneTree, paneId);
     const isPanelsLastTab = leaf?.tabs.length === 1;
     const nextFocus = isPanelsLastTab && focusedPaneId === paneId ? nextActivePane(terminalPaneTree, paneId) : focusedPaneId;
     terminalPaneTree = closeTabInLeaf(terminalPaneTree, paneId, sessionId);
     focusedPaneId = terminalPaneTree ? (nextFocus ?? focusedPaneId) : null;
+  }
+
+  // The tab's × button — a deliberate close — always clears the auto-spawn
+  // guard, so if this empties the dock the invariant below gets a fresh
+  // spawn attempt (matching the "closing the last tab" case it exists for).
+  function closeTabInPane(paneId: string, sessionId: string): void {
+    suppressAutoSpawn = false;
+    removeTabFromPane(paneId, sessionId);
+  }
+
+  // TerminalPane's onExit — the PTY itself exiting, not the user closing
+  // its tab — routes through here instead of closeTabInPane, leaving the
+  // guard set. See suppressAutoSpawn above.
+  function exitTabInPane(paneId: string, sessionId: string): void {
+    suppressAutoSpawn = true;
+    removeTabFromPane(paneId, sessionId);
   }
 
   function setActiveTabInPane(paneId: string, sessionId: string): void {
@@ -193,13 +223,25 @@
     terminalPosition === "left" ? ["terminal", "resizer", "editor"] : ["editor", "resizer", "terminal"],
   );
 
+  // Toggling the dock visible or opening a workspace are themselves
+  // explicit "give me a terminal" gestures, so each always gets a fresh
+  // auto-spawn attempt below — clearing any guard left behind by an
+  // earlier session that exited on its own (see suppressAutoSpawn).
+  $effect(() => {
+    void $terminalVisible;
+    void $workspace.root;
+    suppressAutoSpawn = false;
+  });
+
   // The terminal dock never sits open with no active session: whenever it's
   // visible and the pane tree is empty — on first mount, after toggling it
   // open, or because the user closed the last remaining tab/panel while it
   // was already open — this spawns one, matching the VS Code/JetBrains
-  // convention that the terminal panel never shows a blank panel.
+  // convention that the terminal panel never shows a blank panel. Guarded by
+  // suppressAutoSpawn so a session that exits immediately after spawning
+  // can't respawn itself forever.
   $effect(() => {
-    if ($terminalVisible && $workspace.root && terminalPaneTree === null) {
+    if ($terminalVisible && $workspace.root && terminalPaneTree === null && !suppressAutoSpawn) {
       newTerminalTab();
     }
   });
@@ -369,6 +411,7 @@
                   onClose={(paneId) => closePanel(paneId)}
                   onNewTab={(paneId) => addTabToPane(paneId)}
                   onCloseTab={(paneId, sessionId) => closeTabInPane(paneId, sessionId)}
+                  onSessionExit={(paneId, sessionId) => exitTabInPane(paneId, sessionId)}
                   onSetActiveTab={(paneId, sessionId) => setActiveTabInPane(paneId, sessionId)}
                   onTitleChange={(paneId, sessionId, title) => setSessionTitle(paneId, sessionId, title)}
                   onResizeSplit={(splitId, index, delta, containerSizePx) =>
