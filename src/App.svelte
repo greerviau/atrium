@@ -7,6 +7,7 @@
   import SearchOverlay from "./lib/search/SearchOverlay.svelte";
   import UnsavedChangesDialog from "./lib/shell/UnsavedChangesDialog.svelte";
   import SettingsDialog from "./lib/shell/SettingsDialog.svelte";
+  import KeyboardShortcutsDialog from "./lib/shell/KeyboardShortcutsDialog.svelte";
   import StatusBar from "./lib/shell/StatusBar.svelte";
   import { workspace, openWorkspacePath } from "./lib/stores/workspace";
   import {
@@ -310,6 +311,7 @@
 </script>
 
 <SettingsDialog />
+<KeyboardShortcutsDialog />
 {#if !$workspace.root}
   <WelcomeScreen />
 {:else}

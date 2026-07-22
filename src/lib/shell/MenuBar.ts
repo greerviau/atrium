@@ -6,6 +6,8 @@ import { toggleExplorerVisible, toggleTerminalVisible } from "../stores/layout";
 import { zoomIn, zoomOut, resetZoom } from "../stores/textSize";
 import { openSearch } from "../search/searchOverlay";
 import { openSettings } from "../stores/settingsOverlay";
+import { openShortcuts } from "../stores/shortcutsOverlay";
+import { openExternalLink } from "../ipc/commands";
 import { get } from "svelte/store";
 
 /**
@@ -22,7 +24,9 @@ import { get } from "svelte/store";
  * panel-visibility store actions a status-bar button would;
  * `menu:zoom-in`/`menu:zoom-out`/`menu:zoom-reset` call the zoom store's
  * actions; the four `menu:theme:*` items call `setTheme` on the theme
- * store.
+ * store; `menu:help:shortcuts` opens the keyboard shortcuts dialog, and
+ * `menu:help:github`/`menu:help:report-issue` open their hardcoded GitHub
+ * URLs via the same `openExternalLink` command rendered markdown links use.
  */
 export async function initMenuBar(onNewTerminalTab: () => void, onSplitTerminal: () => void): Promise<void> {
   await onMenuEvent("menu:open-folder", () => void openWorkspaceFolder());
@@ -52,4 +56,9 @@ export async function initMenuBar(onNewTerminalTab: () => void, onSplitTerminal:
   await onMenuEvent("menu:theme:atrium-dark", () => setTheme("atrium-dark"));
   await onMenuEvent("menu:theme:atrium-light", () => setTheme("atrium-light"));
   await onMenuEvent("menu:theme:atrium-high-contrast", () => setTheme("atrium-high-contrast"));
+  await onMenuEvent("menu:help:shortcuts", () => openShortcuts());
+  await onMenuEvent("menu:help:github", () => void openExternalLink("https://github.com/greerviau/atrium"));
+  await onMenuEvent("menu:help:report-issue", () =>
+    void openExternalLink("https://github.com/greerviau/atrium/issues/new"),
+  );
 }

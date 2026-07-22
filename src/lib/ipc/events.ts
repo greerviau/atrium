@@ -32,7 +32,10 @@ export type MenuEventId =
   | "menu:theme:auto"
   | "menu:theme:atrium-dark"
   | "menu:theme:atrium-light"
-  | "menu:theme:atrium-high-contrast";
+  | "menu:theme:atrium-high-contrast"
+  | "menu:help:shortcuts"
+  | "menu:help:github"
+  | "menu:help:report-issue";
 
 export function onMenuEvent(
   id: MenuEventId,

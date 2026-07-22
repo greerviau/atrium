@@ -20,17 +20,27 @@ use tauri::{Emitter, Manager};
 /// (Open Folder, Save, New Terminal Tab), `Edit` (standard
 /// Undo/Redo/Cut/Copy/Paste/Select All, plus Find in Files), `View` (Toggle
 /// File Explorer, Toggle Terminal, Split Terminal, Zoom In, Zoom Out, Reset
-/// Zoom), `Window` (standard), and `Theme` (Auto plus the three built-in
-/// themes). Menu items that need frontend behavior (Settings, Open Folder,
+/// Zoom), `Window` (standard), `Theme` (Auto plus the three built-in
+/// themes), and `Help` (Keyboard Shortcuts…, Atrium on GitHub, Report an
+/// Issue…). Menu items that need frontend behavior (Settings, Open Folder,
 /// Save, New Terminal Tab, Find in Files, both View toggles, Split Terminal,
-/// all three zoom items, every Theme option) emit a `menu:*` event;
-/// `App.svelte` / `MenuBar.ts` listen for these and dispatch to the active
-/// pane, the search overlay, the settings dialog, the panel-visibility
-/// store, the zoom store, or the theme store, since the menu itself has no
-/// notion of "the active editor," "the current theme," "is the panel
+/// all three zoom items, every Theme option, every Help item) emit a
+/// `menu:*` event; `App.svelte` / `MenuBar.ts` listen for these and dispatch
+/// to the active pane, the search overlay, the settings dialog, the
+/// panel-visibility store, the zoom store, the theme store, the keyboard
+/// shortcuts panel, or the external-link opener, since the menu itself has
+/// no notion of "the active editor," "the current theme," "is the panel
 /// shown," or "the current zoom level" (no checkmark on the active Theme
 /// item yet — the menu is built once in Rust, before the WebView and its
 /// `localStorage` selection are available).
+///
+/// The `Help` submenu's title is the literal string `"Help"`: on macOS,
+/// AppKit recognizes that exact title and automatically adds a menu-search
+/// field at its top, letting a user fuzzy-search every command across the
+/// whole menu bar. `Keyboard Shortcuts…`'s accelerator list is manually
+/// mirrored in `src/lib/shell/KeyboardShortcutsDialog.svelte`'s static data
+/// (the frontend has no access to these Rust strings) — keep both in sync
+/// when an accelerator here changes.
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let settings = MenuItem::with_id(app, "menu:settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
     let app_menu = Submenu::with_items(
@@ -182,6 +192,39 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         ],
     )?;
 
+    let shortcuts = MenuItem::with_id(
+        app,
+        "menu:help:shortcuts",
+        "Keyboard Shortcuts…",
+        true,
+        None::<&str>,
+    )?;
+    let github = MenuItem::with_id(
+        app,
+        "menu:help:github",
+        "Atrium on GitHub",
+        true,
+        None::<&str>,
+    )?;
+    let report_issue = MenuItem::with_id(
+        app,
+        "menu:help:report-issue",
+        "Report an Issue…",
+        true,
+        None::<&str>,
+    )?;
+    let help_menu = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[
+            &shortcuts,
+            &PredefinedMenuItem::separator(app)?,
+            &github,
+            &report_issue,
+        ],
+    )?;
+
     Menu::with_items(
         app,
         &[
@@ -191,6 +234,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &view_menu,
             &window_menu,
             &theme_menu,
+            &help_menu,
         ],
     )
 }
