@@ -2,11 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EditorState, EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { markdownExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
-import { shellOpenExternal } from "../../src/lib/ipc/commands";
+import { openExternalLink } from "../../src/lib/ipc/commands";
 import { openFile } from "../../src/lib/stores/tabs";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
-  shellOpenExternal: vi.fn(),
+  openExternalLink: vi.fn(),
 }));
 
 vi.mock("../../src/lib/stores/tabs", () => ({
@@ -44,11 +44,11 @@ afterEach(() => {
 
 describe("modifier+click on a rendered markdown link", () => {
   beforeEach(() => {
-    vi.mocked(shellOpenExternal).mockReset();
+    vi.mocked(openExternalLink).mockReset();
     vi.mocked(openFile).mockReset();
   });
 
-  it("cmd-click (metaKey) navigates via shellOpenExternal and leaves selection/decoration untouched", () => {
+  it("cmd-click (metaKey) navigates via openExternalLink and leaves selection/decoration untouched", () => {
     const doc = "See [my link](https://example.com) for more.\nOther line, cursor starts here.";
     view = makeView(doc);
     view.dispatch({ selection: EditorSelection.cursor(doc.length) });
@@ -56,7 +56,7 @@ describe("modifier+click on a rendered markdown link", () => {
     const link = findLink(view);
     link.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, metaKey: true }));
 
-    expect(shellOpenExternal).toHaveBeenCalledWith("https://example.com");
+    expect(openExternalLink).toHaveBeenCalledWith("https://example.com");
     expect(openFile).not.toHaveBeenCalled();
     // Selection is untouched: the modifier-click never reached CodeMirror's
     // built-in cursor-placement handler, so it stays where it was set above.
@@ -65,7 +65,7 @@ describe("modifier+click on a rendered markdown link", () => {
     expect(view.dom.querySelector(".cm-link")).toBe(link);
   });
 
-  it("ctrl-click (ctrlKey) navigates via shellOpenExternal the same way", () => {
+  it("ctrl-click (ctrlKey) navigates via openExternalLink the same way", () => {
     const doc = "See [my link](https://example.com) for more.\nOther line, cursor starts here.";
     view = makeView(doc);
     view.dispatch({ selection: EditorSelection.cursor(doc.length) });
@@ -73,7 +73,7 @@ describe("modifier+click on a rendered markdown link", () => {
     const link = findLink(view);
     link.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, ctrlKey: true }));
 
-    expect(shellOpenExternal).toHaveBeenCalledWith("https://example.com");
+    expect(openExternalLink).toHaveBeenCalledWith("https://example.com");
   });
 
   it("a plain click (no modifier) does not navigate and still falls through to cursor placement/raw-source reveal", () => {
@@ -85,7 +85,7 @@ describe("modifier+click on a rendered markdown link", () => {
     const linkFrom = view.posAtDOM(link, 0);
     link.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
 
-    expect(shellOpenExternal).not.toHaveBeenCalled();
+    expect(openExternalLink).not.toHaveBeenCalled();
     expect(openFile).not.toHaveBeenCalled();
 
     // jsdom has no layout engine, so CodeMirror's own built-in mousedown
@@ -100,7 +100,7 @@ describe("modifier+click on a rendered markdown link", () => {
     expect(link.isConnected).toBe(false);
   });
 
-  it("a relative-path link resolves through openFile() on modifier-click, not shellOpenExternal", () => {
+  it("a relative-path link resolves through openFile() on modifier-click, not openExternalLink", () => {
     const doc = "See [my note](./notes/todo.md) for more.\nOther line, cursor starts here.";
     view = makeView(doc, "docs/index.md");
     view.dispatch({ selection: EditorSelection.cursor(doc.length) });
@@ -109,6 +109,6 @@ describe("modifier+click on a rendered markdown link", () => {
     link.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, metaKey: true }));
 
     expect(openFile).toHaveBeenCalledWith("docs/notes/todo.md");
-    expect(shellOpenExternal).not.toHaveBeenCalled();
+    expect(openExternalLink).not.toHaveBeenCalled();
   });
 });

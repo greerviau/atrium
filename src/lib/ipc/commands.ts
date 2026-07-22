@@ -173,6 +173,10 @@ export function shellOpenExternal(url: string): Promise<void> {
   return invoke("shell_open_external", { url });
 }
 
+export function openExternalLink(url: string): Promise<void> {
+  return invoke("open_external_link", { url });
+}
+
 /** Confirms the app should actually close: kills running PTYs and exits. */
 export function appConfirmClose(): Promise<void> {
   return invoke("app_confirm_close");

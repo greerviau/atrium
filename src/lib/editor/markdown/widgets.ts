@@ -1,7 +1,7 @@
 import { EditorView, WidgetType } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 import { openFile } from "../../stores/tabs";
-import { shellOpenExternal } from "../../ipc/commands";
+import { openExternalLink } from "../../ipc/commands";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import path from "../../util/path";
 import { loadMermaid } from "./mermaid";
@@ -184,13 +184,13 @@ function resolveImageSrc(url: string, documentPath: string): string {
 
 /**
  * Click handler shared by rendered markdown links: external URLs open via
- * the validated `shell_open_external` command, relative paths that look
+ * the validated `open_external_link` command, relative paths that look
  * like local files open in a new editor tab via the same `openFile()` used
  * by the file explorer and terminal link provider.
  */
 export function handleLinkClick(url: string, documentPath: string): void {
-  if (/^https?:\/\//.test(url)) {
-    void shellOpenExternal(url);
+  if (/^https?:\/\//i.test(url)) {
+    void openExternalLink(url);
     return;
   }
   const target = path.resolveRelative(path.dirname(documentPath), url);
