@@ -108,9 +108,95 @@ describe("live-preview decorations clear on blur, independent of selection (issu
 
     view.focus();
     view.dispatch({ selection: EditorSelection.cursor(doc.indexOf("Engineer") + 1) });
-    expect(container.querySelectorAll(".cm-table-cell")).toHaveLength(3); // Name, Role, Alice — Engineer's own cell is revealed
+    expect(container.querySelectorAll(".cm-table-cell")).toHaveLength(4); // every cell keeps its mark, including the focused one
 
     view.contentDOM.blur();
     expect(container.querySelectorAll(".cm-table-cell")).toHaveLength(4); // every cell decorated again
+  });
+});
+
+/**
+ * Regression test for issue #110: a table's inter-cell gap is never
+ * cursor-revealed (see `decorateTableRow`'s docstring in `decorations.ts`),
+ * which is what stops editing a cell from widening every row's shared
+ * column grid. Instead `EditorView.atomicRanges` (registered alongside
+ * `livePreviewPlugin`) makes the gap atomic for cursor motion: moving the
+ * cursor towards it jumps straight over to the far side in one step rather
+ * than landing inside it character by character.
+ */
+describe("a table's inter-cell gap is atomic for cursor motion, not cursor-revealed (issue #110)", () => {
+  it("jumps the cursor over the whole gap in one step instead of revealing it", () => {
+    const doc = "| Name | Role |\n| --- | --- |\n| Alice | Engineer |\n";
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    view = new EditorView({
+      state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
+      parent: container,
+    });
+    view.focus();
+
+    const aliceEnd = doc.indexOf("Alice") + "Alice".length;
+    const engineerStart = doc.indexOf("Engineer");
+    view.dispatch({ selection: EditorSelection.cursor(aliceEnd) });
+
+    const moved = view.moveByChar(view.state.selection.main, true);
+    expect(moved.head).toBe(engineerStart); // the whole " | " gap is skipped in one move, not character by character
+
+    // The gap itself is still never given a cm-table-cell mark or shown as
+    // raw pipe/space text — every cell on the row stays decorated.
+    expect(container.querySelectorAll(".cm-table-cell")).toHaveLength(4);
+  });
+});
+
+/**
+ * Regression tests for the empty-cell corruption a first pass at issue #110
+ * introduced: the markdown parser gives an empty table cell no `TableCell`
+ * node, so a naive gap computed from one `TableCell` to the next would
+ * swallow the empty cell's own slot into the surrounding, atomic
+ * `tableGap` range — displacing any insertion made "inside" it (or aimed
+ * at it via cursor motion) to the range's far end, in the next column.
+ * `decorateTableRow` avoids this by synthesizing a real slot for an empty
+ * cell (`collectCellSlots` in `decorations.ts`) instead of letting the gap
+ * merge across it.
+ */
+describe("an empty table cell keeps its own slot, reachable and fillable (issue #110 must-fix)", () => {
+  it("lands a retyped replacement in the cell that was cleared, not the next column", () => {
+    const doc = "| Name  | Role     | Score | Notes |\n| ------ | -------- | ----- | ----- |\n| Alice  | Engineer | 92    | first |\n";
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    view = new EditorView({
+      state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
+      parent: container,
+    });
+    view.focus();
+
+    const engineerFrom = doc.indexOf("Engineer");
+    const engineerTo = engineerFrom + "Engineer".length;
+    view.dispatch({ selection: EditorSelection.range(engineerFrom, engineerTo) });
+    view.dispatch(view.state.replaceSelection("")); // clear the cell
+    view.dispatch(view.state.replaceSelection("Manager")); // retype it
+
+    expect(view.state.doc.toString()).toBe(
+      "| Name  | Role     | Score | Notes |\n| ------ | -------- | ----- | ----- |\n| Alice  | Manager | 92    | first |\n",
+    );
+  });
+
+  it("reaches an empty cell by cursor motion and fills it, without disturbing the next column", () => {
+    const doc = "| Name | Role | Score |\n| ---- | ---- | ----- |\n| Dan  |      | 55    |\n";
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    view = new EditorView({
+      state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
+      parent: container,
+    });
+    view.focus();
+
+    const danEnd = doc.indexOf("Dan") + "Dan".length;
+    view.dispatch({ selection: EditorSelection.cursor(danEnd) });
+    const moved = view.moveByChar(view.state.selection.main, true);
+    view.dispatch({ changes: { from: moved.head, to: moved.head, insert: "X" } });
+
+    const danLine = view.state.doc.line(3);
+    expect(view.state.doc.sliceString(danLine.from, danLine.to)).toBe("| Dan  |X      | 55    |");
   });
 });

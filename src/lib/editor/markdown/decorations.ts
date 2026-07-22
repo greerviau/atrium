@@ -31,17 +31,6 @@ function isUnderCursor(state: EditorState, from: number, to: number, hasFocus: b
   return state.selection.ranges.some((r) => r.from <= lineTo && r.to >= lineFrom);
 }
 
-/**
- * True if any selection range overlaps `[from, to)` exactly, with no
- * widening to the enclosing line. Used where a single line contains several
- * independently-editable spans (table cells) and gating on the whole line,
- * like `isUnderCursor` does, would reveal every sibling span at once.
- * Gated on `hasFocus` for the same reason as `isUnderCursor`.
- */
-function overlapsSelection(state: EditorState, from: number, to: number, hasFocus: boolean): boolean {
-  return hasFocus && state.selection.ranges.some((r) => r.from <= to && r.to >= from);
-}
-
 function decorateHeading(
   state: EditorState,
   node: SyntaxNode,
@@ -271,15 +260,71 @@ function parseColumnAlignment(text: string): ColumnAlignment[] {
 }
 
 /**
+ * One column's cell region within a row: either a real `TableCell` node's
+ * range, or (for an empty cell) a synthesized range for the whitespace, if
+ * any, between the two `TableDelimiter` pipes that bound it — the parser
+ * gives an empty cell no `TableCell` node at all, so nothing else marks
+ * where it sits.
+ */
+interface CellSlot {
+  from: number;
+  to: number;
+}
+
+/**
+ * Walks a table row's direct children (always some mix of `TableDelimiter`
+ * and `TableCell` — a `TableCell`'s own nested content, e.g. `Emphasis`,
+ * isn't a direct child of the row) and returns one `CellSlot` per column, in
+ * order, real cells and synthesized empty ones alike. Two `TableDelimiter`
+ * siblings with no `TableCell` between them mark an empty column; the slot
+ * synthesized for it spans whatever sits between the two pipes (nothing,
+ * for `||` with no space at all).
+ */
+function collectCellSlots(node: SyntaxNode): CellSlot[] {
+  const slots: CellSlot[] = [];
+  let lastDelimiterEnd: number | null = null;
+  let child = node.firstChild;
+  while (child) {
+    if (child.type.name === "TableCell") {
+      slots.push({ from: child.from, to: child.to });
+      lastDelimiterEnd = null;
+    } else if (child.type.name === "TableDelimiter") {
+      if (lastDelimiterEnd !== null) {
+        slots.push({ from: lastDelimiterEnd, to: child.from });
+      }
+      lastDelimiterEnd = child.to;
+    }
+    child = child.nextSibling;
+  }
+  return slots;
+}
+
+/**
  * Decorates one table row (`TableHeader` or `TableRow`, always a single
  * physical line). The row gets an always-visible `Decoration.line`
- * container (`display: table-row`, matching the code-block precedent).
- * Cursor-gating applies per cell, not to the row as a whole: each
- * `TableCell` is checked against the cursor independently, so editing one
- * cell reveals only that cell (and its bordering pipe/gap) while every
- * other cell on the same row keeps its `cm-table-cell`/alignment styling.
- * The gap between two cells reveals if either bordering cell is under the
- * cursor, since the pipe visually belongs to both boundaries.
+ * container (`display: table-row`, matching the code-block precedent), and
+ * every column — including an empty one, via the synthesized slot
+ * `collectCellSlots` produces for it — always keeps its `cm-table-cell`/
+ * alignment `Decoration.mark` regardless of cursor position, so a cell's
+ * `display: table-cell` styling never drops out from under it and every
+ * column occupies a real slot in the row.
+ *
+ * The gap between columns (each `|` plus its surrounding alignment
+ * whitespace) is always replaced away — never cursor-gated. Revealing it
+ * would put bare inline text inside a `display: table-row` line, which the
+ * browser wraps in its own anonymous table-cell and, since column widths
+ * are computed jointly across every row sharing the table, widens every
+ * row's shared column grid. Every gap decoration here is tagged
+ * `tableGap: true`; `livePreviewPlugin.ts` registers an
+ * `EditorView.atomicRanges` provider over exactly those tagged ranges, so
+ * the cursor skips past a gap in one motion instead of the old behavior of
+ * revealing it to land inside — the reason a gap was ever cursor-gated in
+ * the first place. Gaps are computed between `CellSlot`s (never swallowing
+ * one) rather than between raw `TableCell` nodes, precisely so an empty
+ * column's slot can't be merged into its neighboring gap: doing so would
+ * make an empty cell both unreachable by cursor motion (atomic ranges skip
+ * over it) and unfillable (a `Decoration.replace` range displaces any
+ * insertion made inside it to the range's far end).
  */
 function decorateTableRow(
   state: EditorState,
@@ -287,47 +332,33 @@ function decorateTableRow(
   alignment: ColumnAlignment[],
   isHeader: boolean,
   out: Range<Decoration>[],
-  hasFocus: boolean,
 ): void {
   const rowClass = isHeader ? `${CLASS.tableRow} ${CLASS.tableHeaderRow}` : CLASS.tableRow;
   out.push(Decoration.line({ class: rowClass }).range(state.doc.lineAt(node.from).from));
 
   let prevEnd = node.from;
-  let prevCellUnderCursor = false;
   let column = 0;
-  let child = node.firstChild;
-  while (child) {
-    if (child.type.name === "TableCell") {
-      const cellUnderCursor = overlapsSelection(state, child.from, child.to, hasFocus);
-      const gapUnderCursor =
-        cellUnderCursor || prevCellUnderCursor || overlapsSelection(state, prevEnd, child.from, hasFocus);
-      // Fully consume the gap since the previous cell (its `|` plus any
-      // surrounding whitespace) rather than just the pipe character — a
-      // leftover whitespace text node would become its own anonymous
-      // table-cell once the real cells get `display: table-cell`.
-      if (child.from > prevEnd && !gapUnderCursor) {
-        out.push(Decoration.replace({}).range(prevEnd, child.from));
-      }
-      if (!cellUnderCursor) {
-        const classes: string[] = [CLASS.tableCell];
-        if (isHeader) {
-          classes.push(CLASS.tableHeaderCell);
-        }
-        if (alignment[column] === "center") {
-          classes.push(CLASS.tableAlignCenter);
-        } else if (alignment[column] === "right") {
-          classes.push(CLASS.tableAlignRight);
-        }
-        out.push(Decoration.mark({ class: classes.join(" ") }).range(child.from, child.to));
-      }
-      prevEnd = child.to;
-      prevCellUnderCursor = cellUnderCursor;
-      column++;
+  for (const slot of collectCellSlots(node)) {
+    if (slot.from > prevEnd) {
+      out.push(Decoration.replace({ tableGap: true }).range(prevEnd, slot.from));
     }
-    child = child.nextSibling;
+    if (slot.to > slot.from) {
+      const classes: string[] = [CLASS.tableCell];
+      if (isHeader) {
+        classes.push(CLASS.tableHeaderCell);
+      }
+      if (alignment[column] === "center") {
+        classes.push(CLASS.tableAlignCenter);
+      } else if (alignment[column] === "right") {
+        classes.push(CLASS.tableAlignRight);
+      }
+      out.push(Decoration.mark({ class: classes.join(" ") }).range(slot.from, slot.to));
+    }
+    prevEnd = slot.to;
+    column++;
   }
-  if (node.to > prevEnd && !prevCellUnderCursor && !overlapsSelection(state, prevEnd, node.to, hasFocus)) {
-    out.push(Decoration.replace({}).range(prevEnd, node.to));
+  if (node.to > prevEnd) {
+    out.push(Decoration.replace({ tableGap: true }).range(prevEnd, node.to));
   }
 }
 
@@ -340,7 +371,7 @@ function decorateTableRow(
  * once and shared across every row, and so the row container stays visible
  * even when the cursor is elsewhere in the same table.
  */
-function decorateTable(state: EditorState, node: SyntaxNode, out: Range<Decoration>[], hasFocus: boolean): void {
+function decorateTable(state: EditorState, node: SyntaxNode, out: Range<Decoration>[]): void {
   const delimiterNode = node.getChild("TableDelimiter");
   const alignment = delimiterNode
     ? parseColumnAlignment(state.doc.sliceString(delimiterNode.from, delimiterNode.to))
@@ -349,9 +380,9 @@ function decorateTable(state: EditorState, node: SyntaxNode, out: Range<Decorati
   let child = node.firstChild;
   while (child) {
     if (child.type.name === "TableHeader") {
-      decorateTableRow(state, child, alignment, true, out, hasFocus);
+      decorateTableRow(state, child, alignment, true, out);
     } else if (child.type.name === "TableRow") {
-      decorateTableRow(state, child, alignment, false, out, hasFocus);
+      decorateTableRow(state, child, alignment, false, out);
     } else if (child.type.name === "TableDelimiter" && child.from === delimiterNode?.from) {
       const line = state.doc.lineAt(child.from);
       out.push(Decoration.line({ class: CLASS.tableDelimiterLine }).range(line.from));
@@ -430,7 +461,7 @@ export function buildDecorations(
           // reaches the switch below and gets decorated the same way it
           // would inside a paragraph; TableHeader/TableRow/TableCell/
           // TableDelimiter have no case there, so revisiting them is a no-op.
-          decorateTable(state, ref.node, decorations, hasFocus);
+          decorateTable(state, ref.node, decorations);
           return;
         }
 
@@ -470,4 +501,21 @@ export function buildDecorations(
   }
 
   return Decoration.set(decorations, true);
+}
+
+/**
+ * Extracts just the `tableGap`-tagged ranges out of a decoration set built by
+ * `buildDecorations`, for use as an `EditorView.atomicRanges` provider
+ * (`livePreviewPlugin.ts`). Keeping this here, next to where the tag is
+ * produced, means the tag's meaning ("a table gap, always hidden, cursor
+ * should skip over it") stays defined in one place.
+ */
+export function buildTableGapAtomicRanges(state: EditorState, decorations: DecorationSet): DecorationSet {
+  const ranges: Range<Decoration>[] = [];
+  decorations.between(0, state.doc.length, (from, to, deco) => {
+    if (deco.spec.tableGap) {
+      ranges.push(deco.range(from, to));
+    }
+  });
+  return Decoration.set(ranges, true);
 }
