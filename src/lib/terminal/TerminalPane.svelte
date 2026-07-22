@@ -12,6 +12,8 @@
   import { zoom } from "../stores/textSize";
   import { computeTabTitle, parseOsc7Cwd, reduceTitleState, type TitleState } from "./tabTitle";
   import { handleTerminalKeyEvent } from "./terminalKeyHandling";
+  import { shellQuotePath } from "./shellQuote";
+  import { EXPLORER_PATH_DRAG_TYPE } from "../util/dragDropTypes";
 
   // Tauri's `CmdOrCtrl` accelerator resolves to Cmd-only on macOS and
   // Ctrl-only elsewhere (never both on one platform), so the toggle-panel
@@ -46,6 +48,7 @@
 
   let titleState: TitleState;
   let lastEmittedTitle: string | undefined;
+  let dropTargetActive = $state(false);
 
   function dispatch(event: Parameters<typeof reduceTitleState>[1]): void {
     titleState = reduceTitleState(titleState, event);
@@ -63,6 +66,47 @@
       bytes[i] = binary.charCodeAt(i);
     }
     return bytes;
+  }
+
+  function insertPathAtCursor(path: string): void {
+    if (!terminalId) return;
+    // terminal.paste() brackets the write only when the foreground program
+    // has actually enabled bracketed-paste mode (DECSET 2004) — bracketing
+    // unconditionally would leak the raw escape bytes into any program that
+    // hasn't (`cat`, `sh`, the `node` REPL, `psql`, ...). It also routes
+    // through the same terminal.onData -> ptyWrite wire below, so the
+    // terminalId guard above is the only gate needed.
+    // A trailing space means two dropped paths become two shell words
+    // ("'/one/a' '/two/b'") instead of running together into one.
+    terminal.paste(`${shellQuotePath(path)} `);
+    terminal.focus();
+  }
+
+  function onDragOver(event: DragEvent): void {
+    // Refuse the drop while the pty is still spawning rather than silently
+    // swallowing it: with no preventDefault the browser never treats this
+    // element as a valid drop target, so no "drop" event follows.
+    if (!terminalId) return;
+    if (!event.dataTransfer?.types.includes(EXPLORER_PATH_DRAG_TYPE)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    dropTargetActive = true;
+  }
+
+  function onDragLeave(event: DragEvent): void {
+    // `dragleave` bubbles from xterm's own child elements as the pointer
+    // moves within the pane, so only clear the affordance once the pointer
+    // has actually left the pane's subtree.
+    if (event.relatedTarget instanceof Node && container.contains(event.relatedTarget)) return;
+    dropTargetActive = false;
+  }
+
+  function onDrop(event: DragEvent): void {
+    dropTargetActive = false;
+    const path = event.dataTransfer?.getData(EXPLORER_PATH_DRAG_TYPE);
+    if (!path) return;
+    event.preventDefault();
+    insertPathAtCursor(path);
   }
 
   onMount(() => {
@@ -190,7 +234,15 @@
   });
 </script>
 
-<div class="terminal-pane" bind:this={container}></div>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="terminal-pane"
+  class:drop-target-active={dropTargetActive}
+  bind:this={container}
+  ondragover={onDragOver}
+  ondragleave={onDragLeave}
+  ondrop={onDrop}
+></div>
 
 <style>
   .terminal-pane {
@@ -198,6 +250,12 @@
     width: 100%;
     padding: 4px;
     box-sizing: border-box;
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+  }
+
+  .terminal-pane.drop-target-active {
+    outline-color: var(--atrium-accent);
   }
 
   .terminal-pane :global(.xterm-viewport) {

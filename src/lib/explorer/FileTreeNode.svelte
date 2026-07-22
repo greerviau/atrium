@@ -5,6 +5,7 @@
   import { openContextMenu } from "./contextMenu";
   import ExplorerIcon from "./icons/ExplorerIcon.svelte";
   import FileTreeNode from "./FileTreeNode.svelte";
+  import { EXPLORER_PATH_DRAG_TYPE } from "../util/dragDropTypes";
 
   let { node, depth = 0 }: { node: TreeNode; depth?: number } = $props();
 
@@ -27,6 +28,13 @@
       onClick();
     }
   }
+
+  function onDragStart(event: DragEvent): void {
+    event.dataTransfer?.setData(EXPLORER_PATH_DRAG_TYPE, node.entry.path);
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "copy";
+    }
+  }
 </script>
 
 <div class="node">
@@ -36,6 +44,8 @@
     onclick={onClick}
     onkeydown={onKeydown}
     oncontextmenu={onContextMenu}
+    draggable="true"
+    ondragstart={onDragStart}
     role="treeitem"
     aria-selected="false"
     aria-expanded={node.entry.isDir ? node.expanded : undefined}
