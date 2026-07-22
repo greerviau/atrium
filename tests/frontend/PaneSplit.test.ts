@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, fireEvent, cleanup } from "@testing-library/svelte";
+import { render, cleanup } from "@testing-library/svelte";
 import PaneSplit from "../../src/lib/terminal/PaneSplit.svelte";
 import { resizeSplit, PANE_MIN_PX, type PaneNode, type SplitPane } from "../../src/lib/terminal/paneTree";
 
-vi.mock("../../src/lib/terminal/TerminalPane.svelte", async () => {
-  const mod = await import("./TerminalPaneStub.svelte");
+vi.mock("../../src/lib/terminal/TerminalPanel.svelte", async () => {
+  const mod = await import("./TerminalPanelStub.svelte");
   return { default: mod.default };
 });
 
@@ -12,16 +12,17 @@ afterEach(() => {
   cleanup();
 });
 
-const LEAF: PaneNode = { type: "leaf", id: "p1", cwd: "/proj", title: "proj" };
+function leafNode(id: string) {
+  return { type: "leaf" as const, id, tabs: [{ id: `${id}-tab`, cwd: "/proj", title: "proj" }], activeTabId: `${id}-tab` };
+}
+
+const LEAF: PaneNode = leafNode("p1");
 
 const SPLIT: PaneNode = {
   type: "split",
   id: "s1",
   direction: "row",
-  children: [
-    { type: "leaf", id: "p1", cwd: "/proj", title: "proj" },
-    { type: "leaf", id: "p2", cwd: "/proj", title: "proj" },
-  ],
+  children: [leafNode("p1"), leafNode("p2")],
   sizes: [0.5, 0.5],
 };
 
@@ -29,117 +30,49 @@ function noop(): void {
   // used as an inert callback prop where the test doesn't assert on it
 }
 
-describe("PaneSplit", () => {
-  it("renders a single-pane tree with no header, matching today's un-split terminal rendering", () => {
-    const { container } = render(PaneSplit, {
-      tree: LEAF,
-      hasSplits: false,
-      activePaneId: "p1",
-      workspaceId: "local",
-      onFocus: noop,
-      onSplit: noop,
-      onClose: noop,
-      onTitleChange: noop,
-      onResizeSplit: noop,
-    });
+const baseProps = {
+  activePaneId: "p1",
+  workspaceId: "local",
+  onFocus: noop,
+  onSplit: noop,
+  onClose: noop,
+  onNewTab: noop,
+  onCloseTab: noop,
+  onSetActiveTab: noop,
+  onTitleChange: noop,
+  onResizeSplit: noop,
+};
 
-    expect(container.querySelector(".pane-header")).toBeNull();
-    expect(container.querySelector(".terminal-pane-stub")).not.toBeNull();
+describe("PaneSplit", () => {
+  it("renders a single-pane tree as one panel", () => {
+    const { container } = render(PaneSplit, { tree: LEAF, hasSplits: false, ...baseProps });
+
+    expect(container.querySelectorAll(".terminal-panel-stub")).toHaveLength(1);
+    expect(container.querySelector(".terminal-panel-stub")?.getAttribute("data-pane-id")).toBe("p1");
   });
 
-  it("renders both children of a split tree, each with its own header and a resizer between them", () => {
-    const { container } = render(PaneSplit, {
-      tree: SPLIT,
-      hasSplits: true,
-      activePaneId: "p1",
-      workspaceId: "local",
-      onFocus: noop,
-      onSplit: noop,
-      onClose: noop,
-      onTitleChange: noop,
-      onResizeSplit: noop,
-    });
+  it("renders both children of a split tree, each as its own panel, with a resizer between them", () => {
+    const { container } = render(PaneSplit, { tree: SPLIT, hasSplits: true, ...baseProps });
 
-    expect(container.querySelectorAll(".terminal-pane-stub")).toHaveLength(2);
-    expect(container.querySelectorAll(".pane-header")).toHaveLength(2);
+    const panels = container.querySelectorAll(".terminal-panel-stub");
+    expect(panels).toHaveLength(2);
+    expect([...panels].map((p) => p.getAttribute("data-pane-id"))).toEqual(["p1", "p2"]);
     expect(container.querySelectorAll(".pane-resizer")).toHaveLength(1);
   });
 
-  it("wires a leaf's split-right button to onSplit with that leaf's own id, not the tab's active pane", async () => {
-    const onSplit = vi.fn();
-    const { container } = render(PaneSplit, {
-      tree: SPLIT,
-      hasSplits: true,
-      activePaneId: "p1",
-      workspaceId: "local",
-      onFocus: noop,
-      onSplit,
-      onClose: noop,
-      onTitleChange: noop,
-      onResizeSplit: noop,
-    });
+  it("lays out a row split horizontally and a column split vertically", () => {
+    const { container } = render(PaneSplit, { tree: SPLIT, hasSplits: true, ...baseProps });
+    expect(container.querySelector(".pane-split")?.classList.contains("row")).toBe(true);
 
-    const panes = container.querySelectorAll(".pane-leaf");
-    const secondPaneSplitRightButton = panes[1].querySelector('button[aria-label="Split pane right"]')!;
-    await fireEvent.click(secondPaneSplitRightButton);
+    cleanup();
 
-    expect(onSplit).toHaveBeenCalledWith("p2", "row");
+    const columnSplit: PaneNode = { ...(SPLIT as SplitPane), direction: "column" };
+    const { container: columnContainer } = render(PaneSplit, { tree: columnSplit, hasSplits: true, ...baseProps });
+    expect(columnContainer.querySelector(".pane-split")?.classList.contains("column")).toBe(true);
   });
 
-  it("wires a leaf's split-down button to onSplit with the column direction", async () => {
-    const onSplit = vi.fn();
-    const { container } = render(PaneSplit, {
-      tree: SPLIT,
-      hasSplits: true,
-      activePaneId: "p1",
-      workspaceId: "local",
-      onFocus: noop,
-      onSplit,
-      onClose: noop,
-      onTitleChange: noop,
-      onResizeSplit: noop,
-    });
-
-    const panes = container.querySelectorAll(".pane-leaf");
-    const firstPaneSplitDownButton = panes[0].querySelector('button[aria-label="Split pane down"]')!;
-    await fireEvent.click(firstPaneSplitDownButton);
-
-    expect(onSplit).toHaveBeenCalledWith("p1", "column");
-  });
-
-  it("wires a leaf's close button to onClose with that leaf's own id", async () => {
-    const onClose = vi.fn();
-    const { container } = render(PaneSplit, {
-      tree: SPLIT,
-      hasSplits: true,
-      activePaneId: "p1",
-      workspaceId: "local",
-      onFocus: noop,
-      onSplit: noop,
-      onClose,
-      onTitleChange: noop,
-      onResizeSplit: noop,
-    });
-
-    const panes = container.querySelectorAll(".pane-leaf");
-    const firstPaneCloseButton = panes[0].querySelector('button[aria-label="Close pane"]')!;
-    await fireEvent.click(firstPaneCloseButton);
-
-    expect(onClose).toHaveBeenCalledWith("p1");
-  });
-
-  it("marks the active pane with the active class", () => {
-    const { container } = render(PaneSplit, {
-      tree: SPLIT,
-      hasSplits: true,
-      activePaneId: "p2",
-      workspaceId: "local",
-      onFocus: noop,
-      onSplit: noop,
-      onClose: noop,
-      onTitleChange: noop,
-      onResizeSplit: noop,
-    });
+  it("marks the focused pane with the active class", () => {
+    const { container } = render(PaneSplit, { tree: SPLIT, hasSplits: true, ...baseProps, activePaneId: "p2" });
 
     const panes = container.querySelectorAll(".pane-leaf");
     expect(panes[0].classList.contains("active")).toBe(false);
@@ -155,17 +88,7 @@ describe("PaneSplit", () => {
     // movement on top of a size that already reflects it, and the divider
     // runs away far faster than the pointer.
     const onResizeSplit = vi.fn();
-    const { container } = render(PaneSplit, {
-      tree: SPLIT,
-      hasSplits: true,
-      activePaneId: "p1",
-      workspaceId: "local",
-      onFocus: noop,
-      onSplit: noop,
-      onClose: noop,
-      onTitleChange: noop,
-      onResizeSplit,
-    });
+    const { container } = render(PaneSplit, { tree: SPLIT, hasSplits: true, ...baseProps, onResizeSplit });
 
     const splitEl = container.querySelector(".pane-split") as HTMLElement;
     Object.defineProperty(splitEl, "clientWidth", { value: 500, configurable: true });

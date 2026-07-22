@@ -5,16 +5,25 @@ import {
   resizeSplit,
   listLeaves,
   findLeaf,
-  updateLeaf,
+  addTabToLeaf,
+  closeTabInLeaf,
+  setActiveTabInLeaf,
+  updateSessionInLeaf,
   nextActivePane,
   PANE_MIN_PX,
   type PaneNode,
   type LeafPane,
   type SplitPane,
+  type TerminalSession,
 } from "../../src/lib/terminal/paneTree";
 
+function session(id: string, cwd = "/proj"): TerminalSession {
+  return { id, cwd, title: id };
+}
+
 function leaf(id: string, cwd = "/proj"): LeafPane {
-  return { type: "leaf", id, cwd, title: id };
+  const s = session(`${id}-tab`, cwd);
+  return { type: "leaf", id, tabs: [s], activeTabId: s.id };
 }
 
 function asSplit(node: PaneNode): SplitPane {
@@ -30,27 +39,61 @@ function hasNoSameDirectionNesting(node: PaneNode, parentDirection: SplitPane["d
 }
 
 describe("splitPane", () => {
-  it("wraps a leaf-only tree into a split with the target first and the new leaf second", () => {
+  it("wraps a leaf-only tree into a row split with the target first and the new leaf second (right)", () => {
     const tree = leaf("L1");
-    const result = asSplit(splitPane(tree, "L1", "row", leaf("L2")));
+    const result = asSplit(splitPane(tree, "L1", "right", leaf("L2")));
 
     expect(result.direction).toBe("row");
     expect(result.children.map((c) => c.id)).toEqual(["L1", "L2"]);
     expect(result.sizes).toEqual([0.5, 0.5]);
   });
 
-  it("nests a perpendicular split inside an existing split rather than flattening it", () => {
-    const tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
-    const result = asSplit(splitPane(tree, "L2", "column", leaf("L3")));
+  it("wraps a leaf-only tree into a row split with the new leaf first (left)", () => {
+    const tree = leaf("L1");
+    const result = asSplit(splitPane(tree, "L1", "left", leaf("L2")));
+
+    expect(result.direction).toBe("row");
+    expect(result.children.map((c) => c.id)).toEqual(["L2", "L1"]);
+    expect(result.sizes).toEqual([0.5, 0.5]);
+  });
+
+  it("wraps a leaf-only tree into a column split with the target first (down)", () => {
+    const tree = leaf("L1");
+    const result = asSplit(splitPane(tree, "L1", "down", leaf("L2")));
+
+    expect(result.direction).toBe("column");
+    expect(result.children.map((c) => c.id)).toEqual(["L1", "L2"]);
+  });
+
+  it("wraps a leaf-only tree into a column split with the new leaf first (up)", () => {
+    const tree = leaf("L1");
+    const result = asSplit(splitPane(tree, "L1", "up", leaf("L2")));
+
+    expect(result.direction).toBe("column");
+    expect(result.children.map((c) => c.id)).toEqual(["L2", "L1"]);
+  });
+
+  it("nests a perpendicular split inside an existing split rather than flattening it (down)", () => {
+    const tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
+    const result = asSplit(splitPane(tree, "L2", "down", leaf("L3")));
 
     const nested = asSplit(result.children[1]);
     expect(nested.direction).toBe("column");
     expect(nested.children.map((c) => c.id)).toEqual(["L2", "L3"]);
   });
 
-  it("appends to the parent split instead of nesting when the direction matches", () => {
-    const tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
-    const result = asSplit(splitPane(tree, "L2", "row", leaf("L3")));
+  it("nests a perpendicular split with the new leaf first (up)", () => {
+    const tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
+    const result = asSplit(splitPane(tree, "L2", "up", leaf("L3")));
+
+    const nested = asSplit(result.children[1]);
+    expect(nested.direction).toBe("column");
+    expect(nested.children.map((c) => c.id)).toEqual(["L3", "L2"]);
+  });
+
+  it("appends to the parent split instead of nesting when the direction matches (right)", () => {
+    const tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
+    const result = asSplit(splitPane(tree, "L2", "right", leaf("L3")));
 
     expect(result.type).toBe("split");
     expect(result.children.map((c) => c.id)).toEqual(["L1", "L2", "L3"]);
@@ -61,10 +104,18 @@ describe("splitPane", () => {
     expect(result.sizes[2]).toBeCloseTo(1 / 3);
   });
 
+  it("inserts before the target when appending to a same-axis parent (left)", () => {
+    const tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
+    const result = asSplit(splitPane(tree, "L2", "left", leaf("L3")));
+
+    expect(result.children.map((c) => c.id)).toEqual(["L1", "L3", "L2"]);
+    expect(result.sizes.reduce((a, b) => a + b, 0)).toBeCloseTo(1);
+  });
+
   it("splits a leaf nested several levels deep", () => {
-    let tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
-    tree = splitPane(tree, "L2", "column", leaf("L3"));
-    tree = splitPane(tree, "L3", "row", leaf("L4"));
+    let tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
+    tree = splitPane(tree, "L2", "down", leaf("L3"));
+    tree = splitPane(tree, "L3", "right", leaf("L4"));
 
     const found = findLeaf(tree, "L4");
     expect(found).not.toBeNull();
@@ -73,7 +124,7 @@ describe("splitPane", () => {
 
   it("leaves the tree unchanged when the target id doesn't exist", () => {
     const tree = leaf("L1");
-    const result = splitPane(tree, "does-not-exist", "row", leaf("L2"));
+    const result = splitPane(tree, "does-not-exist", "right", leaf("L2"));
     expect(result).toEqual(tree);
   });
 });
@@ -84,14 +135,14 @@ describe("removePane", () => {
   });
 
   it("collapses a split with one remaining child into that child directly", () => {
-    const tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
+    const tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
     const result = removePane(tree, "L2");
     expect(result).toEqual(leaf("L1"));
   });
 
   it("renormalizes sizes after removing one of three siblings", () => {
-    let tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
-    tree = splitPane(tree, "L2", "row", leaf("L3"));
+    let tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
+    tree = splitPane(tree, "L2", "right", leaf("L3"));
 
     const result = asSplit(removePane(tree, "L2")!);
     expect(result.children.map((c) => c.id)).toEqual(["L1", "L3"]);
@@ -99,8 +150,8 @@ describe("removePane", () => {
   });
 
   it("removes a deeply nested leaf without disturbing sibling branches", () => {
-    let tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
-    tree = splitPane(tree, "L2", "column", leaf("L3"));
+    let tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
+    tree = splitPane(tree, "L2", "down", leaf("L3"));
 
     const result = removePane(tree, "L3")!;
     expect(listLeaves(result).map((l) => l.id).sort()).toEqual(["L1", "L2"]);
@@ -108,9 +159,9 @@ describe("removePane", () => {
 
   it("regression: split -> perpendicular-split -> perpendicular-split -> remove must not leave a same-direction split nested inside a same-direction split", () => {
     // Build: row[L1, column[L2, row[L3, L4]]]
-    let tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
-    tree = splitPane(tree, "L2", "column", leaf("L3"));
-    tree = splitPane(tree, "L3", "row", leaf("L4"));
+    let tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
+    tree = splitPane(tree, "L2", "down", leaf("L3"));
+    tree = splitPane(tree, "L3", "right", leaf("L4"));
     expect(hasNoSameDirectionNesting(tree)).toBe(true);
 
     // Removing L2 collapses its column parent down to its remaining child
@@ -129,7 +180,7 @@ describe("removePane", () => {
 
 describe("resizeSplit", () => {
   it("shifts the ratio between a pane and its neighbor by delta", () => {
-    const tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
+    const tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
     const splitId = asSplit(tree).id;
 
     const result = asSplit(resizeSplit(tree, splitId, 0, 0.1, 0.05));
@@ -138,7 +189,7 @@ describe("resizeSplit", () => {
   });
 
   it("clamps so neither side drops below minRatio", () => {
-    const tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
+    const tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
     const splitId = asSplit(tree).id;
 
     const result = asSplit(resizeSplit(tree, splitId, 0, 0.9, 0.1));
@@ -147,7 +198,7 @@ describe("resizeSplit", () => {
   });
 
   it("clamps a negative delta symmetrically", () => {
-    const tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
+    const tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
     const splitId = asSplit(tree).id;
 
     const result = asSplit(resizeSplit(tree, splitId, 0, -0.9, 0.1));
@@ -156,8 +207,8 @@ describe("resizeSplit", () => {
   });
 
   it("only touches the targeted split node in a nested tree", () => {
-    let tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
-    tree = splitPane(tree, "L2", "column", leaf("L3"));
+    let tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
+    tree = splitPane(tree, "L2", "down", leaf("L3"));
     const outerId = asSplit(tree).id;
 
     const result = asSplit(resizeSplit(tree, outerId, 0, 0.2, 0.05));
@@ -170,29 +221,84 @@ describe("resizeSplit", () => {
   });
 });
 
-describe("listLeaves / findLeaf / updateLeaf", () => {
+describe("listLeaves / findLeaf", () => {
   it("listLeaves returns a single-item list for a leaf-only tree", () => {
     expect(listLeaves(leaf("L1"))).toEqual([leaf("L1")]);
   });
 
   it("listLeaves collects every leaf across a nested tree", () => {
-    let tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
-    tree = splitPane(tree, "L2", "column", leaf("L3"));
+    let tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
+    tree = splitPane(tree, "L2", "down", leaf("L3"));
     expect(listLeaves(tree).map((l) => l.id).sort()).toEqual(["L1", "L2", "L3"]);
   });
 
   it("findLeaf finds a nested leaf by id and returns null for a missing one", () => {
-    let tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
-    tree = splitPane(tree, "L2", "column", leaf("L3"));
+    let tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
+    tree = splitPane(tree, "L2", "down", leaf("L3"));
     expect(findLeaf(tree, "L3")?.id).toBe("L3");
     expect(findLeaf(tree, "missing")).toBeNull();
   });
+});
 
-  it("updateLeaf patches only the matching leaf's fields", () => {
-    const tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
-    const result = updateLeaf(tree, "L2", { title: "npm" });
-    expect(findLeaf(result, "L2")?.title).toBe("npm");
-    expect(findLeaf(result, "L1")?.title).toBe("L1");
+describe("leaf-local tab operations", () => {
+  it("addTabToLeaf appends a session to the target leaf's tabs and makes it active", () => {
+    const tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
+    const newSession = session("s-new");
+    const result = addTabToLeaf(tree, "L2", newSession);
+
+    const target = findLeaf(result, "L2")!;
+    expect(target.tabs.map((t) => t.id)).toEqual(["L2-tab", "s-new"]);
+    expect(target.activeTabId).toBe("s-new");
+    // Sibling leaf is untouched.
+    expect(findLeaf(result, "L1")).toEqual(findLeaf(tree, "L1"));
+  });
+
+  it("setActiveTabInLeaf switches which tab is active without touching the tab list", () => {
+    let tree = addTabToLeaf(leaf("L1"), "L1", session("s2"));
+    tree = setActiveTabInLeaf(tree, "L1", "L1-tab");
+
+    const target = findLeaf(tree, "L1")!;
+    expect(target.activeTabId).toBe("L1-tab");
+    expect(target.tabs.map((t) => t.id)).toEqual(["L1-tab", "s2"]);
+  });
+
+  it("updateSessionInLeaf patches only the matching session's fields", () => {
+    let tree = addTabToLeaf(leaf("L1"), "L1", session("s2"));
+    tree = updateSessionInLeaf(tree, "L1", "s2", { title: "npm" });
+
+    const target = findLeaf(tree, "L1")!;
+    expect(target.tabs.find((t) => t.id === "s2")?.title).toBe("npm");
+    expect(target.tabs.find((t) => t.id === "L1-tab")?.title).toBe("L1-tab");
+  });
+
+  it("closeTabInLeaf removes a non-active session without disturbing the active one", () => {
+    let tree = addTabToLeaf(leaf("L1"), "L1", session("s2"));
+    tree = closeTabInLeaf(tree, "L1", "s2")!;
+
+    const target = findLeaf(tree, "L1")!;
+    expect(target.tabs.map((t) => t.id)).toEqual(["L1-tab"]);
+    expect(target.activeTabId).toBe("L1-tab");
+  });
+
+  it("closeTabInLeaf falls back to the new last tab when the active session closes", () => {
+    let tree = addTabToLeaf(leaf("L1"), "L1", session("s2"));
+    tree = addTabToLeaf(tree, "L1", session("s3"));
+    tree = setActiveTabInLeaf(tree, "L1", "s2");
+    tree = closeTabInLeaf(tree, "L1", "s2")!;
+
+    const target = findLeaf(tree, "L1")!;
+    expect(target.tabs.map((t) => t.id)).toEqual(["L1-tab", "s3"]);
+    expect(target.activeTabId).toBe("s3");
+  });
+
+  it("closeTabInLeaf removes the whole leaf from the tree once its last tab closes", () => {
+    const tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
+    const result = closeTabInLeaf(tree, "L2", "L2-tab");
+    expect(result).toEqual(leaf("L1"));
+  });
+
+  it("closeTabInLeaf returns null when closing the tree's only leaf's only tab", () => {
+    expect(closeTabInLeaf(leaf("L1"), "L1", "L1-tab")).toBeNull();
   });
 });
 
@@ -202,14 +308,14 @@ describe("nextActivePane", () => {
   });
 
   it("returns the first remaining sibling when it's a leaf", () => {
-    let tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
-    tree = splitPane(tree, "L2", "row", leaf("L3"));
+    let tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
+    tree = splitPane(tree, "L2", "right", leaf("L3"));
     expect(nextActivePane(tree, "L2")).toBe("L1");
   });
 
   it("descends into a remaining split sibling to its first leaf", () => {
-    const tree = splitPane(leaf("L1"), "L1", "row", leaf("L2"));
-    const withNested = splitPane(tree, "L1", "column", leaf("L3"));
+    const tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
+    const withNested = splitPane(tree, "L1", "down", leaf("L3"));
     // withNested: row[column[L1, L3], L2] — removing L2 should fall back
     // into the remaining column sibling's first leaf, L1.
     expect(nextActivePane(withNested, "L2")).toBe("L1");
