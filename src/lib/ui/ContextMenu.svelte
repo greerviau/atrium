@@ -58,10 +58,12 @@
     position: fixed;
     display: flex;
     flex-direction: column;
+    min-width: 160px;
     background: var(--atrium-bg-elevated);
     border: 1px solid var(--atrium-border);
     border-radius: 6px;
     padding: 4px;
+    font-size: 13px;
     z-index: 1000;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
     /* Hidden until the first position measurement lands, so the menu never
@@ -76,10 +78,11 @@
     background: none;
     border: none;
     color: inherit;
-    padding: 4px 10px;
+    padding: 6px 14px;
     cursor: pointer;
     border-radius: 4px;
     font: inherit;
+    white-space: nowrap;
   }
   .context-menu :global(button:hover) {
     background: var(--atrium-bg-hover);
