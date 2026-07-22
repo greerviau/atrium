@@ -168,3 +168,20 @@ describe("ContextMenu: anchorEl positioning", () => {
     expect(menu.style.left).toBe("840px"); // 1000 - 160
   });
 });
+
+describe("ContextMenu: text size and single-line items", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("sizes the container at 13px font and a 160px minimum width, with items that never wrap", () => {
+    const { container } = render(ContextMenuHost, { x: 100, y: 100, itemCount: 1 });
+    const menu = container.querySelector(".context-menu") as HTMLElement;
+    const menuStyle = window.getComputedStyle(menu);
+    expect(menuStyle.fontSize).toBe("13px");
+    expect(menuStyle.minWidth).toBe("160px");
+
+    const item = container.querySelector("button[role='menuitem']") as HTMLElement;
+    expect(window.getComputedStyle(item).whiteSpace).toBe("nowrap");
+  });
+});
