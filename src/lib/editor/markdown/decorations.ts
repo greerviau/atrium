@@ -290,7 +290,8 @@ function decorateTableRow(
   while (child) {
     if (child.type.name === "TableCell") {
       const cellUnderCursor = overlapsSelection(state, child.from, child.to);
-      const gapUnderCursor = cellUnderCursor || prevCellUnderCursor;
+      const gapUnderCursor =
+        cellUnderCursor || prevCellUnderCursor || overlapsSelection(state, prevEnd, child.from);
       // Fully consume the gap since the previous cell (its `|` plus any
       // surrounding whitespace) rather than just the pipe character — a
       // leftover whitespace text node would become its own anonymous
@@ -316,7 +317,7 @@ function decorateTableRow(
     }
     child = child.nextSibling;
   }
-  if (node.to > prevEnd && !prevCellUnderCursor) {
+  if (node.to > prevEnd && !prevCellUnderCursor && !overlapsSelection(state, prevEnd, node.to)) {
     out.push(Decoration.replace({}).range(prevEnd, node.to));
   }
 }

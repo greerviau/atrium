@@ -441,6 +441,29 @@ describe("buildDecorations: tables", () => {
     ).toBe(true);
   });
 
+  it("reveals the gap when the cursor sits on it directly, touching neither bordering cell", () => {
+    const aliceTo = alignedDoc.indexOf("Alice") + "Alice".length;
+    const engineerFrom = alignedDoc.indexOf("Engineer");
+    // The gap is " | " (3 chars): a cursor one position in from either edge
+    // touches neither "Alice" nor "Engineer" directly.
+    const state = stateFor(alignedDoc, aliceTo + 2);
+    const decos = collect(state);
+
+    // Both bordering cells still render decorated...
+    const aliceFrom = alignedDoc.indexOf("Alice");
+    expect(
+      decos.some((d) => d.class?.split(" ").includes("cm-table-cell") && d.from === aliceFrom && d.to === aliceTo),
+    ).toBe(true);
+    const engineerTo = engineerFrom + "Engineer".length;
+    expect(
+      decos.some(
+        (d) => d.class?.split(" ").includes("cm-table-cell") && d.from === engineerFrom && d.to === engineerTo,
+      ),
+    ).toBe(true);
+    // ...but the gap between them must still reveal, since the cursor sits inside it.
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === aliceTo && d.to === engineerFrom)).toBe(false);
+  });
+
   it("keeps two separate tables' alignment independent", () => {
     const doc = "| A | B |\n| ---: | :--- |\n| 1 | 2 |\n\n| C | D |\n| :--- | ---: |\n| 3 | 4 |\n";
     const state = stateFor(doc, doc.length);
