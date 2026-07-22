@@ -108,7 +108,7 @@
   }
 
   onMount(() => {
-    titleState = { cwd, program: null, explicitTitle: null };
+    titleState = { cwd, program: null, explicitTitle: null, explicitTitleIsFresh: false };
     lastEmittedTitle = computeTabTitle(titleState);
 
     terminal = new Terminal({
@@ -149,6 +149,14 @@
     });
 
     terminal.onData((data) => {
+      // xterm sends a raw "\r" for the Enter key. Marking that moment lets
+      // the reducer tell an explicit title the just-started program set for
+      // itself (arrives after this) apart from a stale one left over from
+      // the shell's own idle prompt (set before it) once the backend's next
+      // poll tick confirms the new foreground process.
+      if (data.includes("\r")) {
+        dispatch({ type: "commandSubmitted" });
+      }
       if (terminalId) {
         void ptyWrite(terminalId, data);
       }

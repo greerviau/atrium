@@ -24,14 +24,16 @@ const TITLE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// tick that finds nothing has actually changed can skip sending an event.
 type TitleSnapshot = (String, Option<String>);
 
-/// One session's poll-tick inputs: its id, shell pid, event channel, and
-/// last-reported title, snapshotted together while the sessions map is
-/// briefly locked (see `poll_titles_loop`).
+/// One session's poll-tick inputs: its id, shell pid, event channel,
+/// last-reported title, and last-seen foreign foreground pid, snapshotted
+/// together while the sessions map is briefly locked (see
+/// `poll_titles_loop`).
 type SessionPollSnapshot = (
     String,
     u32,
     Arc<Mutex<Shared>>,
     Arc<Mutex<Option<TitleSnapshot>>>,
+    Arc<Mutex<Option<u32>>>,
 );
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -105,6 +107,10 @@ struct PtySession {
     /// this session.
     shell_pid: Option<u32>,
     last_title: Arc<Mutex<Option<TitleSnapshot>>>,
+    /// The previous tick's foreign foreground pid (if any), kept so the
+    /// tick that observes it exit still names it in the `sysinfo` refresh —
+    /// see `poll_one`.
+    last_foreign_pid: Arc<Mutex<Option<u32>>>,
 }
 
 pub struct PtyManager {
@@ -198,6 +204,7 @@ impl PtyManager {
                 shared,
                 shell_pid,
                 last_title: Arc::new(Mutex::new(None)),
+                last_foreign_pid: Arc::new(Mutex::new(None)),
             },
         );
 
@@ -209,6 +216,13 @@ impl PtyManager {
         let session = sessions
             .get(terminal_id)
             .ok_or_else(|| AppError::NotFound(format!("unknown terminal: {terminal_id}")))?;
+        // A poll tick landing between `spawn` and this call would have found
+        // `push_title` dropping its event with nobody attached yet, but
+        // still recorded that state as `last_title` — clear it here so the
+        // subscriber that just attached is guaranteed a `Title` event on the
+        // very next tick rather than only once something actually changes
+        // again.
+        *session.last_title.lock().unwrap() = None;
         let mut shared = session.shared.lock().unwrap();
         if !shared.buffer.is_empty() {
             let _ = channel.send(PtyEvent::Data {
@@ -291,16 +305,21 @@ impl PtyManager {
                                 pid,
                                 session.shared.clone(),
                                 session.last_title.clone(),
+                                session.last_foreign_pid.clone(),
                             )
                         })
                     })
                     .collect()
             };
 
-            for (terminal_id, shell_pid, shared, last_title) in snapshots {
-                let Some(new_title) =
-                    Self::poll_one(&sessions, &terminal_id, shell_pid, &mut system)
-                else {
+            for (terminal_id, shell_pid, shared, last_title, last_foreign_pid) in snapshots {
+                let Some(new_title) = Self::poll_one(
+                    &sessions,
+                    &terminal_id,
+                    shell_pid,
+                    &last_foreign_pid,
+                    &mut system,
+                ) else {
                     continue;
                 };
                 let mut last = last_title.lock().unwrap();
@@ -322,6 +341,7 @@ impl PtyManager {
         sessions: &Mutex<HashMap<String, PtySession>>,
         terminal_id: &str,
         shell_pid: u32,
+        last_foreign_pid: &Mutex<Option<u32>>,
         system: &mut System,
     ) -> Option<TitleSnapshot> {
         // Re-lock just long enough for `tcgetpgrp` (a single syscall on the
@@ -343,6 +363,23 @@ impl PtyManager {
         if let Some(pid) = foreign_pid {
             pids.push(Pid::from_u32(pid));
         }
+        // `remove_dead_processes: true` below only evicts a pid that is
+        // actually named in this update's list — a pid that was foreign
+        // last tick but has since exited is otherwise never named again
+        // (this tick reports no foreign pid at all), so it would stay
+        // cached in `system` forever, leaking its `/proc/<pid>/stat` fd on
+        // Linux. Naming the previous tick's foreign pid here, even when
+        // it's no longer current, gives sysinfo one last chance to see it's
+        // dead and evict it.
+        let mut last_foreign_pid = last_foreign_pid.lock().unwrap();
+        if let Some(previous) = *last_foreign_pid {
+            if Some(previous) != foreign_pid {
+                pids.push(Pid::from_u32(previous));
+            }
+        }
+        *last_foreign_pid = foreign_pid;
+        drop(last_foreign_pid);
+
         system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&pids),
             true,

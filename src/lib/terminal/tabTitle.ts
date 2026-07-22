@@ -13,6 +13,18 @@ export interface TitleState {
   program: string | null;
   /** From OSC 0/2 (`terminal.onTitleChange`); overrides the bare `program` name when set. */
   explicitTitle: string | null;
+  /**
+   * Whether `explicitTitle` was set after the most recent `commandSubmitted`
+   * event (an Enter keypress). A program's own OSC 0/2 title normally
+   * arrives within milliseconds of it starting, well before the backend's
+   * next poll tick confirms the new foreground process — so at the moment
+   * `backendTitle` reports that transition, an `explicitTitle` set since the
+   * triggering Enter plausibly belongs to the program that just started,
+   * while one set before it is the idle shell's own prompt title (many
+   * shells, e.g. Debian/Ubuntu bash and macOS zsh by default, set one) and
+   * must not bleed into the next program's label.
+   */
+  explicitTitleIsFresh: boolean;
 }
 
 /** Composes the display title: `folder`, or `folder — label` when a program is running. */
@@ -24,15 +36,19 @@ export function computeTabTitle(state: TitleState): string {
 
 export type TitleEvent =
   | { type: "backendTitle"; cwd: string; program: string | null }
-  | { type: "title"; title: string };
+  | { type: "title"; title: string }
+  | { type: "commandSubmitted" };
 
 /**
  * Pure reducer for the OS-reported `(cwd, program)` pair and the OSC 0/2
- * explicit-title override a terminal tab tracks. A `backendTitle` event
- * whose `program` differs from the current one (including a transition to
- * or from `null`) clears any `explicitTitle` left over from the previous
- * program, so a program that never sets its own title can't inherit a
- * stale one from whatever ran before it.
+ * explicit-title override a terminal tab tracks.
+ *
+ * A `backendTitle` event whose `program` differs from the current one
+ * (including a transition to or from `null`) clears `explicitTitle` unless
+ * it's still fresh (set since the last `commandSubmitted`) — a stale title
+ * left over from the previous program, or from the shell's own idle
+ * prompt, can't bleed into the new one, while a title the just-started
+ * program set for itself survives the backend's later confirmation of it.
  */
 export function reduceTitleState(state: TitleState, event: TitleEvent): TitleState {
   switch (event.type) {
@@ -40,8 +56,15 @@ export function reduceTitleState(state: TitleState, event: TitleEvent): TitleSta
       if (event.program === state.program) {
         return { ...state, cwd: event.cwd };
       }
-      return { ...state, cwd: event.cwd, program: event.program, explicitTitle: null };
+      return {
+        ...state,
+        cwd: event.cwd,
+        program: event.program,
+        explicitTitle: state.explicitTitleIsFresh ? state.explicitTitle : null,
+      };
     case "title":
-      return { ...state, explicitTitle: event.title };
+      return { ...state, explicitTitle: event.title, explicitTitleIsFresh: true };
+    case "commandSubmitted":
+      return { ...state, explicitTitleIsFresh: false };
   }
 }
