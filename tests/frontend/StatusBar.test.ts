@@ -139,4 +139,21 @@ describe("StatusBar", () => {
 
     expect(toggleTerminalVisible).toHaveBeenCalledOnce();
   });
+
+  it("renders all three action-button icons as SVGs with matching width/height", () => {
+    const { container } = render(StatusBar);
+
+    const icons = container.querySelectorAll(".status-group.actions .status-btn svg");
+    expect(icons).toHaveLength(3);
+
+    const sizes = Array.from(icons).map((svg) => ({
+      width: svg.getAttribute("width"),
+      height: svg.getAttribute("height"),
+    }));
+
+    expect(sizes[0]).toEqual(sizes[1]);
+    expect(sizes[1]).toEqual(sizes[2]);
+    expect(sizes[0].width).toBeTruthy();
+    expect(sizes[0].width).toBe(sizes[0].height);
+  });
 });
