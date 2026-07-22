@@ -2,8 +2,6 @@
 
 A unified markdown editor, code editor, file explorer, and terminal for macOS, built on Tauri v2.
 
-See `docs/analysis/2026-07-11-macos-unified-editor-design.md` for the product design and `docs/plans/2026-07-11-atrium-mvp-implementation-plan.md` for the implementation plan this codebase follows.
-
 ## Prerequisites
 
 - Node.js 20+ and npm.
