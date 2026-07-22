@@ -7,6 +7,9 @@ import type { TreeNode } from "../../src/lib/stores/fileTree";
 import { EXPLORER_PATH_DRAG_TYPE } from "../../src/lib/util/dragDropTypes";
 import * as commands from "../../src/lib/ipc/commands";
 
+type PtyDataHandler = (event: { type: string; data?: string }) => void;
+let lastPtyDataHandler: PtyDataHandler | undefined;
+
 // Only the Tauri IPC boundary is mocked, matching TerminalPanel.test.ts /
 // App.terminalAutoSpawn.test.ts's own convention — everything else in each
 // component (drag/drop wiring, the pty write path) runs unmodified.
@@ -15,7 +18,10 @@ vi.mock("../../src/lib/ipc/commands", async (importOriginal) => {
   return {
     ...actual,
     ptySpawn: vi.fn().mockResolvedValue("term-1"),
-    ptySubscribe: vi.fn().mockResolvedValue(undefined),
+    ptySubscribe: vi.fn((_terminalId: string, onEvent: PtyDataHandler) => {
+      lastPtyDataHandler = onEvent;
+      return Promise.resolve(undefined);
+    }),
     ptyWrite: vi.fn().mockResolvedValue(undefined),
     ptyResize: vi.fn().mockResolvedValue(undefined),
     ptyKill: vi.fn().mockResolvedValue(undefined),
@@ -81,6 +87,13 @@ async function renderReadyTerminalPane() {
   return rendered;
 }
 
+/** Feeds a DECSET 2004 (bracketed paste mode) escape sequence through the mocked pty data channel, the same path real shell output arrives on, and waits for xterm's own write buffer to flush it. */
+async function enableBracketedPasteMode(): Promise<void> {
+  lastPtyDataHandler?.({ type: "data", data: btoa("\x1b[?2004h") });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe("explorer-to-terminal drag and drop", () => {
   it("makes a file row a drag source that puts its path on the private drag type, not text/plain", async () => {
     const node = makeNode();
@@ -134,7 +147,20 @@ describe("explorer-to-terminal drag and drop", () => {
     expect(pane.classList.contains("drop-target-active")).toBe(false);
   });
 
-  it("dropping a path onto a terminal pane writes the shell-quoted, bracketed-paste-wrapped path to the pty and focuses the terminal", async () => {
+  it("refuses the drop while the pty is still spawning, instead of silently swallowing it", async () => {
+    // No `await tick()` here: the async ptySpawn() kicked off in onMount
+    // hasn't resolved yet, so terminalId is still undefined.
+    const { container } = render(TerminalPane, { cwd: "/workspace", workspaceId: "local" });
+
+    const pane = container.querySelector(".terminal-pane")!;
+    const dataTransfer = dataTransferStub({ [EXPLORER_PATH_DRAG_TYPE]: "/workspace/file.txt" });
+    const dragOverEvent = await fireEvent.dragOver(pane, { dataTransfer });
+
+    expect(dragOverEvent).toBe(true); // not prevented, so this never becomes a valid drop target
+    expect(pane.classList.contains("drop-target-active")).toBe(false);
+  });
+
+  it("dropping a path onto a terminal pane writes the shell-quoted path to the pty and focuses the terminal", async () => {
     const { container } = await renderReadyTerminalPane();
 
     const pane = container.querySelector(".terminal-pane")!;
@@ -142,11 +168,25 @@ describe("explorer-to-terminal drag and drop", () => {
     const dropEvent = await fireEvent.drop(pane, { dataTransfer });
 
     expect(dropEvent).toBe(false); // fireEvent.drop returns false when defaultPrevented
+    // Not bracketed by default: bracketing is a property of the foreground
+    // shell (DECSET 2004), not of the write itself, and this pty's shell
+    // hasn't enabled it — see the bracketed-mode case below.
+    expect(commands.ptyWrite).toHaveBeenCalledWith("term-1", "'/workspace/My Documents/file.txt' ");
+    expect(container.querySelector(".xterm-helper-textarea")).toBe(document.activeElement);
+  });
+
+  it("wraps the write in bracketed paste once the shell has enabled bracketed-paste mode (DECSET 2004)", async () => {
+    const { container } = await renderReadyTerminalPane();
+    await enableBracketedPasteMode();
+
+    const pane = container.querySelector(".terminal-pane")!;
+    const dataTransfer = dataTransferStub({ [EXPLORER_PATH_DRAG_TYPE]: "/workspace/My Documents/file.txt" });
+    await fireEvent.drop(pane, { dataTransfer });
+
     expect(commands.ptyWrite).toHaveBeenCalledWith(
       "term-1",
       "\x1b[200~'/workspace/My Documents/file.txt' \x1b[201~",
     );
-    expect(container.querySelector(".xterm-helper-textarea")).toBe(document.activeElement);
   });
 
   it("clears the drop-target affordance on drop", async () => {

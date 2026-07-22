@@ -15,13 +15,6 @@
   import { shellQuotePath } from "./shellQuote";
   import { EXPLORER_PATH_DRAG_TYPE } from "../util/dragDropTypes";
 
-  // Wrapping a pty write in bracketed paste tells the shell to treat the
-  // whole payload as literal pasted text, regardless of embedded control
-  // characters (a newline is legal in a POSIX filename) — the same thing a
-  // real terminal emulator does for a drop or paste.
-  const BRACKETED_PASTE_START = "\x1b[200~";
-  const BRACKETED_PASTE_END = "\x1b[201~";
-
   // Tauri's `CmdOrCtrl` accelerator resolves to Cmd-only on macOS and
   // Ctrl-only elsewhere (never both on one platform), so the toggle-panel
   // guard below must match whichever modifier the native menu actually
@@ -77,10 +70,15 @@
 
   function insertPathAtCursor(path: string): void {
     if (!terminalId) return;
+    // terminal.paste() brackets the write only when the foreground program
+    // has actually enabled bracketed-paste mode (DECSET 2004) — bracketing
+    // unconditionally would leak the raw escape bytes into any program that
+    // hasn't (`cat`, `sh`, the `node` REPL, `psql`, ...). It also routes
+    // through the same terminal.onData -> ptyWrite wire below, so the
+    // terminalId guard above is the only gate needed.
     // A trailing space means two dropped paths become two shell words
     // ("'/one/a' '/two/b'") instead of running together into one.
-    const text = `${shellQuotePath(path)} `;
-    void ptyWrite(terminalId, `${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}`);
+    terminal.paste(`${shellQuotePath(path)} `);
     terminal.focus();
   }
 
