@@ -26,7 +26,10 @@ export async function initMenuBar(onNewTerminalTab: () => void, onSplitTerminal:
   await onMenuEvent("menu:save", () => {
     const active = get(tabsState).activeTabPath;
     if (active) {
-      requestSave(active);
+      // Unlike the close-confirmation flow, this caller has nowhere to
+      // surface a failed save — swallow the rejection rather than let it
+      // become an unhandled promise rejection.
+      requestSave(active).catch(() => {});
     }
   });
   await onMenuEvent("menu:new-terminal-tab", onNewTerminalTab);

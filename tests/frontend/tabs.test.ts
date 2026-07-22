@@ -8,8 +8,13 @@ import {
   reconcileExternalChange,
   reloadFromDisk,
   dismissConflict,
+  requestCloseTab,
+  requestSave,
+  notifySaveComplete,
+  notifySaveFailed,
   type Tab,
 } from "../../src/lib/stores/tabs";
+import { closePrompt } from "../../src/lib/stores/closePrompt";
 import * as commands from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
@@ -196,5 +201,117 @@ describe("reconcileExternalChange / reloadFromDisk / dismissConflict", () => {
     expect(tab.savedDoc).toBe("original");
     expect(tab.isDirty).toBe(true);
     expect(tab.hasExternalConflict).toBe(true);
+  });
+});
+
+describe("requestCloseTab", () => {
+  beforeEach(() => {
+    tabsState.set({ tabs: [], activeTabPath: null });
+    closePrompt.set(null);
+  });
+
+  it("closes a clean tab immediately without raising the unsaved-changes prompt", () => {
+    tabsState.set({ tabs: [codeTab("/main.rs")], activeTabPath: "/main.rs" });
+
+    requestCloseTab("/main.rs");
+
+    expect(get(tabsState).tabs).toHaveLength(0);
+    expect(get(closePrompt)).toBeNull();
+  });
+
+  it("raises the tab prompt for a dirty tab instead of closing it", () => {
+    tabsState.set({ tabs: [codeTab("/main.rs", { isDirty: true })], activeTabPath: "/main.rs" });
+
+    requestCloseTab("/main.rs");
+
+    expect(get(tabsState).tabs).toHaveLength(1);
+    expect(get(closePrompt)).toEqual({ kind: "tab", path: "/main.rs" });
+  });
+
+  it("is a no-op for an unknown path", () => {
+    tabsState.set({ tabs: [codeTab("/main.rs")], activeTabPath: "/main.rs" });
+
+    requestCloseTab("/missing.rs");
+
+    expect(get(tabsState).tabs).toHaveLength(1);
+    expect(get(closePrompt)).toBeNull();
+  });
+});
+
+describe("requestSave / notifySaveComplete", () => {
+  it("resolves the returned promise only after the matching notifySaveComplete call", async () => {
+    let resolved = false;
+    const pending = requestSave("/a.md").then(() => {
+      resolved = true;
+    });
+
+    // Give any spuriously-resolved microtask a chance to run.
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    notifySaveComplete("/a.md");
+    await pending;
+
+    expect(resolved).toBe(true);
+  });
+
+  it("does not resolve for an unrelated path", async () => {
+    let resolved = false;
+    void requestSave("/a.md").then(() => {
+      resolved = true;
+    });
+
+    notifySaveComplete("/b.md");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(resolved).toBe(false);
+
+    notifySaveComplete("/a.md");
+    await Promise.resolve();
+
+    expect(resolved).toBe(true);
+  });
+
+  it("resolves every concurrent requestSave call for the same path from a single notifySaveComplete", async () => {
+    // Regresses a bug where a second requestSave(path) call, arriving while
+    // the first is still in flight for that same path (e.g. the native
+    // Cmd+S menu firing mid-"Save All"), overwrote the first call's
+    // resolver and left it hanging forever once the underlying save
+    // completed.
+    let firstResolved = false;
+    let secondResolved = false;
+    const first = requestSave("/a.md").then(() => {
+      firstResolved = true;
+    });
+    const second = requestSave("/a.md").then(() => {
+      secondResolved = true;
+    });
+
+    notifySaveComplete("/a.md");
+    await first;
+    await second;
+
+    expect(firstResolved).toBe(true);
+    expect(secondResolved).toBe(true);
+  });
+
+  it("rejects every concurrent requestSave call for the same path from a single notifySaveFailed", async () => {
+    const error = new Error("disk full");
+    let firstError: unknown;
+    let secondError: unknown;
+    const first = requestSave("/a.md").catch((err: unknown) => {
+      firstError = err;
+    });
+    const second = requestSave("/a.md").catch((err: unknown) => {
+      secondError = err;
+    });
+
+    notifySaveFailed("/a.md", error);
+    await first;
+    await second;
+
+    expect(firstError).toBe(error);
+    expect(secondError).toBe(error);
   });
 });

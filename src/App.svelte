@@ -5,20 +5,22 @@
   import PaneSplit from "./lib/terminal/PaneSplit.svelte";
   import WelcomeScreen from "./lib/welcome/WelcomeScreen.svelte";
   import SearchOverlay from "./lib/search/SearchOverlay.svelte";
+  import UnsavedChangesDialog from "./lib/shell/UnsavedChangesDialog.svelte";
   import StatusBar from "./lib/shell/StatusBar.svelte";
   import { workspace, openWorkspacePath } from "./lib/stores/workspace";
   import {
     tabsState,
     setActiveTab,
-    closeTab,
+    requestCloseTab,
     reconcileExternalChange,
     reloadFromDisk,
     dismissConflict,
     toggleMarkdownViewMode,
   } from "./lib/stores/tabs";
+  import { closePrompt } from "./lib/stores/closePrompt";
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
-  import { onFsChanged, onDockOpenPath } from "./lib/ipc/events";
-  import { workspaceTakePendingOpen } from "./lib/ipc/commands";
+  import { onFsChanged, onDockOpenPath, onCloseRequested } from "./lib/ipc/events";
+  import { workspaceTakePendingOpen, appConfirmClose } from "./lib/ipc/commands";
   import { initMenuBar } from "./lib/shell/MenuBar";
   import {
     loadTerminalLayout,
@@ -220,6 +222,14 @@
       void refreshDirectoryContaining(event.path);
     });
     void onDockOpenPath((path) => void openWorkspacePath(path));
+    void onCloseRequested(() => {
+      const dirty = $tabsState.tabs.filter((t) => t.isDirty);
+      if (dirty.length === 0) {
+        void appConfirmClose();
+        return;
+      }
+      closePrompt.set({ kind: "window", paths: dirty.map((t) => t.path) });
+    });
     void workspaceTakePendingOpen().then((path) => {
       if (path) void openWorkspacePath(path);
     });
@@ -230,6 +240,7 @@
   <WelcomeScreen />
 {:else}
 <SearchOverlay />
+<UnsavedChangesDialog />
 <div class="app-shell">
 <main class="app">
   {#if $explorerVisible}
@@ -274,7 +285,7 @@
                   class="tab-close"
                   onclick={(e) => {
                     e.stopPropagation();
-                    closeTab(tab.path);
+                    requestCloseTab(tab.path);
                   }}
                   aria-label={`Close ${tab.path}`}
                 >
