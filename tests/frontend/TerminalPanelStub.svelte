@@ -7,10 +7,8 @@
     tree,
   }: {
     tree: LeafPane;
-    hasSplits: boolean;
     workspaceId: string;
     onSplit: (direction: SplitDirection) => void;
-    onClosePanel: () => void;
     onNewTab: () => void;
     onCloseTab: (sessionId: string) => void;
     onSetActiveTab: (sessionId: string) => void;

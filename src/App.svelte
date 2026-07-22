@@ -38,7 +38,6 @@
   import { folderName } from "./lib/terminal/tabTitle";
   import {
     splitPane,
-    removePane,
     resizeSplit,
     findLeaf,
     listLeaves,
@@ -142,16 +141,6 @@
     const target =
       focusedPaneId && findLeaf(terminalPaneTree, focusedPaneId) ? focusedPaneId : listLeaves(terminalPaneTree)[0]?.id;
     if (target) splitPaneAt(target, direction);
-  }
-
-  // Force-closes an entire panel and all its tabs at once (the tab-strip's
-  // "close panel" button, shown only once there's more than one panel).
-  function closePanel(paneId: string): void {
-    if (!terminalPaneTree) return;
-    suppressAutoSpawn = false;
-    const nextFocus = focusedPaneId === paneId ? nextActivePane(terminalPaneTree, paneId) : focusedPaneId;
-    terminalPaneTree = removePane(terminalPaneTree, paneId);
-    focusedPaneId = terminalPaneTree ? (nextFocus ?? focusedPaneId) : null;
   }
 
   function removeTabFromPane(paneId: string, sessionId: string): void {
@@ -423,12 +412,10 @@
               <div class="terminal-pane-slot">
                 <PaneSplit
                   tree={terminalPaneTree}
-                  hasSplits={terminalPaneTree.type === "split"}
                   activePaneId={focusedPaneId ?? ""}
                   workspaceId={$workspace.id}
                   onFocus={setFocusedPane}
                   onSplit={(paneId, direction) => splitPaneAt(paneId, direction)}
-                  onClose={(paneId) => closePanel(paneId)}
                   onNewTab={(paneId) => addTabToPane(paneId)}
                   onCloseTab={(paneId, sessionId) => closeTabInPane(paneId, sessionId)}
                   onSessionExit={(paneId, sessionId, elapsedMs) => exitTabInPane(paneId, sessionId, elapsedMs)}

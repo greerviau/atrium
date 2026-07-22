@@ -6,12 +6,10 @@
 
   let {
     tree,
-    hasSplits,
     activePaneId,
     workspaceId,
     onFocus,
     onSplit,
-    onClose,
     onNewTab,
     onCloseTab,
     onSessionExit,
@@ -20,12 +18,10 @@
     onResizeSplit,
   }: {
     tree: PaneNode;
-    hasSplits: boolean;
     activePaneId: string;
     workspaceId: string;
     onFocus: (paneId: string) => void;
     onSplit: (paneId: string, direction: SplitDirection) => void;
-    onClose: (paneId: string) => void;
     onNewTab: (paneId: string) => void;
     onCloseTab: (paneId: string, sessionId: string) => void;
     onSessionExit: (paneId: string, sessionId: string, elapsedMs: number) => void;
@@ -96,10 +92,8 @@
       <div class="pane-body">
         <TerminalPanel
           tree={leaf}
-          {hasSplits}
           {workspaceId}
           onSplit={(direction) => onSplit(leaf.id, direction)}
-          onClosePanel={() => onClose(leaf.id)}
           onNewTab={() => onNewTab(leaf.id)}
           onCloseTab={(sessionId) => onCloseTab(leaf.id, sessionId)}
           onSessionExit={(sessionId, elapsedMs) => onSessionExit(leaf.id, sessionId, elapsedMs)}

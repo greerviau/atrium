@@ -28,10 +28,8 @@ function noop(): void {
 }
 
 const baseProps = {
-  hasSplits: false,
   workspaceId: "local",
   onSplit: noop,
-  onClosePanel: noop,
   onNewTab: noop,
   onCloseTab: noop,
   onSessionExit: noop,
@@ -95,21 +93,12 @@ describe("TerminalPanel", () => {
     expect(onCloseTab).not.toHaveBeenCalled();
   });
 
-  it("renders the split button and close-panel button inside .tab-strip-controls", () => {
-    const { container } = render(TerminalPanel, { tree: TWO_TABS, ...baseProps, hasSplits: true });
+  it("renders the split button inside .tab-strip-controls and no close-panel button", () => {
+    const { container } = render(TerminalPanel, { tree: TWO_TABS, ...baseProps });
 
     const controls = container.querySelector(".tab-strip-controls")!;
     expect(controls.querySelector('button[aria-label="Split terminal"]')).not.toBeNull();
-    expect(controls.querySelector('button[aria-label="Close panel"]')).not.toBeNull();
-  });
-
-  it("hides the close-panel button when this is the only panel", () => {
-    const { container } = render(TerminalPanel, { tree: TWO_TABS, ...baseProps, hasSplits: false });
-
-    expect(container.querySelector('button[aria-label="Close panel"]')).toBeNull();
-    // The split button stays available even when unsplit — it's the only
-    // way to trigger the very first split.
-    expect(container.querySelector('button[aria-label="Split terminal"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Close panel"]')).toBeNull();
   });
 
   it("opening the split dropdown and choosing each direction calls onSplit with the right direction", async () => {
@@ -123,13 +112,5 @@ describe("TerminalPanel", () => {
 
     await fireEvent.click(items[3]);
     expect(onSplit).toHaveBeenCalledWith("right");
-  });
-
-  it("wires the close-panel button to onClosePanel", async () => {
-    const onClosePanel = vi.fn();
-    const { container } = render(TerminalPanel, { tree: TWO_TABS, ...baseProps, hasSplits: true, onClosePanel });
-
-    await fireEvent.click(container.querySelector('button[aria-label="Close panel"]')!);
-    expect(onClosePanel).toHaveBeenCalled();
   });
 });
