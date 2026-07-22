@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { settingsOverlay, closeSettings } from "../stores/settingsOverlay";
   import { themes } from "../theme/tokens";
   import { themeSelection, setTheme } from "../stores/theme";
@@ -60,6 +61,8 @@
     }
   }
 
+  onDestroy(() => clearTimeout(recentsClearedTimer));
+
   function onBackdropKeydown(event: KeyboardEvent): void {
     if (event.key === "Escape") {
       closeSettings();
@@ -117,13 +120,8 @@
         <h3 class="settings-section-title">Appearance</h3>
         <div class="settings-row">
           <span class="settings-label">Theme</span>
-          <div
-            class="settings-options"
-            role="radiogroup"
-            aria-label="Theme"
-            tabindex="-1"
-            onkeydown={onRadioGroupKeydown}
-          >
+          <!-- svelte-ignore a11y_interactive_supports_focus -->
+          <div class="settings-options" role="radiogroup" aria-label="Theme" onkeydown={onRadioGroupKeydown}>
             <button
               class="settings-option"
               role="radio"
@@ -152,11 +150,11 @@
         <h3 class="settings-section-title">Layout</h3>
         <div class="settings-row">
           <span class="settings-label">Terminal dock position</span>
+          <!-- svelte-ignore a11y_interactive_supports_focus -->
           <div
             class="settings-options"
             role="radiogroup"
             aria-label="Terminal dock position"
-            tabindex="-1"
             onkeydown={onRadioGroupKeydown}
           >
             {#each DOCK_POSITIONS as dock (dock.id)}

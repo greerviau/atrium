@@ -176,6 +176,64 @@ describe("SettingsDialog", () => {
     });
   });
 
+  describe("keyboard navigation (radiogroup)", () => {
+    it("ArrowRight advances to the next theme option and selects it", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const auto = screen.getByRole("radio", { name: "Auto" });
+      auto.focus();
+      await fireEvent.keyDown(auto, { key: "ArrowRight" });
+      await flush();
+
+      expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Atrium Dark" }));
+      expect(get(themeSelection)).toBe("atrium-dark");
+    });
+
+    it("ArrowLeft from the first theme option wraps around to the last", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const auto = screen.getByRole("radio", { name: "Auto" });
+      auto.focus();
+      await fireEvent.keyDown(auto, { key: "ArrowLeft" });
+      await flush();
+
+      expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Atrium High Contrast" }));
+      expect(get(themeSelection)).toBe("atrium-high-contrast");
+    });
+
+    it("End jumps to the last option, selecting it (dock-position radiogroup)", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const bottom = screen.getByRole("radio", { name: "Bottom" });
+      bottom.focus();
+      await fireEvent.keyDown(bottom, { key: "End" });
+      await flush();
+
+      expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Right" }));
+      expect(get(terminalPosition)).toBe("right");
+    });
+
+    it("ignores a non-navigation key", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const auto = screen.getByRole("radio", { name: "Auto" });
+      auto.focus();
+      await fireEvent.keyDown(auto, { key: "a" });
+      await flush();
+
+      expect(document.activeElement).toBe(auto);
+      expect(get(themeSelection)).toBe("auto");
+    });
+  });
+
   describe("recent projects", () => {
     it("Clear Recent Projects calls workspaceClearRecents, shows a confirmation, and empties the shared recents store", async () => {
       settingsOverlay.set({ open: true });
@@ -204,6 +262,26 @@ describe("SettingsDialog", () => {
 
       expect(await screen.findByText(/disk full/)).toBeTruthy();
       expect(get(recents)).toHaveLength(1);
+    });
+
+    it("auto-hides the Cleared confirmation after CLEARED_BADGE_MS", async () => {
+      vi.useFakeTimers();
+      try {
+        settingsOverlay.set({ open: true });
+        render(SettingsDialog);
+        await tick();
+
+        await fireEvent.click(screen.getByText("Clear Recent Projects"));
+        await flush();
+        expect(screen.getByText("Cleared")).toBeTruthy();
+
+        await vi.advanceTimersByTimeAsync(3000);
+        await tick();
+
+        expect(screen.queryByText("Cleared")).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });
