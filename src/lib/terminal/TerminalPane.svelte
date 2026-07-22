@@ -12,8 +12,9 @@
   import { zoom } from "../stores/textSize";
   import { computeTabTitle, parseOsc7Cwd, reduceTitleState, type TitleState } from "./tabTitle";
   import { handleTerminalKeyEvent } from "./terminalKeyHandling";
-  import { shellQuotePath } from "./shellQuote";
+  import { shellQuotePaths } from "./shellQuote";
   import { EXPLORER_PATH_DRAG_TYPE } from "../util/dragDropTypes";
+  import { registerTerminalDropTarget } from "./terminalDropTargets";
 
   // Tauri's `CmdOrCtrl` accelerator resolves to Cmd-only on macOS and
   // Ctrl-only elsewhere (never both on one platform), so the toggle-panel
@@ -49,6 +50,7 @@
   let titleState: TitleState;
   let lastEmittedTitle: string | undefined;
   let dropTargetActive = $state(false);
+  let unregisterDropTarget: (() => void) | undefined;
 
   function dispatch(event: Parameters<typeof reduceTitleState>[1]): void {
     titleState = reduceTitleState(titleState, event);
@@ -68,17 +70,15 @@
     return bytes;
   }
 
-  function insertPathAtCursor(path: string): void {
-    if (!terminalId) return;
+  function insertPathsAtCursor(paths: string[]): void {
+    if (!terminalId || paths.length === 0) return;
     // terminal.paste() brackets the write only when the foreground program
     // has actually enabled bracketed-paste mode (DECSET 2004) — bracketing
     // unconditionally would leak the raw escape bytes into any program that
     // hasn't (`cat`, `sh`, the `node` REPL, `psql`, ...). It also routes
     // through the same terminal.onData -> ptyWrite wire below, so the
     // terminalId guard above is the only gate needed.
-    // A trailing space means two dropped paths become two shell words
-    // ("'/one/a' '/two/b'") instead of running together into one.
-    terminal.paste(`${shellQuotePath(path)} `);
+    terminal.paste(shellQuotePaths(paths));
     terminal.focus();
   }
 
@@ -106,7 +106,7 @@
     const path = event.dataTransfer?.getData(EXPLORER_PATH_DRAG_TYPE);
     if (!path) return;
     event.preventDefault();
-    insertPathAtCursor(path);
+    insertPathsAtCursor([path]);
   }
 
   onMount(() => {
@@ -198,9 +198,12 @@
       }
     });
     resizeObserver.observe(container);
+
+    unregisterDropTarget = registerTerminalDropTarget(container, insertPathsAtCursor);
   });
 
   onDestroy(() => {
+    unregisterDropTarget?.();
     resizeObserver?.disconnect();
     osc7Disposable?.dispose();
     osc133Disposable?.dispose();

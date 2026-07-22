@@ -1,4 +1,6 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import type { DragDropEvent } from "@tauri-apps/api/webview";
 
 export type FsChangeKind = "create" | "modify" | "remove" | "rename";
 
@@ -50,4 +52,14 @@ export function onDockOpenPath(handler: (path: string) => void): Promise<Unliste
  */
 export function onCloseRequested(handler: () => void): Promise<UnlistenFn> {
   return listen("app:close-requested", () => handler());
+}
+
+/**
+ * Fires on an OS-level file drop onto the window (e.g. dragging from
+ * Finder). Window/webview-scoped, not per-element — the payload's
+ * `position` is a screen point the caller hit-tests against the DOM itself
+ * (see terminalDropTargets.ts).
+ */
+export function onDragDropEvent(handler: (event: DragDropEvent) => void): Promise<UnlistenFn> {
+  return getCurrentWebview().onDragDropEvent((event) => handler(event.payload));
 }

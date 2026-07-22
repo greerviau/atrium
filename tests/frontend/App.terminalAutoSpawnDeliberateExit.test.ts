@@ -37,6 +37,7 @@ vi.mock("../../src/lib/ipc/events", () => ({
   onMenuEvent: vi.fn().mockResolvedValue(() => {}),
   onDockOpenPath: vi.fn().mockResolvedValue(() => {}),
   onCloseRequested: vi.fn().mockResolvedValue(() => {}),
+  onDragDropEvent: vi.fn().mockResolvedValue(() => {}),
 }));
 
 function resetStores(): void {

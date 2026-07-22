@@ -13,3 +13,14 @@ export function shellQuotePath(path: string): string {
   }
   return `'${path.replace(/'/g, "'\\''")}'`;
 }
+
+/**
+ * Shell-quotes each path and joins them into one string ready to paste at
+ * a shell prompt, with a trailing space so typing can continue right after
+ * — matches how VS Code/iTerm2 insert one or more dropped paths. `""` for
+ * an empty array.
+ */
+export function shellQuotePaths(paths: string[]): string {
+  if (paths.length === 0) return "";
+  return `${paths.map(shellQuotePath).join(" ")} `;
+}
