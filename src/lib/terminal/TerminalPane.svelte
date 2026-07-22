@@ -12,6 +12,7 @@
   import { zoom } from "../stores/textSize";
   import { computeTabTitle, parseOsc7Cwd, reduceTitleState, type TitleState } from "./tabTitle";
   import { handleTerminalKeyEvent } from "./terminalKeyHandling";
+  import { shellQuotePath } from "./shellQuote";
 
   // Tauri's `CmdOrCtrl` accelerator resolves to Cmd-only on macOS and
   // Ctrl-only elsewhere (never both on one platform), so the toggle-panel
@@ -46,6 +47,7 @@
 
   let titleState: TitleState;
   let lastEmittedTitle: string | undefined;
+  let dropTargetActive = $state(false);
 
   function dispatch(event: Parameters<typeof reduceTitleState>[1]): void {
     titleState = reduceTitleState(titleState, event);
@@ -63,6 +65,31 @@
       bytes[i] = binary.charCodeAt(i);
     }
     return bytes;
+  }
+
+  function insertPathAtCursor(path: string): void {
+    if (!terminalId) return;
+    void ptyWrite(terminalId, shellQuotePath(path));
+    terminal.focus();
+  }
+
+  function onDragOver(event: DragEvent): void {
+    if (!event.dataTransfer?.types.includes("text/plain")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    dropTargetActive = true;
+  }
+
+  function onDragLeave(): void {
+    dropTargetActive = false;
+  }
+
+  function onDrop(event: DragEvent): void {
+    dropTargetActive = false;
+    const path = event.dataTransfer?.getData("text/plain");
+    if (!path) return;
+    event.preventDefault();
+    insertPathAtCursor(path);
   }
 
   onMount(() => {
@@ -190,7 +217,15 @@
   });
 </script>
 
-<div class="terminal-pane" bind:this={container}></div>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="terminal-pane"
+  class:drop-target-active={dropTargetActive}
+  bind:this={container}
+  ondragover={onDragOver}
+  ondragleave={onDragLeave}
+  ondrop={onDrop}
+></div>
 
 <style>
   .terminal-pane {
@@ -198,6 +233,12 @@
     width: 100%;
     padding: 4px;
     box-sizing: border-box;
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+  }
+
+  .terminal-pane.drop-target-active {
+    outline-color: var(--atrium-accent);
   }
 
   .terminal-pane :global(.xterm-viewport) {

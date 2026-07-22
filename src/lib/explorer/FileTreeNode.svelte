@@ -27,6 +27,13 @@
       onClick();
     }
   }
+
+  function onDragStart(event: DragEvent): void {
+    event.dataTransfer?.setData("text/plain", node.entry.path);
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "copy";
+    }
+  }
 </script>
 
 <div class="node">
@@ -36,6 +43,8 @@
     onclick={onClick}
     onkeydown={onKeydown}
     oncontextmenu={onContextMenu}
+    draggable="true"
+    ondragstart={onDragStart}
     role="treeitem"
     aria-selected="false"
     aria-expanded={node.entry.isDir ? node.expanded : undefined}
