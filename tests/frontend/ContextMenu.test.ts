@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { render, cleanup } from "@testing-library/svelte";
 import ContextMenuHost from "./ContextMenuHost.svelte";
+import AnchorContextMenuHost from "./AnchorContextMenuHost.svelte";
 
 /**
  * jsdom has no real layout engine, so `getBoundingClientRect()` normally
@@ -100,5 +101,70 @@ describe("ContextMenu: viewport clamping", () => {
     // Would equal this (stale) value if the effect re-clamped using the
     // menu's previous height instead of re-measuring after the DOM update.
     expect(menu.style.top).not.toBe(`${750 - tallHeight}px`);
+  });
+});
+
+describe("ContextMenu: anchorEl positioning", () => {
+  const originalGetBoundingClientRect = Element.prototype.getBoundingClientRect;
+
+  beforeEach(() => {
+    setViewport(1024, 768);
+  });
+
+  afterEach(() => {
+    cleanup();
+    Element.prototype.getBoundingClientRect = originalGetBoundingClientRect;
+  });
+
+  /** Distinguishes the anchor button's rect from the menu's own rect by tag name, the same way a real layout would report two different elements. */
+  function stubAnchorAndMenu(anchorRect: { left: number; bottom: number }, menuSize: { width: number; height: number }): void {
+    Element.prototype.getBoundingClientRect = function (this: HTMLElement): DOMRect {
+      if (this.tagName === "BUTTON" && !this.classList.contains("context-menu")) {
+        return {
+          x: 0,
+          y: 0,
+          width: 60,
+          height: 20,
+          top: anchorRect.bottom - 20,
+          left: anchorRect.left,
+          right: anchorRect.left + 60,
+          bottom: anchorRect.bottom,
+          toJSON: () => ({}),
+        } as DOMRect;
+      }
+      return {
+        x: 0,
+        y: 0,
+        width: menuSize.width,
+        height: menuSize.height,
+        top: 0,
+        left: 0,
+        right: menuSize.width,
+        bottom: menuSize.height,
+        toJSON: () => ({}),
+      } as DOMRect;
+    };
+  }
+
+  it("positions the menu at the anchor element's bottom-left corner when there is room", () => {
+    stubAnchorAndMenu({ left: 100, bottom: 130 }, { width: 160, height: 145 });
+    const { container } = render(AnchorContextMenuHost);
+    const menu = container.querySelector(".context-menu") as HTMLElement;
+    expect(menu.style.left).toBe("100px");
+    expect(menu.style.top).toBe("130px");
+  });
+
+  it("flips upward off the anchor instead of overflowing the bottom edge", () => {
+    stubAnchorAndMenu({ left: 100, bottom: 760 }, { width: 160, height: 145 });
+    const { container } = render(AnchorContextMenuHost);
+    const menu = container.querySelector(".context-menu") as HTMLElement;
+    expect(menu.style.top).toBe("615px"); // 760 - 145
+  });
+
+  it("shifts left instead of overflowing the right edge", () => {
+    stubAnchorAndMenu({ left: 1000, bottom: 100 }, { width: 160, height: 145 });
+    const { container } = render(AnchorContextMenuHost);
+    const menu = container.querySelector(".context-menu") as HTMLElement;
+    expect(menu.style.left).toBe("840px"); // 1000 - 160
   });
 });

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import type { PaneNode, SplitDirection } from "./paneTree";
-  import TerminalPane from "./TerminalPane.svelte";
+  import type { PaneNode, SplitAxis, SplitDirection } from "./paneTree";
+  import TerminalPanel from "./TerminalPanel.svelte";
   import PaneSplit from "./PaneSplit.svelte";
 
   let {
@@ -11,6 +11,9 @@
     onFocus,
     onSplit,
     onClose,
+    onNewTab,
+    onCloseTab,
+    onSetActiveTab,
     onTitleChange,
     onResizeSplit,
   }: {
@@ -21,7 +24,10 @@
     onFocus: (paneId: string) => void;
     onSplit: (paneId: string, direction: SplitDirection) => void;
     onClose: (paneId: string) => void;
-    onTitleChange: (paneId: string, title: string) => void;
+    onNewTab: (paneId: string) => void;
+    onCloseTab: (paneId: string, sessionId: string) => void;
+    onSetActiveTab: (paneId: string, sessionId: string) => void;
+    onTitleChange: (paneId: string, sessionId: string, title: string) => void;
     onResizeSplit: (splitId: string, index: number, delta: number, containerSizePx: number) => void;
   } = $props();
 
@@ -31,10 +37,10 @@
   // converts its pixel delta to a ratio against this split's own container
   // size at drag start — the same clamp-per-pixel-then-convert approach
   // App.svelte's dock-panel resizer already uses.
-  function startDragResizer(event: PointerEvent, index: number, direction: SplitDirection, splitId: string): void {
+  function startDragResizer(event: PointerEvent, index: number, axis: SplitAxis, splitId: string): void {
     event.preventDefault();
-    const containerSizePx = direction === "row" ? (containerEl?.clientWidth ?? 0) : (containerEl?.clientHeight ?? 0);
-    let last = direction === "row" ? event.clientX : event.clientY;
+    const containerSizePx = axis === "row" ? (containerEl?.clientWidth ?? 0) : (containerEl?.clientHeight ?? 0);
+    let last = axis === "row" ? event.clientX : event.clientY;
 
     // `resizeSplit` adds `delta` onto whatever `sizes[index]` already is
     // (live-reactive via App.svelte's state), so this must send the
@@ -44,7 +50,7 @@
     // it, making the divider run away far faster than the pointer.
     function onMove(e: PointerEvent): void {
       if (containerSizePx <= 0) return;
-      const current = direction === "row" ? e.clientX : e.clientY;
+      const current = axis === "row" ? e.clientX : e.clientY;
       const delta = (current - last) / containerSizePx;
       last = current;
       onResizeSplit(splitId, index, delta, containerSizePx);
@@ -60,38 +66,17 @@
 
 {#if tree.type === "leaf"}
   <div class="pane-leaf" class:active={tree.id === activePaneId} onfocusin={() => onFocus(tree.id)}>
-    {#if hasSplits}
-      <div class="pane-header">
-        <span class="pane-title" title={tree.title}>{tree.title}</span>
-        <div class="pane-actions">
-          <button
-            class="pane-action"
-            onclick={() => onSplit(tree.id, "row")}
-            aria-label="Split pane right"
-            title="Split right"
-          >
-            ⬒
-          </button>
-          <button
-            class="pane-action"
-            onclick={() => onSplit(tree.id, "column")}
-            aria-label="Split pane down"
-            title="Split down"
-          >
-            ⬓
-          </button>
-          <button class="pane-action" onclick={() => onClose(tree.id)} aria-label="Close pane" title="Close pane">
-            ×
-          </button>
-        </div>
-      </div>
-    {/if}
     <div class="pane-body">
-      <TerminalPane
-        cwd={tree.cwd}
+      <TerminalPanel
+        {tree}
+        {hasSplits}
         {workspaceId}
-        onExit={() => onClose(tree.id)}
-        onTitleChange={(title) => onTitleChange(tree.id, title)}
+        onSplit={(direction) => onSplit(tree.id, direction)}
+        onClosePanel={() => onClose(tree.id)}
+        onNewTab={() => onNewTab(tree.id)}
+        onCloseTab={(sessionId) => onCloseTab(tree.id, sessionId)}
+        onSetActiveTab={(sessionId) => onSetActiveTab(tree.id, sessionId)}
+        onTitleChange={(sessionId, title) => onTitleChange(tree.id, sessionId, title)}
       />
     </div>
   </div>
@@ -117,6 +102,9 @@
           {onFocus}
           {onSplit}
           {onClose}
+          {onNewTab}
+          {onCloseTab}
+          {onSetActiveTab}
           {onTitleChange}
           {onResizeSplit}
         />
@@ -133,47 +121,6 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-  }
-
-  .pane-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    padding: 2px 6px;
-    flex-shrink: 0;
-    border-bottom: 1px solid var(--atrium-border);
-  }
-
-  .pane-title {
-    font-size: 11px;
-    opacity: 0.7;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .pane-actions {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    flex-shrink: 0;
-  }
-
-  .pane-action {
-    background: none;
-    border: none;
-    color: inherit;
-    font: inherit;
-    font-size: 11px;
-    line-height: 1;
-    cursor: pointer;
-    opacity: 0.6;
-    padding: 2px 4px;
-  }
-
-  .pane-action:hover {
-    opacity: 1;
   }
 
   .pane-body {

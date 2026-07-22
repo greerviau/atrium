@@ -75,9 +75,13 @@ describe("terminal", () => {
   });
 
   it("splits the active pane into two independent concurrent PTYs, then survives closing one", async () => {
-    const splitRightButton = await $('button[aria-label="Split terminal right"]');
-    await splitRightButton.waitForExist({ timeout: 5000 });
-    await splitRightButton.click();
+    const splitButton = await $('button[aria-label="Split terminal"]');
+    await splitButton.waitForExist({ timeout: 5000 });
+    await splitButton.click();
+
+    const splitRightOption = await $('[role="menuitem"]=Split Right');
+    await splitRightOption.waitForExist({ timeout: 5000 });
+    await splitRightOption.click();
 
     await browser.waitUntil(async () => (await $$(".xterm-screen")).length === 2, {
       timeout: 5000,
@@ -110,13 +114,14 @@ describe("terminal", () => {
     expect(await firstPane.getText()).not.toContain("atrium-split-marker-two");
     expect(await secondPane.getText()).not.toContain("atrium-split-marker-one");
 
-    // Close the first pane and confirm the second survives with its own
+    // Close the first panel and confirm the second survives with its own
     // output intact. WebDriver can't inspect OS process state directly, so
-    // the closed pane's PTY being gone is verified the same way the rest of
+    // the closed panel's PTY being gone is verified the same way the rest of
     // this suite verifies backend behavior — through the DOM: its
     // `.xterm-screen` only disappears once `TerminalPane`'s `onDestroy` ->
     // `ptyKill` has actually run.
-    const closeButton = await $('.pane-leaf .pane-action[aria-label="Close pane"]');
+    const firstPanel = (await $$(".pane-leaf"))[0];
+    const closeButton = await firstPanel.$('button[aria-label="Close panel"]');
     await closeButton.click();
 
     await browser.waitUntil(async () => (await $$(".xterm-screen")).length === 1, {

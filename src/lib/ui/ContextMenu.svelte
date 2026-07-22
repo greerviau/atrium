@@ -2,12 +2,20 @@
   import type { Snippet } from "svelte";
 
   /**
-   * Shared right-click menu surface. `x`/`y` is the anchor point (typically
-   * the click coordinates); the menu clamps itself to the viewport so it
-   * never renders past the bottom or right edge, flipping upward/leftward
-   * off the anchor point instead when there isn't room below/right of it.
+   * Shared floating menu surface. The anchor is either an explicit `(x, y)`
+   * point (typically a right-click's coordinates) or, when `anchorEl` is
+   * given instead, the bottom-left corner of that element's own bounding
+   * rect (for a menu opened from a button rather than a click). Either way
+   * the menu clamps itself to the viewport so it never renders past the
+   * bottom or right edge, flipping upward/leftward off the anchor point
+   * instead when there isn't room below/right of it.
    */
-  let { x, y, children }: { x: number; y: number; children: Snippet } = $props();
+  type Props = { children: Snippet } & (
+    | { x: number; y: number; anchorEl?: undefined }
+    | { anchorEl: HTMLElement; x?: undefined; y?: undefined }
+  );
+
+  let { x, y, anchorEl, children }: Props = $props();
 
   let menuEl: HTMLDivElement | undefined = $state();
   let style = $state("");
@@ -18,14 +26,22 @@
     const margin = 4;
     const rect = menuEl.getBoundingClientRect();
 
-    let left = x;
-    if (left + rect.width > window.innerWidth - margin) {
-      left = Math.max(margin, x - rect.width);
+    let anchorX = x ?? 0;
+    let anchorY = y ?? 0;
+    if (anchorEl) {
+      const anchorRect = anchorEl.getBoundingClientRect();
+      anchorX = anchorRect.left;
+      anchorY = anchorRect.bottom;
     }
 
-    let top = y;
+    let left = anchorX;
+    if (left + rect.width > window.innerWidth - margin) {
+      left = Math.max(margin, anchorX - rect.width);
+    }
+
+    let top = anchorY;
     if (top + rect.height > window.innerHeight - margin) {
-      top = Math.max(margin, y - rect.height);
+      top = Math.max(margin, anchorY - rect.height);
     }
 
     style = `left: ${left}px; top: ${top}px`;
