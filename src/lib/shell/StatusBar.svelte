@@ -30,6 +30,28 @@
   });
 </script>
 
+{#snippet explorerIcon()}
+  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3">
+    <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+    <line x1="6" y1="2.5" x2="6" y2="13.5" />
+  </svg>
+{/snippet}
+
+{#snippet terminalIcon()}
+  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3">
+    <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+    <path d="M4 6.2L7 8L4 9.8" stroke-linecap="round" stroke-linejoin="round" />
+    <line x1="8.2" y1="10" x2="11.2" y2="10" stroke-linecap="round" />
+  </svg>
+{/snippet}
+
+{#snippet searchIcon()}
+  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3">
+    <circle cx="6.8" cy="6.8" r="4.3" />
+    <line x1="10" y1="10" x2="14" y2="14" stroke-linecap="round" />
+  </svg>
+{/snippet}
+
 {#if $workspace.root}
   <div class="status-bar">
     <div class="status-group actions">
@@ -41,7 +63,7 @@
         aria-label="Toggle Explorer (Cmd/Ctrl+B)"
         title="Toggle Explorer (Cmd/Ctrl+B)"
       >
-        ☰
+        {@render explorerIcon()}
       </button>
       <button
         class="status-btn"
@@ -51,10 +73,10 @@
         aria-label="Toggle Terminal (Cmd/Ctrl+R)"
         title="Toggle Terminal (Cmd/Ctrl+R)"
       >
-        ⌥
+        {@render terminalIcon()}
       </button>
       <button class="status-btn" onclick={openSearch} aria-label="Search (Cmd/Ctrl+Shift+F)" title="Search (Cmd/Ctrl+Shift+F)">
-        ⌕
+        {@render searchIcon()}
       </button>
     </div>
     {#if activeTab}
@@ -88,6 +110,7 @@
   }
   .status-group.actions {
     gap: 2px;
+    margin-left: 6px; /* clears the native macOS bottom-left window corner */
   }
   .status-group.indicators {
     gap: 6px;
