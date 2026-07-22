@@ -333,7 +333,9 @@
     <div class="explorer" style={`width: ${explorerWidth}px`}>
       <FileTree />
     </div>
-    <div class="resizer vertical" role="separator" aria-orientation="vertical" onpointerdown={startDragExplorer}></div>
+    <div class="resizer vertical" role="separator" aria-orientation="vertical" onpointerdown={startDragExplorer}>
+      <div class="resizer-line"></div>
+    </div>
   {/if}
 
   <div class="main" class:row={$terminalPosition !== "bottom"} bind:this={mainEl}>
@@ -404,7 +406,9 @@
           role="separator"
           aria-orientation={$terminalPosition === "bottom" ? "horizontal" : "vertical"}
           onpointerdown={startDragTerminal}
-        ></div>
+        >
+          <div class="resizer-line"></div>
+        </div>
       {:else}
         <div
           class="terminal-area"
@@ -473,6 +477,7 @@
   .resizer {
     background: transparent;
     flex-shrink: 0;
+    position: relative;
   }
   .resizer.vertical {
     width: 4px;
@@ -484,6 +489,28 @@
   }
   .resizer.hidden {
     display: none;
+  }
+  .resizer-line {
+    position: absolute;
+    background: var(--atrium-border);
+  }
+  .resizer.vertical .resizer-line {
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    transform: translateX(-50%);
+  }
+  .resizer.horizontal .resizer-line {
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 1px;
+    transform: translateY(-50%);
+  }
+  .resizer:hover .resizer-line,
+  .resizer:active .resizer-line {
+    background: var(--atrium-accent);
   }
   .main {
     flex: 1;
