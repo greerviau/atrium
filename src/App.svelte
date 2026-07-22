@@ -193,16 +193,15 @@
     terminalPosition === "left" ? ["terminal", "resizer", "editor"] : ["editor", "resizer", "terminal"],
   );
 
-  // Showing the terminal panel with no tab open auto-spawns one, matching
-  // the VS Code/JetBrains convention that toggling the terminal never
-  // reveals a blank panel.
-  let wasTerminalVisible = $terminalVisible;
+  // The terminal dock never sits open with no active session: whenever it's
+  // visible and the pane tree is empty — on first mount, after toggling it
+  // open, or because the user closed the last remaining tab/panel while it
+  // was already open — this spawns one, matching the VS Code/JetBrains
+  // convention that the terminal panel never shows a blank panel.
   $effect(() => {
-    const visible = $terminalVisible;
-    if (visible && !wasTerminalVisible && terminalPaneTree === null) {
+    if ($terminalVisible && $workspace.root && terminalPaneTree === null) {
       newTerminalTab();
     }
-    wasTerminalVisible = visible;
   });
 
   function setTerminalPosition(position: TerminalPosition): void {
