@@ -23,12 +23,57 @@ const HEADING_LEVELS: Record<string, 1 | 2 | 3 | 4 | 5 | 6> = {
  * Gated on `hasFocus`: an unfocused editor never reveals raw markup,
  * regardless of where the stored selection happens to sit, since there is
  * no "active edit" without focus.
+ *
+ * Line-granular, which is correct for a paragraph or heading (the line and
+ * the thing being edited are the same unit) but wrong for a node that may
+ * live inside a table cell, since a table row is one line shared by several
+ * independent cells — a node that can appear inside a `TableCell` should
+ * gate through `isRevealTarget` instead, which narrows to the enclosing
+ * cell when there is one and falls back to this line-granular check
+ * otherwise.
  */
 function isUnderCursor(state: EditorState, from: number, to: number, hasFocus: boolean): boolean {
   if (!hasFocus) return false;
   const lineFrom = state.doc.lineAt(from).from;
   const lineTo = state.doc.lineAt(to).to;
   return state.selection.ranges.some((r) => r.from <= lineTo && r.to >= lineFrom);
+}
+
+/**
+ * Walks up from `node` to find its enclosing `TableCell`, if any, stopping
+ * at the `Table` boundary. `TableHeader`/`TableRow`'s direct cell children
+ * are both named `TableCell` in the syntax tree (already relied on by
+ * `collectCellSlots`), so this one walk covers header and body cells alike.
+ * Returns `null` for a node outside any table — the walk reaches `Document`
+ * without ever finding `Table` or `TableCell`.
+ */
+function enclosingTableCellRange(node: SyntaxNode): { from: number; to: number } | null {
+  let n: SyntaxNode | null = node.parent;
+  while (n && n.type.name !== "Table") {
+    if (n.type.name === "TableCell") {
+      return { from: n.from, to: n.to };
+    }
+    n = n.parent;
+  }
+  return null;
+}
+
+/**
+ * Reveal-gate for a node that may live inside a table cell: narrows to the
+ * enclosing cell's own range when there is one, instead of `isUnderCursor`'s
+ * whole-physical-line check — a table row is one line shared by several
+ * independent cells, so gating a cell's inline markdown reveal on the whole
+ * line reveals a sibling cell's markup whenever the cursor sits anywhere
+ * else on that row. Falls through to `isUnderCursor` unchanged for a node
+ * outside any table, so paragraph/heading behavior is untouched.
+ */
+function isRevealTarget(state: EditorState, node: SyntaxNode, hasFocus: boolean): boolean {
+  const cell = enclosingTableCellRange(node);
+  if (cell) {
+    if (!hasFocus) return false;
+    return state.selection.ranges.some((r) => r.from <= cell.to && r.to >= cell.from);
+  }
+  return isUnderCursor(state, node.from, node.to, hasFocus);
 }
 
 function decorateHeading(
@@ -61,9 +106,13 @@ function decorateHeading(
 /**
  * Shared shape for Emphasis/StrongEmphasis/Strikethrough/InlineCode: the
  * whole node always gets a CSS class so the inner text gets the style; the
- * delimiter runs (found by `markTypeName`) are hidden unless the cursor is
- * on this line, in which case they're left visible inside the still-styled
- * span (matches the fenced-code/table precedent).
+ * delimiter runs (found by `markTypeName`) are hidden unless the node is a
+ * reveal target (matches the fenced-code/table precedent), in which case
+ * they're left visible inside the still-styled span. Gated through
+ * `isRevealTarget` rather than `isUnderCursor` directly, since this node may
+ * sit inside a table cell — reveal then narrows to that cell instead of the
+ * whole row, so the cursor sitting in a sibling cell on the same row
+ * doesn't also reveal this one's delimiters.
  */
 function decorateWrapped(
   state: EditorState,
@@ -74,7 +123,7 @@ function decorateWrapped(
   hasFocus: boolean,
 ): void {
   out.push(Decoration.mark({ class: cssClass }).range(node.from, node.to));
-  if (isUnderCursor(state, node.from, node.to, hasFocus)) {
+  if (isRevealTarget(state, node, hasFocus)) {
     return;
   }
   let child = node.firstChild;
@@ -325,6 +374,18 @@ function collectCellSlots(node: SyntaxNode): CellSlot[] {
  * make an empty cell both unreachable by cursor motion (atomic ranges skip
  * over it) and unfillable (a `Decoration.replace` range displaces any
  * insertion made inside it to the range's far end).
+ *
+ * The gap computation starts from the physical line's own start
+ * (`state.doc.lineAt(node.from).from`), not `node.from` itself, because the
+ * row's container decoration above is applied to the whole physical line.
+ * For a top-level table `node.from` already equals the line's start, so
+ * this is a no-op there; for a row nested inside a blockquote or list item,
+ * the row node starts partway through the line (after the `>` marker or
+ * list indentation), and starting the gap from the line's start instead
+ * folds that leading container marker into the same leading `tableGap`
+ * replace decoration as the row's own leading pipe/whitespace — otherwise
+ * it would be left as bare, undecorated text inside a `display: table-row`
+ * line, which the browser folds into its own anonymous leading column.
  */
 function decorateTableRow(
   state: EditorState,
@@ -336,7 +397,7 @@ function decorateTableRow(
   const rowClass = isHeader ? `${CLASS.tableRow} ${CLASS.tableHeaderRow}` : CLASS.tableRow;
   out.push(Decoration.line({ class: rowClass }).range(state.doc.lineAt(node.from).from));
 
-  let prevEnd = node.from;
+  let prevEnd = state.doc.lineAt(node.from).from;
   let column = 0;
   for (const slot of collectCellSlots(node)) {
     if (slot.from > prevEnd) {
@@ -484,13 +545,13 @@ export function buildDecorations(
             decorateWrapped(state, ref.node, "CodeMark", CLASS.inlineCode, decorations, hasFocus);
             break;
           case "Link":
-            if (isUnderCursor(state, ref.from, ref.to, hasFocus)) {
+            if (isRevealTarget(state, ref.node, hasFocus)) {
               break;
             }
             decorateLink(state, ref.node, documentPath, decorations);
             break;
           case "Image":
-            if (isUnderCursor(state, ref.from, ref.to, hasFocus)) {
+            if (isRevealTarget(state, ref.node, hasFocus)) {
               break;
             }
             decorateImage(state, ref.node, documentPath, decorations);
