@@ -365,6 +365,73 @@ describe("buildDecorations: tables", () => {
     expect(secondCells[0].class?.split(" ")).not.toContain("cm-table-align-right");
     expect(secondCells[1].class?.split(" ")).toContain("cm-table-align-right");
   });
+
+  it("renders bold/italic nested inside a table cell instead of leaving raw asterisks (#74)", () => {
+    const doc = "| Name | Role |\n| --- | --- |\n| **Alice** | *Engineer* |\n";
+    const state = stateFor(doc, doc.length); // cursor away from the table
+    const decos = collect(state);
+
+    const strongDeco = decos.find((d) => d.class === "cm-strong");
+    expect(strongDeco).toBeTruthy();
+    expect(state.doc.sliceString(strongDeco!.from, strongDeco!.to)).toBe("**Alice**");
+
+    const emDeco = decos.find((d) => d.class === "cm-em");
+    expect(emDeco).toBeTruthy();
+    expect(state.doc.sliceString(emDeco!.from, emDeco!.to)).toBe("*Engineer*");
+
+    // The `**`/`*` marks are hidden via zero-content replace decorations, same as prose.
+    const replaces = decos.filter((d) => d.isReplace && !d.class);
+    expect(replaces.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("reveals a table cell's emphasis markers on the cursor's cell while other rows stay decorated", () => {
+    const doc = "| Name | Role |\n| --- | --- |\n| **Alice** | *Engineer* |\n| **Bob** | *Manager* |\n";
+    const state = stateFor(doc, doc.indexOf("Alice"));
+    const decos = collect(state);
+    const bobLine = state.doc.line(4);
+
+    // The cursor's own cell loses its cm-table-cell wrapping (cursor-reveal), but the
+    // nested strong decoration still applies, with its `**` marks left visible. This
+    // only asserts about the cursor's own cell, not siblings in the same row, since
+    // whether a same-row sibling cell keeps its decoration is a separate concern
+    // (row- vs cell-level cursor-reveal granularity) from what this test covers.
+    const aliceStrong = decos.find((d) => d.class === "cm-strong");
+    expect(aliceStrong).toBeTruthy();
+    expect(state.doc.sliceString(aliceStrong!.from, aliceStrong!.to)).toBe("**Alice**");
+    expect(
+      decos.some(
+        (d) =>
+          d.class?.split(" ").includes("cm-table-cell") &&
+          d.from <= aliceStrong!.from &&
+          d.to >= aliceStrong!.to,
+      ),
+    ).toBe(false);
+
+    // A different row in the same table still renders normally, no cross-row leakage.
+    const bobStrong = decos.find((d) => d.class === "cm-strong" && d.from >= bobLine.from && d.to <= bobLine.to);
+    expect(bobStrong).toBeTruthy();
+    expect(state.doc.sliceString(bobStrong!.from, bobStrong!.to)).toBe("**Bob**");
+    expect(
+      decos.some(
+        (d) => d.class?.split(" ").includes("cm-table-cell") && d.from >= bobLine.from && d.to <= bobLine.to,
+      ),
+    ).toBe(true);
+  });
+
+  it("renders a link nested inside a table cell with cm-link (same underlying defect as #74)", () => {
+    const doc = "| Name | Site |\n| --- | --- |\n| Alice | [site](https://x.com) |\n";
+    const state = stateFor(doc, doc.length); // cursor away from the table
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md");
+    let found: { from: number; to: number; href?: string } | undefined;
+    decorations.between(0, state.doc.length, (from, to, deco) => {
+      if (deco.spec.class === "cm-link") {
+        found = { from, to, href: deco.spec.attributes?.["data-href"] };
+      }
+    });
+    expect(found).toBeTruthy();
+    expect(found?.href).toBe("https://x.com");
+    expect(state.doc.sliceString(found!.from, found!.to)).toBe("site");
+  });
 });
 
 describe("buildDecorations: code blocks", () => {
