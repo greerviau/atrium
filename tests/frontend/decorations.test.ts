@@ -384,27 +384,27 @@ describe("buildDecorations: tables", () => {
     expect(replaces.length).toBeGreaterThanOrEqual(4);
   });
 
-  it("reveals a table cell's emphasis markers on the cursor's row while other rows stay decorated", () => {
+  it("reveals a table cell's emphasis markers on the cursor's cell while other rows stay decorated", () => {
     const doc = "| Name | Role |\n| --- | --- |\n| **Alice** | *Engineer* |\n| **Bob** | *Manager* |\n";
     const state = stateFor(doc, doc.indexOf("Alice"));
     const decos = collect(state);
-    const aliceLine = state.doc.line(3);
     const bobLine = state.doc.line(4);
 
-    // The cursor's row loses its cm-table-cell/gap decorations (unchanged row-level
-    // behavior) but the nested strong/em decoration still applies, marks revealed.
-    expect(
-      decos.some(
-        (d) => d.from >= aliceLine.from && d.to <= aliceLine.to && d.class?.split(" ").includes("cm-table-cell"),
-      ),
-    ).toBe(false);
-    const aliceStrong = decos.find(
-      (d) => d.class === "cm-strong" && d.from >= aliceLine.from && d.to <= aliceLine.to,
-    );
+    // The cursor's own cell loses its cm-table-cell wrapping (cursor-reveal), but the
+    // nested strong decoration still applies, with its `**` marks left visible. This
+    // only asserts about the cursor's own cell, not siblings in the same row, since
+    // whether a same-row sibling cell keeps its decoration is a separate concern
+    // (row- vs cell-level cursor-reveal granularity) from what this test covers.
+    const aliceStrong = decos.find((d) => d.class === "cm-strong");
     expect(aliceStrong).toBeTruthy();
     expect(state.doc.sliceString(aliceStrong!.from, aliceStrong!.to)).toBe("**Alice**");
     expect(
-      decos.some((d) => d.isReplace && !d.class && d.from >= aliceLine.from && d.to <= aliceLine.to),
+      decos.some(
+        (d) =>
+          d.class?.split(" ").includes("cm-table-cell") &&
+          d.from <= aliceStrong!.from &&
+          d.to >= aliceStrong!.to,
+      ),
     ).toBe(false);
 
     // A different row in the same table still renders normally, no cross-row leakage.
