@@ -464,11 +464,22 @@ impl Workspace for LocalWorkspace {
         // would misreport a case-only rename as a collision. Comparing canonicalized
         // paths instead decides "is the destination a different entry?" by identity,
         // which also covers the same-name no-op (an unchanged name resubmitted).
+        //
+        // `canonicalize` resolves symlinks, but `rename(2)` moves the link itself, so a
+        // symlink whose target is the destination would otherwise compare equal to that
+        // target and be let through to clobber it. Excluding a symlink source keeps
+        // identity judged on the entry being renamed rather than what it points at; the
+        // accepted trade-off is that a symlink can no longer be case-only-renamed on a
+        // case-insensitive volume (rejecting that is recoverable, unlike the alternative).
         if to_path.exists() {
-            let same_entry = std::fs::canonicalize(&from_path)
-                .ok()
-                .zip(std::fs::canonicalize(&to_path).ok())
-                .is_some_and(|(a, b)| a == b);
+            let from_is_symlink = from_path
+                .symlink_metadata()
+                .is_ok_and(|m| m.file_type().is_symlink());
+            let same_entry = !from_is_symlink
+                && std::fs::canonicalize(&from_path)
+                    .ok()
+                    .zip(std::fs::canonicalize(&to_path).ok())
+                    .is_some_and(|(a, b)| a == b);
             if !same_entry {
                 return Err(AppError::AlreadyExists(to.to_string()));
             }
@@ -597,6 +608,24 @@ mod tests {
 
         ws.rename("notes.md", "notes.md").await.unwrap();
         assert_eq!(ws.read_file("notes.md").await.unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn rename_rejects_a_symlink_onto_its_own_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("notes.md").await.unwrap();
+        ws.write_file("notes.md", "keep me").await.unwrap();
+        std::os::unix::fs::symlink(dir.path().join("notes.md"), dir.path().join("link.md"))
+            .unwrap();
+
+        // `link.md` canonicalizes to the same real path as `notes.md`, but `rename(2)`
+        // moves the link itself rather than its target, so this must still be rejected
+        // as a collision rather than let through as an identity match.
+        let err = ws.rename("link.md", "notes.md").await.unwrap_err();
+        assert!(matches!(err, AppError::AlreadyExists(_)));
+        assert_eq!(ws.read_file("notes.md").await.unwrap(), "keep me");
+        assert!(dir.path().join("link.md").symlink_metadata().is_ok());
     }
 
     #[tokio::test]
