@@ -11,6 +11,7 @@
   import { buildXtermTheme } from "../theme/xtermTheme";
   import { zoom } from "../stores/textSize";
   import { computeTabTitle, parseOsc7Cwd, reduceTitleState, type TitleState } from "./tabTitle";
+  import { handleTerminalKeyEvent } from "./terminalKeyHandling";
 
   // Tauri's `CmdOrCtrl` accelerator resolves to Cmd-only on macOS and
   // Ctrl-only elsewhere (never both on one platform), so the toggle-panel
@@ -82,13 +83,17 @@
     // instead of the panel toggle. `Cmd/Ctrl+\` (split-terminal) needs no
     // entry here: unlike B/R (real readline bindings) or Ctrl+D (shell EOF),
     // `\` has no shell/readline meaning on any platform this app targets, so
-    // there's nothing for the guard to intercept it from.
-    terminal.attachCustomKeyEventHandler((event) => {
-      const key = event.key.toLowerCase();
-      const hasToggleModifier = isMacPlatform ? event.metaKey : event.ctrlKey && !event.metaKey;
-      const isToggleAccelerator = hasToggleModifier && (key === "b" || key === "r");
-      return !isToggleAccelerator;
-    });
+    // there's nothing for the guard to intercept it from. Also remaps a bare
+    // Shift+Enter to the newline-not-submit sequence multi-line prompts
+    // already recognize.
+    terminal.attachCustomKeyEventHandler((event) =>
+      handleTerminalKeyEvent(event, {
+        isMacPlatform,
+        writeToPty: (data) => {
+          if (terminalId) void ptyWrite(terminalId, data);
+        },
+      }),
+    );
 
     registerLinkProviders(terminal, workspaceId, cwd);
 
