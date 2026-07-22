@@ -39,6 +39,7 @@ vi.mock("../../src/lib/ipc/events", () => ({
   onMenuEvent: vi.fn().mockResolvedValue(() => {}),
   onDockOpenPath: vi.fn().mockResolvedValue(() => {}),
   onCloseRequested: vi.fn().mockResolvedValue(() => {}),
+  onDragDropEvent: vi.fn().mockResolvedValue(() => {}),
 }));
 
 /** Resets the shared workspace/layout stores to a fresh-install baseline (no persisted layout, dock visible by default) before each case. */
