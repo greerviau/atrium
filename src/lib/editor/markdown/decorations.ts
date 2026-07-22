@@ -27,6 +27,16 @@ function isUnderCursor(state: EditorState, from: number, to: number): boolean {
   return state.selection.ranges.some((r) => r.from <= lineTo && r.to >= lineFrom);
 }
 
+/**
+ * True if any selection range overlaps `[from, to)` exactly, with no
+ * widening to the enclosing line. Used where a single line contains several
+ * independently-editable spans (table cells) and gating on the whole line,
+ * like `isUnderCursor` does, would reveal every sibling span at once.
+ */
+function overlapsSelection(state: EditorState, from: number, to: number): boolean {
+  return state.selection.ranges.some((r) => r.from <= to && r.to >= from);
+}
+
 function decorateHeading(
   state: EditorState,
   node: SyntaxNode,
@@ -255,10 +265,13 @@ function parseColumnAlignment(text: string): ColumnAlignment[] {
 /**
  * Decorates one table row (`TableHeader` or `TableRow`, always a single
  * physical line). The row gets an always-visible `Decoration.line`
- * container (`display: table-row`, matching the code-block precedent);
- * cursor-gating only applies to the cell/pipe marks inside it, so placing
- * the cursor on one row reveals its raw markdown without breaking the
- * table layout of the rows around it.
+ * container (`display: table-row`, matching the code-block precedent).
+ * Cursor-gating applies per cell, not to the row as a whole: each
+ * `TableCell` is checked against the cursor independently, so editing one
+ * cell reveals only that cell (and its bordering pipe/gap) while every
+ * other cell on the same row keeps its `cm-table-cell`/alignment styling.
+ * The gap between two cells reveals if either bordering cell is under the
+ * cursor, since the pipe visually belongs to both boundaries.
  */
 function decorateTableRow(
   state: EditorState,
@@ -270,38 +283,41 @@ function decorateTableRow(
   const rowClass = isHeader ? `${CLASS.tableRow} ${CLASS.tableHeaderRow}` : CLASS.tableRow;
   out.push(Decoration.line({ class: rowClass }).range(state.doc.lineAt(node.from).from));
 
-  if (isUnderCursor(state, node.from, node.to)) {
-    return;
-  }
-
   let prevEnd = node.from;
+  let prevCellUnderCursor = false;
   let column = 0;
   let child = node.firstChild;
   while (child) {
     if (child.type.name === "TableCell") {
+      const cellUnderCursor = overlapsSelection(state, child.from, child.to);
+      const gapUnderCursor =
+        cellUnderCursor || prevCellUnderCursor || overlapsSelection(state, prevEnd, child.from);
       // Fully consume the gap since the previous cell (its `|` plus any
       // surrounding whitespace) rather than just the pipe character — a
       // leftover whitespace text node would become its own anonymous
       // table-cell once the real cells get `display: table-cell`.
-      if (child.from > prevEnd) {
+      if (child.from > prevEnd && !gapUnderCursor) {
         out.push(Decoration.replace({}).range(prevEnd, child.from));
       }
-      const classes: string[] = [CLASS.tableCell];
-      if (isHeader) {
-        classes.push(CLASS.tableHeaderCell);
+      if (!cellUnderCursor) {
+        const classes: string[] = [CLASS.tableCell];
+        if (isHeader) {
+          classes.push(CLASS.tableHeaderCell);
+        }
+        if (alignment[column] === "center") {
+          classes.push(CLASS.tableAlignCenter);
+        } else if (alignment[column] === "right") {
+          classes.push(CLASS.tableAlignRight);
+        }
+        out.push(Decoration.mark({ class: classes.join(" ") }).range(child.from, child.to));
       }
-      if (alignment[column] === "center") {
-        classes.push(CLASS.tableAlignCenter);
-      } else if (alignment[column] === "right") {
-        classes.push(CLASS.tableAlignRight);
-      }
-      out.push(Decoration.mark({ class: classes.join(" ") }).range(child.from, child.to));
       prevEnd = child.to;
+      prevCellUnderCursor = cellUnderCursor;
       column++;
     }
     child = child.nextSibling;
   }
-  if (node.to > prevEnd) {
+  if (node.to > prevEnd && !prevCellUnderCursor && !overlapsSelection(state, prevEnd, node.to)) {
     out.push(Decoration.replace({}).range(prevEnd, node.to));
   }
 }
