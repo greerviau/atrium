@@ -121,7 +121,9 @@
         ? `left: calc(${rz.offsetPercent}% - 2px); top: ${rz.crossRect.start}%; height: ${rz.crossRect.length}%`
         : `top: calc(${rz.offsetPercent}% - 2px); left: ${rz.crossRect.start}%; width: ${rz.crossRect.length}%`}
       onpointerdown={(e) => startDragResizer(e, rz)}
-    ></div>
+    >
+      <div class="pane-resizer-line"></div>
+    </div>
   {/each}
 </div>
 
@@ -160,5 +162,31 @@
   .pane-resizer.horizontal {
     height: 4px;
     cursor: row-resize;
+  }
+
+  .pane-resizer-line {
+    position: absolute;
+    background: var(--atrium-border);
+  }
+
+  .pane-resizer.vertical .pane-resizer-line {
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    transform: translateX(-50%);
+  }
+
+  .pane-resizer.horizontal .pane-resizer-line {
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 1px;
+    transform: translateY(-50%);
+  }
+
+  .pane-resizer:hover .pane-resizer-line,
+  .pane-resizer:active .pane-resizer-line {
+    background: var(--atrium-accent);
   }
 </style>
