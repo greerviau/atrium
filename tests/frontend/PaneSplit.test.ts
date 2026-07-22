@@ -37,7 +37,6 @@ const baseProps = {
   workspaceId: "local",
   onFocus: noop,
   onSplit: noop,
-  onClose: noop,
   onNewTab: noop,
   onCloseTab: noop,
   onSessionExit: noop,
@@ -48,14 +47,14 @@ const baseProps = {
 
 describe("PaneSplit", () => {
   it("renders a single-pane tree as one panel", () => {
-    const { container } = render(PaneSplit, { tree: LEAF, hasSplits: false, ...baseProps });
+    const { container } = render(PaneSplit, { tree: LEAF, ...baseProps });
 
     expect(container.querySelectorAll(".terminal-panel-stub")).toHaveLength(1);
     expect(container.querySelector(".terminal-panel-stub")?.getAttribute("data-pane-id")).toBe("p1");
   });
 
   it("renders both children of a split tree, each as its own panel, with a resizer between them", () => {
-    const { container } = render(PaneSplit, { tree: SPLIT, hasSplits: true, ...baseProps });
+    const { container } = render(PaneSplit, { tree: SPLIT, ...baseProps });
 
     const panels = container.querySelectorAll(".terminal-panel-stub");
     expect(panels).toHaveLength(2);
@@ -64,7 +63,7 @@ describe("PaneSplit", () => {
   });
 
   it("marks a row split's resizer vertical and a column split's resizer horizontal", () => {
-    const { container } = render(PaneSplit, { tree: SPLIT, hasSplits: true, ...baseProps });
+    const { container } = render(PaneSplit, { tree: SPLIT, ...baseProps });
     const rowResizer = container.querySelector(".pane-resizer")!;
     expect(rowResizer.classList.contains("vertical")).toBe(true);
     expect(rowResizer.getAttribute("aria-orientation")).toBe("vertical");
@@ -72,14 +71,14 @@ describe("PaneSplit", () => {
     cleanup();
 
     const columnSplit: PaneNode = { ...(SPLIT as SplitPane), direction: "column" };
-    const { container: columnContainer } = render(PaneSplit, { tree: columnSplit, hasSplits: true, ...baseProps });
+    const { container: columnContainer } = render(PaneSplit, { tree: columnSplit, ...baseProps });
     const columnResizer = columnContainer.querySelector(".pane-resizer")!;
     expect(columnResizer.classList.contains("horizontal")).toBe(true);
     expect(columnResizer.getAttribute("aria-orientation")).toBe("horizontal");
   });
 
   it("marks the focused pane with the active class", () => {
-    const { container } = render(PaneSplit, { tree: SPLIT, hasSplits: true, ...baseProps, activePaneId: "p2" });
+    const { container } = render(PaneSplit, { tree: SPLIT, ...baseProps, activePaneId: "p2" });
 
     const panes = container.querySelectorAll(".pane-leaf");
     expect(panes[0].classList.contains("active")).toBe(false);
@@ -95,7 +94,7 @@ describe("PaneSplit", () => {
     // movement on top of a size that already reflects it, and the divider
     // runs away far faster than the pointer.
     const onResizeSplit = vi.fn();
-    const { container } = render(PaneSplit, { tree: SPLIT, hasSplits: true, ...baseProps, onResizeSplit });
+    const { container } = render(PaneSplit, { tree: SPLIT, ...baseProps, onResizeSplit });
 
     // The flat renderer has only one real container element (`.pane-split-root`);
     // a given split's own local pixel size is derived from it by scaling by
@@ -142,11 +141,11 @@ describe("PaneSplit", () => {
     // tore down and remounted an untouched surviving leaf's whole component
     // subtree (killing its PTY) whenever a node's type flipped between
     // "leaf" and "split". The flat, `leaf.id`-keyed renderer must not.
-    const { rerender } = render(PaneSplit, { tree: LEAF, hasSplits: false, ...baseProps });
+    const { rerender } = render(PaneSplit, { tree: LEAF, ...baseProps });
     mountLog.length = 0; // only care about mount/destroy events from here on
 
     // Split the lone leaf p1 into split[p1, p2]: p1 must survive untouched.
-    rerender({ tree: SPLIT, hasSplits: true, ...baseProps });
+    rerender({ tree: SPLIT, ...baseProps });
     expect(mountLog).not.toContain("destroy:p1");
     expect(mountLog).toContain("mount:p2");
 
@@ -154,7 +153,7 @@ describe("PaneSplit", () => {
 
     // Collapse back down to a lone leaf p2 (closing p1): the survivor p2
     // must not be destroyed/remounted either.
-    rerender({ tree: leafNode("p2"), hasSplits: false, ...baseProps });
+    rerender({ tree: leafNode("p2"), ...baseProps });
     expect(mountLog).toContain("destroy:p1");
     expect(mountLog).not.toContain("destroy:p2");
     expect(mountLog).not.toContain("mount:p2");

@@ -13,10 +13,8 @@
    */
   let {
     tree,
-    hasSplits,
     workspaceId,
     onSplit,
-    onClosePanel,
     onNewTab,
     onCloseTab,
     onSessionExit,
@@ -24,10 +22,8 @@
     onTitleChange,
   }: {
     tree: LeafPane;
-    hasSplits: boolean;
     workspaceId: string;
     onSplit: (direction: SplitDirection) => void;
-    onClosePanel: () => void;
     onNewTab: () => void;
     // The tab's × button — a deliberate close.
     onCloseTab: (sessionId: string) => void;
@@ -71,9 +67,6 @@
     </div>
     <div class="tab-strip-controls">
       <SplitMenu {onSplit} />
-      {#if hasSplits}
-        <button class="tab-strip-btn" onclick={onClosePanel} aria-label="Close panel" title="Close panel">×</button>
-      {/if}
     </div>
   </div>
   <div class="terminal-panes">
@@ -156,26 +149,6 @@
   }
 
   .tab-close:hover {
-    opacity: 1;
-  }
-
-  .tab-strip-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: none;
-    border: none;
-    border-radius: 3px;
-    color: inherit;
-    font: inherit;
-    font-size: 11px;
-    line-height: 1;
-    cursor: pointer;
-    opacity: 0.6;
-    padding: 4px 6px;
-  }
-
-  .tab-strip-btn:hover {
     opacity: 1;
   }
 

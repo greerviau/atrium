@@ -35,7 +35,6 @@ const baseProps = {
   workspaceId: "local",
   onFocus: noop,
   onSplit: noop,
-  onClose: noop,
   onNewTab: noop,
   onCloseTab: noop,
   onSessionExit: noop,
@@ -50,14 +49,14 @@ function collectComponentCss(): string {
 
 describe("pane-resizer divider (#124)", () => {
   it("renders a .pane-resizer-line child inside the resizer, at every boundary", () => {
-    const { container } = render(PaneSplit, { tree: SPLIT, hasSplits: true, ...baseProps });
+    const { container } = render(PaneSplit, { tree: SPLIT, ...baseProps });
 
     const resizer = container.querySelector(".pane-resizer")!;
     expect(resizer.querySelectorAll(".pane-resizer-line")).toHaveLength(1);
   });
 
   it("ships a .pane-resizer-line rule colored from --atrium-border, never transparent", () => {
-    render(PaneSplit, { tree: SPLIT, hasSplits: true, ...baseProps });
+    render(PaneSplit, { tree: SPLIT, ...baseProps });
 
     const css = collectComponentCss();
     // Scoped-class-tolerant: Svelte appends a `svelte-<hash>` class to every
@@ -70,7 +69,7 @@ describe("pane-resizer divider (#124)", () => {
   });
 
   it("ships a :hover/:active rule that highlights the line with --atrium-accent", () => {
-    render(PaneSplit, { tree: SPLIT, hasSplits: true, ...baseProps });
+    render(PaneSplit, { tree: SPLIT, ...baseProps });
 
     const css = collectComponentCss();
     const hoverRuleMatch = css.match(/\.pane-resizer[^{]*:hover[^{]*\.pane-resizer-line[^{]*\{([^}]*)\}/);
