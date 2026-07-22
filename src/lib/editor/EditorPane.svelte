@@ -157,27 +157,43 @@
   // internal height-change detection only looks at `StateField`-registered
   // decorations, not the `ViewPlugin`-supplied ones `livePreviewPlugin` uses
   // for live-preview styling, so it doesn't see this transition as
-  // height-relevant and never recomputes the viewport on its own. Dispatching
-  // a scroll-anchoring effect alongside the reconfigure forces a correct
-  // viewport recomputation as part of the same transaction. `scrollSnapshot()`
-  // anchors on the view's current scroll offset rather than the selection
-  // head, so a toggle can't itself cause a visible scroll jump when the
-  // cursor and the user's scroll position have diverged (e.g. reading further
-  // down the rendered preview without clicking). The explicit
-  // `requestMeasure()` after dispatch (same pattern as the background-tab fix
-  // below) guarantees a fresh measure pass re-derives the viewport from
-  // actual rendered DOM heights rather than relying on CodeMirror's implicit,
-  // best-effort async convergence.
+  // height-relevant and never recomputes the viewport on its own.
+  //
+  // Forcing that recompute needs a scroll-target effect dispatched alongside
+  // the reconfigure, but `ViewState.update()` only recomputes the viewport
+  // when the target falls *outside* the viewport it already has — and
+  // `view.scrollSnapshot()`'s anchor is deliberately constructed to already
+  // be inside it (that's what makes it useful for preserving scroll position
+  // elsewhere), so it doesn't reliably trigger the recompute this fix needs.
+  // The selection head reliably does fall outside the current viewport in
+  // the case that matters (the cursor defaults to position 0 on open, and
+  // reading the rendered preview by scrolling doesn't move it), so it's used
+  // here purely to force the recompute — then immediately superseded by a
+  // `scrollSnapshot()` captured *before* the toggle, in a second dispatch, so
+  // the scroll position CodeMirror eventually applies is the one the user
+  // was actually looking at, not the cursor. `ViewState` only tracks one
+  // pending scroll target at a time and applies whichever was set last, so
+  // this second dispatch reliably overrides the first before either is ever
+  // rendered. The explicit `requestMeasure()` after both dispatches
+  // (same pattern as the background-tab fix below) guarantees a fresh
+  // measure pass re-derives the viewport from actual rendered DOM heights
+  // rather than relying on CodeMirror's implicit, best-effort async
+  // convergence.
   $effect(() => {
     const current = tab;
     if (!view || !current || current.viewMode === lastAppliedViewMode) {
       return;
     }
     lastAppliedViewMode = current.viewMode;
+    const head = view.state.selection.main.head;
     const scrollSnapshot = view.scrollSnapshot();
     view.dispatch({
-      effects: [viewModeCompartment.reconfigure(viewModeExtensions(current.mode, current.viewMode)), scrollSnapshot],
+      effects: [
+        viewModeCompartment.reconfigure(viewModeExtensions(current.mode, current.viewMode)),
+        EditorView.scrollIntoView(head, { y: "nearest" }),
+      ],
     });
+    view.dispatch({ effects: scrollSnapshot });
     view.requestMeasure();
   });
 
