@@ -1,7 +1,8 @@
 <script lang="ts">
-  import type { PaneNode, SplitAxis, SplitDirection } from "./paneTree";
+  import type { PaneNode, SplitDirection } from "./paneTree";
+  import { listLeaves } from "./paneTree";
+  import { computeRects, computeResizers, type ResizerRect } from "./paneLayout";
   import TerminalPanel from "./TerminalPanel.svelte";
-  import PaneSplit from "./PaneSplit.svelte";
 
   let {
     tree,
@@ -31,16 +32,33 @@
     onResizeSplit: (splitId: string, index: number, delta: number, containerSizePx: number) => void;
   } = $props();
 
-  let containerEl: HTMLDivElement | undefined = $state();
+  let rootEl: HTMLDivElement | undefined = $state();
+
+  // Every leaf and split node's rectangle, as a percentage of `rootEl`'s own
+  // box — recomputed (cheaply; this is pure arithmetic) whenever the tree
+  // shape or any split's sizes change. Leaves are rendered from this flat,
+  // keyed list rather than recursing over the tree, so a shape change that
+  // leaves an existing leaf's id in place never destroys or remounts that
+  // leaf's `TerminalPanel` (and the PTY it owns) — see issue #112.
+  let rects = $derived(computeRects(tree, { top: 0, left: 0, width: 100, height: 100 }));
+  let leaves = $derived(listLeaves(tree));
+  let resizers = $derived(computeResizers(tree, rects));
 
   // Pane sizes are stored as ratios (see paneTree.ts), so a divider drag
-  // converts its pixel delta to a ratio against this split's own container
+  // converts its pixel delta to a ratio against its own split's container
   // size at drag start — the same clamp-per-pixel-then-convert approach
-  // App.svelte's dock-panel resizer already uses.
-  function startDragResizer(event: PointerEvent, index: number, axis: SplitAxis, splitId: string): void {
+  // App.svelte's dock-panel resizer already uses. There's only one real
+  // container element now (`rootEl`); a given split's own local pixel size
+  // is derived by scaling `rootEl`'s size down by that split's rectangle
+  // fraction, matching what the split's own `clientWidth`/`clientHeight`
+  // would have been under the old nested-flexbox layout.
+  function startDragResizer(event: PointerEvent, rz: ResizerRect): void {
     event.preventDefault();
-    const containerSizePx = axis === "row" ? (containerEl?.clientWidth ?? 0) : (containerEl?.clientHeight ?? 0);
-    let last = axis === "row" ? event.clientX : event.clientY;
+    const splitRect = rects.get(rz.splitId);
+    const rootSizePx = rz.orientation === "row" ? (rootEl?.clientWidth ?? 0) : (rootEl?.clientHeight ?? 0);
+    const fraction = rz.orientation === "row" ? (splitRect?.width ?? 100) : (splitRect?.height ?? 100);
+    const containerSizePx = rootSizePx * (fraction / 100);
+    let last = rz.orientation === "row" ? event.clientX : event.clientY;
 
     // `resizeSplit` adds `delta` onto whatever `sizes[index]` already is
     // (live-reactive via App.svelte's state), so this must send the
@@ -50,10 +68,10 @@
     // it, making the divider run away far faster than the pointer.
     function onMove(e: PointerEvent): void {
       if (containerSizePx <= 0) return;
-      const current = axis === "row" ? e.clientX : e.clientY;
+      const current = rz.orientation === "row" ? e.clientX : e.clientY;
       const delta = (current - last) / containerSizePx;
       last = current;
-      onResizeSplit(splitId, index, delta, containerSizePx);
+      onResizeSplit(rz.splitId, rz.index, delta, containerSizePx);
     }
     function onUp(): void {
       window.removeEventListener("pointermove", onMove);
@@ -64,61 +82,57 @@
   }
 </script>
 
-{#if tree.type === "leaf"}
-  <div class="pane-leaf" class:active={tree.id === activePaneId} onfocusin={() => onFocus(tree.id)}>
-    <div class="pane-body">
-      <TerminalPanel
-        {tree}
-        {hasSplits}
-        {workspaceId}
-        onSplit={(direction) => onSplit(tree.id, direction)}
-        onClosePanel={() => onClose(tree.id)}
-        onNewTab={() => onNewTab(tree.id)}
-        onCloseTab={(sessionId) => onCloseTab(tree.id, sessionId)}
-        onSetActiveTab={(sessionId) => onSetActiveTab(tree.id, sessionId)}
-        onTitleChange={(sessionId, title) => onTitleChange(tree.id, sessionId, title)}
-      />
-    </div>
-  </div>
-{:else}
-  <div class="pane-split" class:row={tree.direction === "row"} class:column={tree.direction === "column"} bind:this={containerEl}>
-    {#each tree.children as child, i (child.id)}
-      {#if i > 0}
-        <div
-          class="pane-resizer"
-          class:vertical={tree.direction === "row"}
-          class:horizontal={tree.direction === "column"}
-          role="separator"
-          aria-orientation={tree.direction === "row" ? "vertical" : "horizontal"}
-          onpointerdown={(e) => startDragResizer(e, i - 1, tree.direction, tree.id)}
-        ></div>
-      {/if}
-      <div class="pane-child" style={`flex: ${tree.sizes[i]} 1 0`}>
-        <PaneSplit
-          tree={child}
+<div class="pane-split-root" bind:this={rootEl}>
+  {#each leaves as leaf (leaf.id)}
+    {@const r = rects.get(leaf.id)!}
+    <div
+      class="pane-leaf"
+      class:active={leaf.id === activePaneId}
+      style={`top: ${r.top}%; left: ${r.left}%; width: ${r.width}%; height: ${r.height}%`}
+      onfocusin={() => onFocus(leaf.id)}
+    >
+      <div class="pane-body">
+        <TerminalPanel
+          tree={leaf}
           {hasSplits}
-          {activePaneId}
           {workspaceId}
-          {onFocus}
-          {onSplit}
-          {onClose}
-          {onNewTab}
-          {onCloseTab}
-          {onSetActiveTab}
-          {onTitleChange}
-          {onResizeSplit}
+          onSplit={(direction) => onSplit(leaf.id, direction)}
+          onClosePanel={() => onClose(leaf.id)}
+          onNewTab={() => onNewTab(leaf.id)}
+          onCloseTab={(sessionId) => onCloseTab(leaf.id, sessionId)}
+          onSetActiveTab={(sessionId) => onSetActiveTab(leaf.id, sessionId)}
+          onTitleChange={(sessionId, title) => onTitleChange(leaf.id, sessionId, title)}
         />
       </div>
-    {/each}
-  </div>
-{/if}
+    </div>
+  {/each}
+
+  {#each resizers as rz (rz.key)}
+    <div
+      class="pane-resizer"
+      class:vertical={rz.orientation === "row"}
+      class:horizontal={rz.orientation === "column"}
+      role="separator"
+      aria-orientation={rz.orientation === "row" ? "vertical" : "horizontal"}
+      style={rz.orientation === "row"
+        ? `left: calc(${rz.offsetPercent}% - 2px); top: ${rz.crossRect.start}%; height: ${rz.crossRect.length}%`
+        : `top: calc(${rz.offsetPercent}% - 2px); left: ${rz.crossRect.start}%; width: ${rz.crossRect.length}%`}
+      onpointerdown={(e) => startDragResizer(e, rz)}
+    ></div>
+  {/each}
+</div>
 
 <style>
-  .pane-leaf {
+  .pane-split-root {
+    position: relative;
     height: 100%;
     width: 100%;
     min-height: 0;
     min-width: 0;
+  }
+
+  .pane-leaf {
+    position: absolute;
     display: flex;
     flex-direction: column;
   }
@@ -130,31 +144,9 @@
     position: relative;
   }
 
-  .pane-split {
-    height: 100%;
-    width: 100%;
-    min-height: 0;
-    min-width: 0;
-    display: flex;
-  }
-
-  .pane-split.row {
-    flex-direction: row;
-  }
-
-  .pane-split.column {
-    flex-direction: column;
-  }
-
-  .pane-child {
-    min-height: 0;
-    min-width: 0;
-    display: flex;
-  }
-
   .pane-resizer {
+    position: absolute;
     background: transparent;
-    flex-shrink: 0;
   }
 
   .pane-resizer.vertical {
