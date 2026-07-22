@@ -56,4 +56,30 @@ describe("cmd/ctrl-click on a rendered markdown link, at the real IPC boundary",
 
     expect(invoke).toHaveBeenCalledWith("open_external_link", { url: "https://example.com" });
   });
+
+  it("also routes a GitHub PR URL in markdown through open_external_link, not shell_open_external", () => {
+    const doc =
+      "See [my PR](https://github.com/greerviau/atrium/pull/99) for more.\nOther line, cursor starts here.";
+    view = makeView(doc);
+    view.dispatch({ selection: EditorSelection.cursor(doc.length) });
+
+    const link = findLink(view);
+    link.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, metaKey: true }));
+
+    expect(invoke).toHaveBeenCalledWith("open_external_link", {
+      url: "https://github.com/greerviau/atrium/pull/99",
+    });
+    expect(invoke).not.toHaveBeenCalledWith("shell_open_external", expect.anything());
+  });
+
+  it("never calls open_external_link for a relative-path link", () => {
+    const doc = "See [my note](./notes/todo.md) for more.\nOther line, cursor starts here.";
+    view = makeView(doc, "docs/index.md");
+    view.dispatch({ selection: EditorSelection.cursor(doc.length) });
+
+    const link = findLink(view);
+    link.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, metaKey: true }));
+
+    expect(invoke).not.toHaveBeenCalledWith("open_external_link", expect.anything());
+  });
 });

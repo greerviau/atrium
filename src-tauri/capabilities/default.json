@@ -1,14 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window. Grants only the app's own hand-written commands (default for #[tauri::command], no plugin scope needed), the folder picker, PR-link opening, general web-link opening, and Reveal in Finder.",
+  "description": "Capability for the main window. Grants only the app's own hand-written commands (default for #[tauri::command], no plugin scope needed), the folder picker, PR-link opening, and Reveal in Finder.",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "dialog:allow-open",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "https://github.com/*" }, { "url": "https://*" }, { "url": "http://*" }]
+      "allow": [{ "url": "https://github.com/*" }]
     },
     "opener:allow-reveal-item-in-dir"
   ]

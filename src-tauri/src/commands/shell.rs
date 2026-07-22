@@ -38,7 +38,8 @@ pub fn shell_open_external(app: tauri::AppHandle, url: String) -> Result<(), App
 /// command can't be used to launch a non-web scheme even if a compromised
 /// or buggy frontend path called it with something else.
 fn is_web_url(url: &str) -> bool {
-    url.starts_with("https://") || url.starts_with("http://")
+    let lower = url.to_ascii_lowercase();
+    lower.starts_with("https://") || lower.starts_with("http://")
 }
 
 #[tauri::command]
@@ -74,6 +75,7 @@ mod tests {
     fn accepts_valid_web_urls() {
         assert!(is_web_url("https://example.com"));
         assert!(is_web_url("http://example.com"));
+        assert!(is_web_url("HTTPS://example.com"));
     }
 
     #[test]

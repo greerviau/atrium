@@ -189,7 +189,7 @@ function resolveImageSrc(url: string, documentPath: string): string {
  * by the file explorer and terminal link provider.
  */
 export function handleLinkClick(url: string, documentPath: string): void {
-  if (/^https?:\/\//.test(url)) {
+  if (/^https?:\/\//i.test(url)) {
     void openExternalLink(url);
     return;
   }
