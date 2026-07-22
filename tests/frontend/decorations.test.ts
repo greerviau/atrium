@@ -406,6 +406,115 @@ describe("buildDecorations: tables", () => {
     expect(gaps.every((d) => d.tableGap)).toBe(true);
   });
 
+  // Regression coverage for issue #126's second root cause: a table row's
+  // container decoration is applied to the whole physical line, but the row
+  // node itself starts partway through that line whenever a blockquote `>`
+  // marker or list-item indentation precedes it — everything between the
+  // line's start and the row node's own start used to be left completely
+  // uncovered by decorateTableRow's gap computation, leaking as bare text
+  // inside a `display: table-row` line (a phantom leading column once the
+  // browser computes layout). Anchoring the gap computation at the physical
+  // line's start instead of the row node's own start folds that leading
+  // span into the same leading tableGap decoration.
+  describe("nested in a blockquote or list (issue #126 phantom leading column)", () => {
+    it("covers the blockquote marker with a leading tableGap, tiling the header row with no gap", () => {
+      const doc = "> | A | B |\n| --- | --- |\n| 1 | 2 |\n";
+      const state = stateFor(doc, doc.length);
+      const decos = collect(state);
+      const headerLine = state.doc.line(1);
+
+      const cellsAndGaps = decos
+        .filter(
+          (d) =>
+            d.from >= headerLine.from && d.to <= headerLine.to && (d.class?.split(" ").includes("cm-table-cell") || d.tableGap),
+        )
+        .sort((a, b) => a.from - b.from);
+
+      // The leading tableGap starts exactly at the physical line's start —
+      // covering the "> " marker — not at the row node's own (later) start.
+      const leadingGap = cellsAndGaps[0];
+      expect(leadingGap.tableGap).toBe(true);
+      expect(leadingGap.from).toBe(headerLine.from);
+
+      // No stray undecorated text anywhere on the row: gaps and cells tile
+      // the whole physical line back to back.
+      let pos = headerLine.from;
+      for (const d of cellsAndGaps) {
+        expect(d.from).toBe(pos);
+        pos = d.to;
+      }
+      expect(pos).toBe(headerLine.to);
+    });
+
+    it("covers the blockquote's lazy-continuation body row too, with no phantom column", () => {
+      const doc = "> | A | B |\n| --- | --- |\n| 1 | 2 |\n";
+      const state = stateFor(doc, doc.length);
+      const decos = collect(state);
+      const bodyLine = state.doc.line(3);
+
+      const cellsAndGaps = decos
+        .filter(
+          (d) =>
+            d.from >= bodyLine.from && d.to <= bodyLine.to && (d.class?.split(" ").includes("cm-table-cell") || d.tableGap),
+        )
+        .sort((a, b) => a.from - b.from);
+      let pos = bodyLine.from;
+      for (const d of cellsAndGaps) {
+        expect(d.from).toBe(pos);
+        pos = d.to;
+      }
+      expect(pos).toBe(bodyLine.to);
+    });
+
+    it("covers a list item's leading indentation with a leading tableGap, no phantom column", () => {
+      const doc = "- item\n\n  | A | B |\n  | --- | --- |\n  | 1 | 2 |\n";
+      const state = stateFor(doc, doc.length);
+      const decos = collect(state);
+      const headerLine = state.doc.line(3);
+
+      const cellsAndGaps = decos
+        .filter(
+          (d) =>
+            d.from >= headerLine.from && d.to <= headerLine.to && (d.class?.split(" ").includes("cm-table-cell") || d.tableGap),
+        )
+        .sort((a, b) => a.from - b.from);
+
+      const leadingGap = cellsAndGaps[0];
+      expect(leadingGap.tableGap).toBe(true);
+      expect(leadingGap.from).toBe(headerLine.from);
+
+      let pos = headerLine.from;
+      for (const d of cellsAndGaps) {
+        expect(d.from).toBe(pos);
+        pos = d.to;
+      }
+      expect(pos).toBe(headerLine.to);
+    });
+
+    it("leaves a plain top-level table's gap computation byte-identical (no-op in the common case)", () => {
+      // For a top-level table, node.from already equals the physical line's
+      // start, so anchoring the gap computation there instead is a no-op —
+      // this guards that claim by re-asserting the exact same full-line
+      // tiling the pre-fix suite already established for a top-level table.
+      const state = stateFor(alignedDoc, alignedDoc.length);
+      const decos = collect(state);
+      const headerLine = state.doc.line(1);
+      const cellsAndGaps = decos
+        .filter(
+          (d) =>
+            d.from >= headerLine.from && d.to <= headerLine.to && (d.class?.split(" ").includes("cm-table-cell") || d.tableGap),
+        )
+        .sort((a, b) => a.from - b.from);
+      expect(cellsAndGaps[0].from).toBe(headerLine.from);
+      let pos = headerLine.from;
+      for (const d of cellsAndGaps) {
+        expect(d.from).toBe(pos);
+        pos = d.to;
+      }
+      expect(pos).toBe(headerLine.to);
+    });
+  });
+
   it("keeps every cell in a row decorated regardless of cursor position, gaps included", () => {
     const engineerFrom = alignedDoc.indexOf("Engineer");
     const engineerTo = engineerFrom + "Engineer".length;
@@ -506,9 +615,9 @@ describe("buildDecorations: tables", () => {
 
     // The cursor's own cell keeps its cm-table-cell wrapping, and the nested strong
     // decoration still applies, with its `**` marks left visible. This only asserts
-    // about the cursor's own cell, not siblings in the same row, since whether a
-    // same-row sibling cell keeps its decoration is a separate concern (row- vs
-    // cell-level cursor-reveal granularity) from what this test covers.
+    // about the cursor's own cell; whether a same-row sibling cell's own markup
+    // stays hidden is covered separately below ("keeps a sibling cell's emphasis
+    // delimiters hidden when the cursor is elsewhere in the same row").
     const aliceStrong = decos.find((d) => d.class === "cm-strong");
     expect(aliceStrong).toBeTruthy();
     expect(state.doc.sliceString(aliceStrong!.from, aliceStrong!.to)).toBe("**Alice**");
@@ -532,6 +641,48 @@ describe("buildDecorations: tables", () => {
     ).toBe(true);
   });
 
+  // Regression coverage for issue #126's primary root cause: a table row is
+  // one physical line shared by several independent cells, so gating an
+  // inline node's reveal on the whole line (the old `isUnderCursor` check)
+  // reveals a sibling cell's markup whenever the cursor sits anywhere else
+  // on that row — widening every column in every row, since column widths
+  // are computed jointly across the table. `isRevealTarget` narrows the
+  // check to the enclosing cell instead.
+  it("keeps a sibling cell's emphasis delimiters hidden when the cursor is elsewhere in the same row", () => {
+    const doc = "| Name | Notes |\n| --- | --- |\n| Alice | Leads the **platform** team |\n";
+    const state = stateFor(doc, doc.indexOf("Alice") + 1); // cursor in Name, not Notes
+    const decos = collect(state);
+
+    const strongDeco = decos.find((d) => d.class === "cm-strong");
+    expect(strongDeco).toBeTruthy();
+    expect(state.doc.sliceString(strongDeco!.from, strongDeco!.to)).toBe("**platform**");
+
+    // The Notes cell's `**` delimiters stay hidden — the cursor sitting in
+    // Name (a different cell on the same row) must not reveal them.
+    const notesLine = state.doc.line(3);
+    const hiddenMarksInNotes = decos.filter(
+      (d) => d.isReplace && !d.class && d.from >= notesLine.from && d.to <= notesLine.to && d.from >= strongDeco!.from && d.to <= strongDeco!.to,
+    );
+    expect(hiddenMarksInNotes.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("reveals a cell's own emphasis delimiters when the cursor is actually inside that cell", () => {
+    const doc = "| Name | Notes |\n| --- | --- |\n| Alice | Leads the **platform** team |\n";
+    const state = stateFor(doc, doc.indexOf("platform") + 1); // cursor inside Notes itself
+    const decos = collect(state);
+
+    const strongDeco = decos.find((d) => d.class === "cm-strong");
+    expect(strongDeco).toBeTruthy();
+    expect(state.doc.sliceString(strongDeco!.from, strongDeco!.to)).toBe("**platform**");
+
+    // No hidden replace decoration overlaps the strong node's own range —
+    // its `**` delimiters are left visible, unchanged from today's behavior.
+    const hiddenMarksInStrong = decos.filter(
+      (d) => d.isReplace && !d.class && d.from >= strongDeco!.from && d.to <= strongDeco!.to,
+    );
+    expect(hiddenMarksInStrong).toHaveLength(0);
+  });
+
   it("renders a link nested inside a table cell with cm-link (same underlying defect as #74)", () => {
     const doc = "| Name | Site |\n| --- | --- |\n| Alice | [site](https://x.com) |\n";
     const state = stateFor(doc, doc.length); // cursor away from the table
@@ -545,6 +696,18 @@ describe("buildDecorations: tables", () => {
     expect(found).toBeTruthy();
     expect(found?.href).toBe("https://x.com");
     expect(state.doc.sliceString(found!.from, found!.to)).toBe("site");
+  });
+
+  // Same regression as the emphasis case above, but for the Link switch
+  // branch in buildDecorations, which gates through isRevealTarget directly
+  // rather than via decorateWrapped.
+  it("keeps a sibling cell's link rendered as cm-link when the cursor is elsewhere in the same row", () => {
+    const doc = "| Name | Site |\n| --- | --- |\n| Alice | [site](https://x.com) |\n";
+    const state = stateFor(doc, doc.indexOf("Alice") + 1); // cursor in Name, not Site
+    const decos = collect(state);
+    const linkDeco = decos.find((d) => d.class === "cm-link");
+    expect(linkDeco).toBeTruthy();
+    expect(state.doc.sliceString(linkDeco!.from, linkDeco!.to)).toBe("site");
   });
 });
 
