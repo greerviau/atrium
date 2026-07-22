@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { EditorState } from "@codemirror/state";
+import { EditorState, EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { forceParsing } from "@codemirror/language";
 import { markdownExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
@@ -15,10 +15,13 @@ vi.mocked(loadMermaid).mockResolvedValue({
 } as unknown as Awaited<ReturnType<typeof loadMermaid>>);
 
 let view: EditorView | undefined;
+let container: HTMLDivElement | undefined;
 
 afterEach(() => {
   view?.destroy();
   view = undefined;
+  container?.remove();
+  container = undefined;
 });
 
 /**
@@ -63,5 +66,51 @@ describe("live-preview decorations react to background parse completion (issue #
     forceParsing(view, view.state.doc.length);
 
     expect(container.querySelector(".cm-heading-1")).not.toBeNull();
+  });
+});
+
+/**
+ * Regression tests for issue #108: clicking away from the editor entirely
+ * (not just moving the cursor within it) must return the line that was
+ * being edited to its fully rendered view. CodeMirror's selection is always
+ * present and doesn't change on a DOM blur, so this only works if the
+ * decoration layer also tracks `EditorView.hasFocus` independently of
+ * `EditorState.selection` — driven here through real DOM `focus`/`blur`,
+ * not synthetic state, on a real `EditorView` built from the app's own
+ * `markdownExtensions()`.
+ */
+describe("live-preview decorations clear on blur, independent of selection (issue #108)", () => {
+  it("re-hides a heading's raw marker once the editor loses focus, with the selection unchanged", () => {
+    const doc = "# Hello world\nSecond line";
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    view = new EditorView({
+      state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
+      parent: container,
+    });
+
+    view.focus();
+    view.dispatch({ selection: EditorSelection.cursor(3) }); // cursor inside "Hello"
+    expect(container.querySelector(".cm-heading-1")?.textContent).toBe("# Hello world");
+
+    view.contentDOM.blur();
+    expect(container.querySelector(".cm-heading-1")?.textContent).toBe("Hello world");
+  });
+
+  it("re-hides a table cell's raw source once the editor loses focus, with the selection unchanged", () => {
+    const doc = "| Name | Role |\n| --- | --- |\n| Alice | Engineer |\n";
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    view = new EditorView({
+      state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
+      parent: container,
+    });
+
+    view.focus();
+    view.dispatch({ selection: EditorSelection.cursor(doc.indexOf("Engineer") + 1) });
+    expect(container.querySelectorAll(".cm-table-cell")).toHaveLength(3); // Name, Role, Alice — Engineer's own cell is revealed
+
+    view.contentDOM.blur();
+    expect(container.querySelectorAll(".cm-table-cell")).toHaveLength(4); // every cell decorated again
   });
 });
