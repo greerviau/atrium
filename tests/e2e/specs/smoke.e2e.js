@@ -75,6 +75,20 @@ describe("terminal", () => {
   });
 
   it("splits the active pane into two independent concurrent PTYs, then survives closing one", async () => {
+    // Type into the pre-existing pane *before* splitting, and confirm its
+    // scrollback survives the split — the actual behavior issue #112 is
+    // about (a pane that isn't the one being added must never have its PTY
+    // killed and its terminal remounted just because the tree's shape
+    // changed around it).
+    const preSplitPane = await $(".xterm-screen");
+    await preSplitPane.click();
+    await browser.keys("echo atrium-pre-split-marker");
+    await browser.keys("Enter");
+    await browser.waitUntil(async () => (await preSplitPane.getText()).includes("atrium-pre-split-marker"), {
+      timeout: 5000,
+      timeoutMsg: "expected the pre-split marker to appear in the pane's output before splitting",
+    });
+
     const splitButton = await $('button[aria-label="Split terminal"]');
     await splitButton.waitForExist({ timeout: 5000 });
     await splitButton.click();
@@ -88,6 +102,11 @@ describe("terminal", () => {
       timeoutMsg: "expected two independent terminal panes after splitting",
     });
     const [firstPane, secondPane] = await $$(".xterm-screen");
+
+    // The pre-existing pane (now the first pane, per split-right placing the
+    // new leaf after it) must still show the marker it had before the split
+    // — its PTY and scrollback must never have been torn down.
+    expect(await firstPane.getText()).toContain("atrium-pre-split-marker");
 
     // Distinct markers into each pane, clicking each first to move focus —
     // mirroring how the case above clicks `.xterm-screen` before typing.
