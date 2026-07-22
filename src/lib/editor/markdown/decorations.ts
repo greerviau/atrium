@@ -260,14 +260,56 @@ function parseColumnAlignment(text: string): ColumnAlignment[] {
 }
 
 /**
+ * One column's cell region within a row: either a real `TableCell` node's
+ * range, or (for an empty cell) a synthesized range for the whitespace, if
+ * any, between the two `TableDelimiter` pipes that bound it — the parser
+ * gives an empty cell no `TableCell` node at all, so nothing else marks
+ * where it sits.
+ */
+interface CellSlot {
+  from: number;
+  to: number;
+}
+
+/**
+ * Walks a table row's direct children (always some mix of `TableDelimiter`
+ * and `TableCell` — a `TableCell`'s own nested content, e.g. `Emphasis`,
+ * isn't a direct child of the row) and returns one `CellSlot` per column, in
+ * order, real cells and synthesized empty ones alike. Two `TableDelimiter`
+ * siblings with no `TableCell` between them mark an empty column; the slot
+ * synthesized for it spans whatever sits between the two pipes (nothing,
+ * for `||` with no space at all).
+ */
+function collectCellSlots(node: SyntaxNode): CellSlot[] {
+  const slots: CellSlot[] = [];
+  let lastDelimiterEnd: number | null = null;
+  let child = node.firstChild;
+  while (child) {
+    if (child.type.name === "TableCell") {
+      slots.push({ from: child.from, to: child.to });
+      lastDelimiterEnd = null;
+    } else if (child.type.name === "TableDelimiter") {
+      if (lastDelimiterEnd !== null) {
+        slots.push({ from: lastDelimiterEnd, to: child.from });
+      }
+      lastDelimiterEnd = child.to;
+    }
+    child = child.nextSibling;
+  }
+  return slots;
+}
+
+/**
  * Decorates one table row (`TableHeader` or `TableRow`, always a single
  * physical line). The row gets an always-visible `Decoration.line`
  * container (`display: table-row`, matching the code-block precedent), and
- * every `TableCell` always keeps its `cm-table-cell`/alignment
- * `Decoration.mark` regardless of cursor position, so a cell's
- * `display: table-cell` styling never drops out from under it.
+ * every column — including an empty one, via the synthesized slot
+ * `collectCellSlots` produces for it — always keeps its `cm-table-cell`/
+ * alignment `Decoration.mark` regardless of cursor position, so a cell's
+ * `display: table-cell` styling never drops out from under it and every
+ * column occupies a real slot in the row.
  *
- * The gap between cells (each `|` plus its surrounding alignment
+ * The gap between columns (each `|` plus its surrounding alignment
  * whitespace) is always replaced away — never cursor-gated. Revealing it
  * would put bare inline text inside a `display: table-row` line, which the
  * browser wraps in its own anonymous table-cell and, since column widths
@@ -277,7 +319,12 @@ function parseColumnAlignment(text: string): ColumnAlignment[] {
  * `EditorView.atomicRanges` provider over exactly those tagged ranges, so
  * the cursor skips past a gap in one motion instead of the old behavior of
  * revealing it to land inside — the reason a gap was ever cursor-gated in
- * the first place.
+ * the first place. Gaps are computed between `CellSlot`s (never swallowing
+ * one) rather than between raw `TableCell` nodes, precisely so an empty
+ * column's slot can't be merged into its neighboring gap: doing so would
+ * make an empty cell both unreachable by cursor motion (atomic ranges skip
+ * over it) and unfillable (a `Decoration.replace` range displaces any
+ * insertion made inside it to the range's far end).
  */
 function decorateTableRow(
   state: EditorState,
@@ -291,12 +338,11 @@ function decorateTableRow(
 
   let prevEnd = node.from;
   let column = 0;
-  let child = node.firstChild;
-  while (child) {
-    if (child.type.name === "TableCell") {
-      if (child.from > prevEnd) {
-        out.push(Decoration.replace({ tableGap: true }).range(prevEnd, child.from));
-      }
+  for (const slot of collectCellSlots(node)) {
+    if (slot.from > prevEnd) {
+      out.push(Decoration.replace({ tableGap: true }).range(prevEnd, slot.from));
+    }
+    if (slot.to > slot.from) {
       const classes: string[] = [CLASS.tableCell];
       if (isHeader) {
         classes.push(CLASS.tableHeaderCell);
@@ -306,11 +352,10 @@ function decorateTableRow(
       } else if (alignment[column] === "right") {
         classes.push(CLASS.tableAlignRight);
       }
-      out.push(Decoration.mark({ class: classes.join(" ") }).range(child.from, child.to));
-      prevEnd = child.to;
-      column++;
+      out.push(Decoration.mark({ class: classes.join(" ") }).range(slot.from, slot.to));
     }
-    child = child.nextSibling;
+    prevEnd = slot.to;
+    column++;
   }
   if (node.to > prevEnd) {
     out.push(Decoration.replace({ tableGap: true }).range(prevEnd, node.to));

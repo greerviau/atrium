@@ -301,6 +301,50 @@ describe("buildDecorations: tables", () => {
     expect(bodyCells[3].class?.split(" ")).not.toEqual(expect.arrayContaining(["cm-table-align-center", "cm-table-align-right"]));
   });
 
+  // Regression coverage for issue #110's must-fix round 2: the markdown
+  // parser gives an empty cell no `TableCell` node at all, so a row with an
+  // empty cell used to have its interior swallowed into the surrounding
+  // `tableGap` replace decoration, which both skewed every later column's
+  // alignment index (this test) and made the empty cell itself unreachable
+  // and unfillable (covered end-to-end in livePreviewPlugin.test.ts).
+  it("gives an empty middle cell its own cm-table-cell mark, keeping later columns' alignment correct", () => {
+    const doc = "| A | B | C |\n| --- | --- | ---: |\n| Dan |  | 55 |\n";
+    const state = stateFor(doc, doc.length);
+    const decos = collect(state);
+    const bodyLine = state.doc.line(3);
+    const bodyCells = decos
+      .filter((d) => d.class?.split(" ").includes("cm-table-cell") && d.from >= bodyLine.from && d.to <= bodyLine.to)
+      .sort((a, b) => a.from - b.from);
+
+    // Three columns, including the empty one — not two.
+    expect(bodyCells).toHaveLength(3);
+    expect(state.doc.sliceString(bodyCells[0].from, bodyCells[0].to)).toBe("Dan");
+    expect(state.doc.sliceString(bodyCells[1].from, bodyCells[1].to).trim()).toBe("");
+    expect(state.doc.sliceString(bodyCells[2].from, bodyCells[2].to)).toBe("55");
+
+    // "55" is column C (right-aligned) — not skewed onto column B's (default) alignment.
+    expect(bodyCells[2].class?.split(" ")).toContain("cm-table-align-right");
+  });
+
+  it("gives a zero-width empty cell (adjacent pipes, no space at all) a real column slot", () => {
+    const doc = "| A | B |\n| --- | --- |\n| x||\n";
+    const state = stateFor(doc, doc.length);
+    const decos = collect(state);
+    const bodyLine = state.doc.line(3);
+    // No stray undecorated text between the row's cells and gaps.
+    const cellsAndGaps = decos
+      .filter(
+        (d) => d.from >= bodyLine.from && d.to <= bodyLine.to && (d.class?.split(" ").includes("cm-table-cell") || d.tableGap),
+      )
+      .sort((a, b) => a.from - b.from);
+    let pos = bodyLine.from;
+    for (const d of cellsAndGaps) {
+      expect(d.from).toBe(pos);
+      pos = d.to;
+    }
+    expect(pos).toBe(bodyLine.to);
+  });
+
   it("fully consumes the inter-cell gap, leaving no stray text node between cells", () => {
     const state = stateFor(alignedDoc, alignedDoc.length);
     const decos = collect(state);
