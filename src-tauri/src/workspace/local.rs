@@ -797,12 +797,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ws = workspace(dir.path());
         // Enough files that a full walk cannot finish inside the 1ms
-        // deadline below.
+        // deadline below, but few enough real matches (well under
+        // `SEARCH_TOTAL_MATCH_CAP`) that the total-match cap can never be
+        // what stops the walk — otherwise this test would still pass with
+        // the deadline check deleted entirely, since the cap alone would
+        // account for `truncated: true`.
         let files = 2000;
+        let files_with_matches = 50;
         for i in 0..files {
             let name = format!("file{i}.txt");
             ws.create_file(&name).await.unwrap();
-            ws.write_file(&name, &"needle\n".repeat(5)).await.unwrap();
+            let contents = if i < files_with_matches {
+                "needle\n"
+            } else {
+                "no match here\n"
+            };
+            ws.write_file(&name, contents).await.unwrap();
         }
         let matcher = build_matcher("needle", &options(false, false)).unwrap();
         let current_generation = AtomicU64::new(1);
@@ -817,11 +827,10 @@ mod tests {
         );
         let elapsed = start.elapsed();
 
+        // With at most `files_with_matches` (50) possible matches, nowhere
+        // near `SEARCH_TOTAL_MATCH_CAP` (500), the cap can never fire here —
+        // so this can only be `true` because the deadline check set it.
         assert!(results.truncated);
-        // Far fewer than the 5-per-file * 2000-file total, showing the walk
-        // actually stopped early rather than completing and happening to
-        // set `truncated` some other way.
-        assert!(results.matches.len() < files * 5);
         // Bounded close to the injected deadline, not the time a full walk
         // of this many files would take.
         assert!(elapsed < Duration::from_secs(1), "elapsed: {elapsed:?}");
