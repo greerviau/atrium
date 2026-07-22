@@ -28,6 +28,13 @@ export function handleTerminalKeyEvent(
     !event.metaKey &&
     !event.altKey
   ) {
+    // Returning `false` only tells xterm.js's own _keyDown to skip its default
+    // encoding — it does not call preventDefault/stopPropagation the way
+    // xterm's own cancel() does for the keys it handles itself, so without
+    // this the browser's native "insert a newline" default action for a
+    // textarea still runs against xterm's hidden input element.
+    event.preventDefault();
+    event.stopPropagation();
     writeToPty(ESC_CR);
     return false;
   }

@@ -142,6 +142,34 @@ describe("handleTerminalKeyEvent wired into a real xterm.js Terminal", () => {
     expect(writeToPty).toHaveBeenCalledWith("\x1b\r");
     expect(received.join("")).toBe("");
   });
+
+  it("prevents the browser's native default action for Shift+Enter, same as xterm's own cancel() does for plain Enter", () => {
+    const { terminal } = setupTerminal(false);
+    const textarea = terminal.textarea!;
+
+    const shiftEnter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      keyCode: KEY_CODES.Enter,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(shiftEnter);
+    // Returning `false` from attachCustomKeyEventHandler only tells xterm's
+    // own _keyDown to skip its default encoding; it does not itself call
+    // preventDefault, so the handler must call it directly or the browser's
+    // native "insert a newline" action for a textarea still runs.
+    expect(shiftEnter.defaultPrevented).toBe(true);
+
+    const plainEnter = new KeyboardEvent("keydown", {
+      key: "Enter",
+      keyCode: KEY_CODES.Enter,
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(plainEnter);
+    expect(plainEnter.defaultPrevented).toBe(true);
+  });
 });
 
 describe("handleTerminalKeyEvent as a pure function", () => {
