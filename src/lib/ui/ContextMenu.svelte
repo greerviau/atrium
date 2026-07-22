@@ -10,12 +10,12 @@
    * bottom or right edge, flipping upward/leftward off the anchor point
    * instead when there isn't room below/right of it.
    */
-  let {
-    x,
-    y,
-    anchorEl,
-    children,
-  }: { x?: number; y?: number; anchorEl?: HTMLElement; children: Snippet } = $props();
+  type Props = { children: Snippet } & (
+    | { x: number; y: number; anchorEl?: undefined }
+    | { anchorEl: HTMLElement; x?: undefined; y?: undefined }
+  );
+
+  let { x, y, anchorEl, children }: Props = $props();
 
   let menuEl: HTMLDivElement | undefined = $state();
   let style = $state("");

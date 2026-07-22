@@ -7,7 +7,7 @@
   import SearchOverlay from "./lib/search/SearchOverlay.svelte";
   import UnsavedChangesDialog from "./lib/shell/UnsavedChangesDialog.svelte";
   import StatusBar from "./lib/shell/StatusBar.svelte";
-  import ContextMenu from "./lib/ui/ContextMenu.svelte";
+  import DockSettingsMenu from "./lib/terminal/DockSettingsMenu.svelte";
   import { workspace, openWorkspacePath } from "./lib/stores/workspace";
   import {
     tabsState,
@@ -60,8 +60,6 @@
   let terminalHeight = $state(initialLayout.height);
   let terminalWidth = $state(initialLayout.width);
   let mainEl: HTMLDivElement | undefined = $state();
-  let settingsOpen = $state(false);
-  let settingsBtnEl: HTMLButtonElement | undefined = $state();
 
   // A single pane tree for the whole terminal dock — splitting no longer
   // creates an independent tab, it adds a sibling panel to this same tree,
@@ -265,16 +263,6 @@
   });
 </script>
 
-{#snippet gearIcon()}
-  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3">
-    <circle cx="8" cy="8" r="2.3" />
-    <path
-      d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.5 3.5l1.4 1.4M11.1 11.1l1.4 1.4M12.5 3.5l-1.4 1.4M4.9 11.1l-1.4 1.4"
-      stroke-linecap="round"
-    />
-  </svg>
-{/snippet}
-
 {#if !$workspace.root}
   <WelcomeScreen />
 {:else}
@@ -367,50 +355,7 @@
           style={terminalPosition === "bottom" ? `height: ${terminalHeight}px` : `width: ${terminalWidth}px`}
         >
           <div class="terminal-dock-header">
-            <div class="terminal-dock-controls">
-              <button
-                class="dock-btn"
-                bind:this={settingsBtnEl}
-                onclick={() => (settingsOpen = !settingsOpen)}
-                aria-label="Terminal settings"
-                aria-haspopup="true"
-                aria-expanded={settingsOpen}
-                title="Terminal settings"
-              >
-                {@render gearIcon()}
-              </button>
-              {#if settingsOpen}
-                <ContextMenu anchorEl={settingsBtnEl}>
-                  <button
-                    role="menuitem"
-                    onclick={() => {
-                      setTerminalPosition("bottom");
-                      settingsOpen = false;
-                    }}
-                  >
-                    Dock Bottom
-                  </button>
-                  <button
-                    role="menuitem"
-                    onclick={() => {
-                      setTerminalPosition("left");
-                      settingsOpen = false;
-                    }}
-                  >
-                    Dock Left
-                  </button>
-                  <button
-                    role="menuitem"
-                    onclick={() => {
-                      setTerminalPosition("right");
-                      settingsOpen = false;
-                    }}
-                  >
-                    Dock Right
-                  </button>
-                </ContextMenu>
-              {/if}
-            </div>
+            <DockSettingsMenu position={terminalPosition} onSetPosition={setTerminalPosition} />
           </div>
           <div class="terminal-panes">
             {#if terminalPaneTree}
@@ -603,31 +548,7 @@
     align-items: center;
     justify-content: flex-end;
     flex-shrink: 0;
-    border-bottom: 1px solid var(--atrium-border);
-  }
-  .terminal-dock-controls {
-    display: flex;
-    align-items: center;
-    gap: 2px;
     padding: 2px 4px;
-    flex-shrink: 0;
-  }
-  .dock-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: none;
-    border: none;
-    border-radius: 3px;
-    color: inherit;
-    font: inherit;
-    font-size: 11px;
-    line-height: 1;
-    cursor: pointer;
-    opacity: 0.6;
-    padding: 4px 6px;
-  }
-  .dock-btn:hover {
-    opacity: 1;
+    border-bottom: 1px solid var(--atrium-border);
   }
 </style>

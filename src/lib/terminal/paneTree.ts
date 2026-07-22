@@ -67,7 +67,6 @@ function splitWithinNode(
 ): SplitPane {
   const idx = node.children.findIndex((child) => child.id === targetPaneId);
   if (idx !== -1) {
-    const target = node.children[idx];
     if (node.direction === axis) {
       // Same axis as the target's immediate parent: insert rather than
       // nesting a redundant wrapper split one level deeper.
@@ -76,6 +75,7 @@ function splitWithinNode(
       children.splice(insertIndex, 0, newLeaf);
       return { ...node, children, sizes: insertWithRebalance(node.sizes, insertIndex) };
     }
+    const target = node.children[idx];
     const wrapped: SplitPane = {
       type: "split",
       id: `split-${target.id}-${newLeaf.id}`,
