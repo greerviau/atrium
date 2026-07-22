@@ -34,12 +34,19 @@
   function startDragResizer(event: PointerEvent, index: number, direction: SplitDirection, splitId: string): void {
     event.preventDefault();
     const containerSizePx = direction === "row" ? (containerEl?.clientWidth ?? 0) : (containerEl?.clientHeight ?? 0);
-    const start = direction === "row" ? event.clientX : event.clientY;
+    let last = direction === "row" ? event.clientX : event.clientY;
 
+    // `resizeSplit` adds `delta` onto whatever `sizes[index]` already is
+    // (live-reactive via App.svelte's state), so this must send the
+    // increment since the *last* pointermove, not the cumulative
+    // displacement since the drag began — the latter would double-count
+    // every prior event's movement on top of a size that already reflects
+    // it, making the divider run away far faster than the pointer.
     function onMove(e: PointerEvent): void {
       if (containerSizePx <= 0) return;
       const current = direction === "row" ? e.clientX : e.clientY;
-      const delta = (current - start) / containerSizePx;
+      const delta = (current - last) / containerSizePx;
+      last = current;
       onResizeSplit(splitId, index, delta, containerSizePx);
     }
     function onUp(): void {
