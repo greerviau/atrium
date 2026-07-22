@@ -114,3 +114,36 @@ describe("live-preview decorations clear on blur, independent of selection (issu
     expect(container.querySelectorAll(".cm-table-cell")).toHaveLength(4); // every cell decorated again
   });
 });
+
+/**
+ * Regression test for issue #110: a table's inter-cell gap is never
+ * cursor-revealed (see `decorateTableRow`'s docstring in `decorations.ts`),
+ * which is what stops editing a cell from widening every row's shared
+ * column grid. Instead `EditorView.atomicRanges` (registered alongside
+ * `livePreviewPlugin`) makes the gap atomic for cursor motion: moving the
+ * cursor towards it jumps straight over to the far side in one step rather
+ * than landing inside it character by character.
+ */
+describe("a table's inter-cell gap is atomic for cursor motion, not cursor-revealed (issue #110)", () => {
+  it("jumps the cursor over the whole gap in one step instead of revealing it", () => {
+    const doc = "| Name | Role |\n| --- | --- |\n| Alice | Engineer |\n";
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    view = new EditorView({
+      state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
+      parent: container,
+    });
+    view.focus();
+
+    const aliceEnd = doc.indexOf("Alice") + "Alice".length;
+    const engineerStart = doc.indexOf("Engineer");
+    view.dispatch({ selection: EditorSelection.cursor(aliceEnd) });
+
+    const moved = view.moveByChar(view.state.selection.main, true);
+    expect(moved.head).toBe(engineerStart); // the whole " | " gap is skipped in one move, not character by character
+
+    // The gap itself is still never given a cm-table-cell mark or shown as
+    // raw pipe/space text — every cell on the row stays decorated.
+    expect(container.querySelectorAll(".cm-table-cell")).toHaveLength(4);
+  });
+});

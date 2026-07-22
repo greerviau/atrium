@@ -1,10 +1,10 @@
 import type { Extension, Transaction } from "@codemirror/state";
 import { StateEffect, StateField } from "@codemirror/state";
-import { EditorView, ViewPlugin, ViewUpdate, lineNumbers, type DecorationSet } from "@codemirror/view";
+import { Decoration, EditorView, ViewPlugin, ViewUpdate, lineNumbers, type DecorationSet } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { syntaxTree } from "@codemirror/language";
-import { buildDecorations, buildMermaidWidgetDecorations } from "./decorations";
+import { buildDecorations, buildMermaidWidgetDecorations, buildTableGapAtomicRanges } from "./decorations";
 import { handleLinkClick } from "./widgets";
 
 /**
@@ -50,9 +50,16 @@ const focusTrackingHandlers = EditorView.domEventHandlers({
  * background parser finishing a chunk outside the initial synchronous parse
  * window) — never on anything else, since walking the syntax tree is the
  * main perf risk for large files.
+ *
+ * Also provides `EditorView.atomicRanges` over every `tableGap`-tagged
+ * range in that same decoration set (`decorations.ts`'s `decorateTableRow`
+ * always hides a table's inter-cell gaps rather than cursor-revealing them,
+ * to avoid the layout shift a revealed gap causes — see its docstring), so
+ * cursor motion jumps over a hidden gap in one step instead of being able to
+ * land inside it.
  */
 function livePreviewPlugin(documentPath: string) {
-  return ViewPlugin.fromClass(
+  const plugin = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
 
@@ -82,6 +89,14 @@ function livePreviewPlugin(documentPath: string) {
       decorations: (v) => v.decorations,
     },
   );
+
+  return [
+    plugin,
+    EditorView.atomicRanges.of((view) => {
+      const value = view.plugin(plugin);
+      return value ? buildTableGapAtomicRanges(view.state, value.decorations) : Decoration.none;
+    }),
+  ];
 }
 
 /**

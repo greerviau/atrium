@@ -31,17 +31,6 @@ function isUnderCursor(state: EditorState, from: number, to: number, hasFocus: b
   return state.selection.ranges.some((r) => r.from <= lineTo && r.to >= lineFrom);
 }
 
-/**
- * True if any selection range overlaps `[from, to)` exactly, with no
- * widening to the enclosing line. Used where a single line contains several
- * independently-editable spans (table cells) and gating on the whole line,
- * like `isUnderCursor` does, would reveal every sibling span at once.
- * Gated on `hasFocus` for the same reason as `isUnderCursor`.
- */
-function overlapsSelection(state: EditorState, from: number, to: number, hasFocus: boolean): boolean {
-  return hasFocus && state.selection.ranges.some((r) => r.from <= to && r.to >= from);
-}
-
 function decorateHeading(
   state: EditorState,
   node: SyntaxNode,
@@ -273,12 +262,22 @@ function parseColumnAlignment(text: string): ColumnAlignment[] {
 /**
  * Decorates one table row (`TableHeader` or `TableRow`, always a single
  * physical line). The row gets an always-visible `Decoration.line`
- * container (`display: table-row`, matching the code-block precedent).
- * Every `TableCell` always keeps its `cm-table-cell`/alignment `Decoration.mark`
- * regardless of cursor position, so a cell's `display: table-cell` styling
- * never drops out from under it — only the bordering pipe/gap between two
- * cells is cursor-gated: it reveals if either bordering cell is under the
- * cursor, since the pipe visually belongs to both boundaries.
+ * container (`display: table-row`, matching the code-block precedent), and
+ * every `TableCell` always keeps its `cm-table-cell`/alignment
+ * `Decoration.mark` regardless of cursor position, so a cell's
+ * `display: table-cell` styling never drops out from under it.
+ *
+ * The gap between cells (each `|` plus its surrounding alignment
+ * whitespace) is always replaced away — never cursor-gated. Revealing it
+ * would put bare inline text inside a `display: table-row` line, which the
+ * browser wraps in its own anonymous table-cell and, since column widths
+ * are computed jointly across every row sharing the table, widens every
+ * row's shared column grid. Every gap decoration here is tagged
+ * `tableGap: true`; `livePreviewPlugin.ts` registers an
+ * `EditorView.atomicRanges` provider over exactly those tagged ranges, so
+ * the cursor skips past a gap in one motion instead of the old behavior of
+ * revealing it to land inside — the reason a gap was ever cursor-gated in
+ * the first place.
  */
 function decorateTableRow(
   state: EditorState,
@@ -286,26 +285,17 @@ function decorateTableRow(
   alignment: ColumnAlignment[],
   isHeader: boolean,
   out: Range<Decoration>[],
-  hasFocus: boolean,
 ): void {
   const rowClass = isHeader ? `${CLASS.tableRow} ${CLASS.tableHeaderRow}` : CLASS.tableRow;
   out.push(Decoration.line({ class: rowClass }).range(state.doc.lineAt(node.from).from));
 
   let prevEnd = node.from;
-  let prevCellUnderCursor = false;
   let column = 0;
   let child = node.firstChild;
   while (child) {
     if (child.type.name === "TableCell") {
-      const cellUnderCursor = overlapsSelection(state, child.from, child.to, hasFocus);
-      const gapUnderCursor =
-        cellUnderCursor || prevCellUnderCursor || overlapsSelection(state, prevEnd, child.from, hasFocus);
-      // Fully consume the gap since the previous cell (its `|` plus any
-      // surrounding whitespace) rather than just the pipe character — a
-      // leftover whitespace text node would become its own anonymous
-      // table-cell once the real cells get `display: table-cell`.
-      if (child.from > prevEnd && !gapUnderCursor) {
-        out.push(Decoration.replace({}).range(prevEnd, child.from));
+      if (child.from > prevEnd) {
+        out.push(Decoration.replace({ tableGap: true }).range(prevEnd, child.from));
       }
       const classes: string[] = [CLASS.tableCell];
       if (isHeader) {
@@ -318,13 +308,12 @@ function decorateTableRow(
       }
       out.push(Decoration.mark({ class: classes.join(" ") }).range(child.from, child.to));
       prevEnd = child.to;
-      prevCellUnderCursor = cellUnderCursor;
       column++;
     }
     child = child.nextSibling;
   }
-  if (node.to > prevEnd && !prevCellUnderCursor && !overlapsSelection(state, prevEnd, node.to, hasFocus)) {
-    out.push(Decoration.replace({}).range(prevEnd, node.to));
+  if (node.to > prevEnd) {
+    out.push(Decoration.replace({ tableGap: true }).range(prevEnd, node.to));
   }
 }
 
@@ -337,7 +326,7 @@ function decorateTableRow(
  * once and shared across every row, and so the row container stays visible
  * even when the cursor is elsewhere in the same table.
  */
-function decorateTable(state: EditorState, node: SyntaxNode, out: Range<Decoration>[], hasFocus: boolean): void {
+function decorateTable(state: EditorState, node: SyntaxNode, out: Range<Decoration>[]): void {
   const delimiterNode = node.getChild("TableDelimiter");
   const alignment = delimiterNode
     ? parseColumnAlignment(state.doc.sliceString(delimiterNode.from, delimiterNode.to))
@@ -346,9 +335,9 @@ function decorateTable(state: EditorState, node: SyntaxNode, out: Range<Decorati
   let child = node.firstChild;
   while (child) {
     if (child.type.name === "TableHeader") {
-      decorateTableRow(state, child, alignment, true, out, hasFocus);
+      decorateTableRow(state, child, alignment, true, out);
     } else if (child.type.name === "TableRow") {
-      decorateTableRow(state, child, alignment, false, out, hasFocus);
+      decorateTableRow(state, child, alignment, false, out);
     } else if (child.type.name === "TableDelimiter" && child.from === delimiterNode?.from) {
       const line = state.doc.lineAt(child.from);
       out.push(Decoration.line({ class: CLASS.tableDelimiterLine }).range(line.from));
@@ -427,7 +416,7 @@ export function buildDecorations(
           // reaches the switch below and gets decorated the same way it
           // would inside a paragraph; TableHeader/TableRow/TableCell/
           // TableDelimiter have no case there, so revisiting them is a no-op.
-          decorateTable(state, ref.node, decorations, hasFocus);
+          decorateTable(state, ref.node, decorations);
           return;
         }
 
@@ -467,4 +456,21 @@ export function buildDecorations(
   }
 
   return Decoration.set(decorations, true);
+}
+
+/**
+ * Extracts just the `tableGap`-tagged ranges out of a decoration set built by
+ * `buildDecorations`, for use as an `EditorView.atomicRanges` provider
+ * (`livePreviewPlugin.ts`). Keeping this here, next to where the tag is
+ * produced, means the tag's meaning ("a table gap, always hidden, cursor
+ * should skip over it") stays defined in one place.
+ */
+export function buildTableGapAtomicRanges(state: EditorState, decorations: DecorationSet): DecorationSet {
+  const ranges: Range<Decoration>[] = [];
+  decorations.between(0, state.doc.length, (from, to, deco) => {
+    if (deco.spec.tableGap) {
+      ranges.push(deco.range(from, to));
+    }
+  });
+  return Decoration.set(ranges, true);
 }
