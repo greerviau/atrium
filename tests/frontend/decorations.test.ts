@@ -326,12 +326,16 @@ describe("buildDecorations: tables", () => {
     expect(bodyCells[2].class?.split(" ")).toContain("cm-table-align-right");
   });
 
-  it("gives a zero-width empty cell (adjacent pipes, no space at all) a real column slot", () => {
+  it("doesn't break gap coverage on a zero-width empty cell (adjacent pipes, no space at all)", () => {
+    // The synthesized slot for this cell has zero width (nothing sits
+    // between its two bordering pipes), so — unlike a whitespace-padded
+    // empty cell — it gets no cm-table-cell mark of its own (a zero-length
+    // mark decoration isn't meaningful); this only asserts that the two
+    // adjacent gaps still tile the row with no stray undecorated text.
     const doc = "| A | B |\n| --- | --- |\n| x||\n";
     const state = stateFor(doc, doc.length);
     const decos = collect(state);
     const bodyLine = state.doc.line(3);
-    // No stray undecorated text between the row's cells and gaps.
     const cellsAndGaps = decos
       .filter(
         (d) => d.from >= bodyLine.from && d.to <= bodyLine.to && (d.class?.split(" ").includes("cm-table-cell") || d.tableGap),

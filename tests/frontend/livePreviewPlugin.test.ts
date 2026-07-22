@@ -196,9 +196,7 @@ describe("an empty table cell keeps its own slot, reachable and fillable (issue 
     const moved = view.moveByChar(view.state.selection.main, true);
     view.dispatch({ changes: { from: moved.head, to: moved.head, insert: "X" } });
 
-    expect(view.state.doc.toString()).toContain("55    |"); // Score's "55" is untouched
-    expect(view.state.doc.toString()).not.toContain("X55");
     const danLine = view.state.doc.line(3);
-    expect(view.state.doc.sliceString(danLine.from, danLine.to)).toContain("X");
+    expect(view.state.doc.sliceString(danLine.from, danLine.to)).toBe("| Dan  |X      | 55    |");
   });
 });
