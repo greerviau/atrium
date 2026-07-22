@@ -19,6 +19,7 @@ export type MenuEventId =
   | "menu:open-folder"
   | "menu:save"
   | "menu:new-terminal-tab"
+  | "menu:split-terminal"
   | "menu:find-in-files"
   | "menu:toggle-explorer"
   | "menu:toggle-terminal"

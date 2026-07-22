@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import FileTree from "./lib/explorer/FileTree.svelte";
   import EditorPane from "./lib/editor/EditorPane.svelte";
-  import TerminalPane from "./lib/terminal/TerminalPane.svelte";
+  import PaneSplit from "./lib/terminal/PaneSplit.svelte";
   import WelcomeScreen from "./lib/welcome/WelcomeScreen.svelte";
   import SearchOverlay from "./lib/search/SearchOverlay.svelte";
   import StatusBar from "./lib/shell/StatusBar.svelte";
@@ -29,6 +29,18 @@
     type TerminalPosition,
   } from "./lib/stores/layout";
   import { folderName } from "./lib/terminal/tabTitle";
+  import {
+    splitPane,
+    removePane,
+    resizeSplit,
+    findLeaf,
+    updateLeaf,
+    nextActivePane,
+    PANE_MIN_PX,
+    type PaneNode,
+    type LeafPane,
+    type SplitDirection,
+  } from "./lib/terminal/paneTree";
   import { zoom } from "./lib/stores/textSize";
 
   const initialLayout = loadTerminalLayout();
@@ -39,31 +51,89 @@
   let terminalWidth = $state(initialLayout.width);
   let mainEl: HTMLDivElement | undefined = $state();
 
-  interface TerminalSession {
+  interface TerminalTab {
     id: string;
-    cwd: string;
-    title: string;
+    paneTree: PaneNode;
+    activePaneId: string;
   }
-  let terminalSessions = $state<TerminalSession[]>([]);
-  let activeTerminalId = $state<string | null>(null);
+  let terminalTabs = $state<TerminalTab[]>([]);
+  let activeTabId = $state<string | null>(null);
+  let activeTab = $derived(terminalTabs.find((t) => t.id === activeTabId) ?? null);
+
+  function genId(prefix: string): string {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
 
   function newTerminalTab(): void {
     const root = $workspace.root;
     if (!root) return;
-    const id = `term-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    terminalSessions = [...terminalSessions, { id, cwd: root, title: folderName(root) }];
-    activeTerminalId = id;
+    const paneId = genId("pane");
+    const leaf: LeafPane = { type: "leaf", id: paneId, cwd: root, title: folderName(root) };
+    terminalTabs = [...terminalTabs, { id: genId("term"), paneTree: leaf, activePaneId: paneId }];
+    activeTabId = terminalTabs[terminalTabs.length - 1].id;
   }
 
   function closeTerminalTab(id: string): void {
-    terminalSessions = terminalSessions.filter((t) => t.id !== id);
-    if (activeTerminalId === id) {
-      activeTerminalId = terminalSessions[terminalSessions.length - 1]?.id ?? null;
+    terminalTabs = terminalTabs.filter((t) => t.id !== id);
+    if (activeTabId === id) {
+      activeTabId = terminalTabs[terminalTabs.length - 1]?.id ?? null;
     }
   }
 
-  function setTerminalTitle(id: string, title: string): void {
-    terminalSessions = terminalSessions.map((t) => (t.id === id ? { ...t, title } : t));
+  // Splits `paneId` within `tabId`, moving focus to the newly created pane
+  // (matching VS Code's default: a split is immediately followed by typing
+  // into the new shell, not the old one).
+  function splitPaneAt(tabId: string, paneId: string, direction: SplitDirection): void {
+    const root = $workspace.root;
+    const tab = terminalTabs.find((t) => t.id === tabId);
+    if (!tab || !root) return;
+    // A new pane always starts at the tab's root cwd, matching new-tab
+    // behavior, rather than wherever the pane being split has since cd'd to.
+    const newLeaf: LeafPane = { type: "leaf", id: genId("pane"), cwd: root, title: folderName(root) };
+    const paneTree = splitPane(tab.paneTree, paneId, direction, newLeaf);
+    terminalTabs = terminalTabs.map((t) =>
+      t.id === tabId ? { ...t, paneTree, activePaneId: newLeaf.id } : t,
+    );
+  }
+
+  // Used by the tab-strip split buttons and the `Cmd/Ctrl+\` shortcut, which
+  // have no specific pane of their own to act on — they always target
+  // whichever pane in the active tab last had focus.
+  function splitActivePane(direction: SplitDirection): void {
+    const tab = terminalTabs.find((t) => t.id === activeTabId);
+    if (!tab) return;
+    splitPaneAt(tab.id, tab.activePaneId, direction);
+  }
+
+  function closePane(tabId: string, paneId: string): void {
+    const tab = terminalTabs.find((t) => t.id === tabId);
+    if (!tab) return;
+    const nextActive = tab.activePaneId === paneId ? nextActivePane(tab.paneTree, paneId) : tab.activePaneId;
+    const paneTree = removePane(tab.paneTree, paneId);
+    if (paneTree === null) {
+      closeTerminalTab(tabId);
+      return;
+    }
+    terminalTabs = terminalTabs.map((t) =>
+      t.id === tabId ? { ...t, paneTree, activePaneId: nextActive ?? t.activePaneId } : t,
+    );
+  }
+
+  function setActivePane(tabId: string, paneId: string): void {
+    terminalTabs = terminalTabs.map((t) => (t.id === tabId ? { ...t, activePaneId: paneId } : t));
+  }
+
+  function setPaneTitle(tabId: string, paneId: string, title: string): void {
+    terminalTabs = terminalTabs.map((t) =>
+      t.id === tabId ? { ...t, paneTree: updateLeaf(t.paneTree, paneId, { title }) } : t,
+    );
+  }
+
+  function resizePaneSplit(tabId: string, splitId: string, index: number, delta: number, containerSizePx: number): void {
+    const minRatio = containerSizePx > 0 ? PANE_MIN_PX / containerSizePx : 0;
+    terminalTabs = terminalTabs.map((t) =>
+      t.id === tabId ? { ...t, paneTree: resizeSplit(t.paneTree, splitId, index, delta, minRatio) } : t,
+    );
   }
 
   function startDragExplorer(event: PointerEvent): void {
@@ -98,7 +168,7 @@
   let wasTerminalVisible = $terminalVisible;
   $effect(() => {
     const visible = $terminalVisible;
-    if (visible && !wasTerminalVisible && terminalSessions.length === 0) {
+    if (visible && !wasTerminalVisible && terminalTabs.length === 0) {
       newTerminalTab();
     }
     wasTerminalVisible = visible;
@@ -142,7 +212,7 @@
       terminalHeight = clampToContainer(terminalHeight, HEIGHT_MIN, mainEl.clientHeight);
       terminalWidth = clampToContainer(terminalWidth, WIDTH_MIN, mainEl.clientWidth);
     }
-    void initMenuBar(newTerminalTab);
+    void initMenuBar(newTerminalTab, () => splitActivePane("row"));
     void onFsChanged((event) => {
       void reconcileExternalChange(event.path);
       void refreshDirectoryContaining(event.path);
@@ -244,22 +314,24 @@
           style={terminalPosition === "bottom" ? `height: ${terminalHeight}px` : `width: ${terminalWidth}px`}
         >
           <div class="tab-strip">
-            {#each terminalSessions as session (session.id)}
+            {#each terminalTabs as tab (tab.id)}
               <div
                 class="tab"
-                class:active={session.id === activeTerminalId}
-                onclick={() => (activeTerminalId = session.id)}
-                onkeydown={(e) => e.key === "Enter" && (activeTerminalId = session.id)}
+                class:active={tab.id === activeTabId}
+                onclick={() => (activeTabId = tab.id)}
+                onkeydown={(e) => e.key === "Enter" && (activeTabId = tab.id)}
                 role="tab"
                 tabindex="0"
-                aria-selected={session.id === activeTerminalId}
+                aria-selected={tab.id === activeTabId}
               >
-                <span class="tab-name" title={session.title}>{session.title}</span>
+                <span class="tab-name" title={findLeaf(tab.paneTree, tab.activePaneId)?.title}>
+                  {findLeaf(tab.paneTree, tab.activePaneId)?.title ?? ""}
+                </span>
                 <button
                   class="tab-close"
                   onclick={(e) => {
                     e.stopPropagation();
-                    closeTerminalTab(session.id);
+                    closeTerminalTab(tab.id);
                   }}
                   aria-label="Close terminal"
                 >
@@ -267,6 +339,26 @@
                 </button>
               </div>
             {/each}
+            {#if activeTab && activeTab.paneTree.type === "leaf"}
+              <div class="dock-controls" role="group" aria-label="Split terminal">
+                <button
+                  class="dock-btn"
+                  onclick={() => splitActivePane("row")}
+                  aria-label="Split terminal right"
+                  title="Split right (Cmd/Ctrl+\)"
+                >
+                  ⬒
+                </button>
+                <button
+                  class="dock-btn"
+                  onclick={() => splitActivePane("column")}
+                  aria-label="Split terminal down"
+                  title="Split down"
+                >
+                  ⬓
+                </button>
+              </div>
+            {/if}
             <div class="dock-controls" role="group" aria-label="Terminal dock position">
               <button
                 class="dock-btn"
@@ -302,13 +394,19 @@
             <button class="tab new-tab" onclick={newTerminalTab}>+</button>
           </div>
           <div class="terminal-panes">
-            {#each terminalSessions as session (session.id)}
-              <div class="terminal-pane-slot" class:hidden={session.id !== activeTerminalId}>
-                <TerminalPane
-                  cwd={session.cwd}
+            {#each terminalTabs as tab (tab.id)}
+              <div class="terminal-pane-slot" class:hidden={tab.id !== activeTabId}>
+                <PaneSplit
+                  tree={tab.paneTree}
+                  hasSplits={tab.paneTree.type === "split"}
+                  activePaneId={tab.activePaneId}
                   workspaceId={$workspace.id}
-                  onExit={() => closeTerminalTab(session.id)}
-                  onTitleChange={(title) => setTerminalTitle(session.id, title)}
+                  onFocus={(paneId) => setActivePane(tab.id, paneId)}
+                  onSplit={(paneId, direction) => splitPaneAt(tab.id, paneId, direction)}
+                  onClose={(paneId) => closePane(tab.id, paneId)}
+                  onTitleChange={(paneId, title) => setPaneTitle(tab.id, paneId, title)}
+                  onResizeSplit={(splitId, index, delta, containerSizePx) =>
+                    resizePaneSplit(tab.id, splitId, index, delta, containerSizePx)}
                 />
               </div>
             {/each}

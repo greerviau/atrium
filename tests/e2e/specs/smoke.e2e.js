@@ -73,6 +73,60 @@ describe("terminal", () => {
       { timeout: 5000, timeoutMsg: "expected echoed marker to appear in terminal output" },
     );
   });
+
+  it("splits the active pane into two independent concurrent PTYs, then survives closing one", async () => {
+    const splitRightButton = await $('button[aria-label="Split terminal right"]');
+    await splitRightButton.waitForExist({ timeout: 5000 });
+    await splitRightButton.click();
+
+    await browser.waitUntil(async () => (await $$(".xterm-screen")).length === 2, {
+      timeout: 5000,
+      timeoutMsg: "expected two independent terminal panes after splitting",
+    });
+    const [firstPane, secondPane] = await $$(".xterm-screen");
+
+    // Distinct markers into each pane, clicking each first to move focus —
+    // mirroring how the case above clicks `.xterm-screen` before typing.
+    await firstPane.click();
+    await browser.keys("echo atrium-split-marker-one");
+    await browser.keys("Enter");
+
+    await secondPane.click();
+    await browser.keys("echo atrium-split-marker-two");
+    await browser.keys("Enter");
+
+    await browser.waitUntil(async () => (await firstPane.getText()).includes("atrium-split-marker-one"), {
+      timeout: 5000,
+      timeoutMsg: "expected the first pane's own marker to appear in its output",
+    });
+    await browser.waitUntil(async () => (await secondPane.getText()).includes("atrium-split-marker-two"), {
+      timeout: 5000,
+      timeoutMsg: "expected the second pane's own marker to appear in its output",
+    });
+
+    // Real concurrent-PTY behavior: neither pane's shell output leaks into
+    // the other's, which only unit/component tests mocking TerminalPane
+    // can't cover.
+    expect(await firstPane.getText()).not.toContain("atrium-split-marker-two");
+    expect(await secondPane.getText()).not.toContain("atrium-split-marker-one");
+
+    // Close the first pane and confirm the second survives with its own
+    // output intact. WebDriver can't inspect OS process state directly, so
+    // the closed pane's PTY being gone is verified the same way the rest of
+    // this suite verifies backend behavior — through the DOM: its
+    // `.xterm-screen` only disappears once `TerminalPane`'s `onDestroy` ->
+    // `ptyKill` has actually run.
+    const closeButton = await $('.pane-leaf .pane-action[aria-label="Close pane"]');
+    await closeButton.click();
+
+    await browser.waitUntil(async () => (await $$(".xterm-screen")).length === 1, {
+      timeout: 5000,
+      timeoutMsg: "expected only one terminal pane to remain after closing the other",
+    });
+
+    const remainingPane = await $(".xterm-screen");
+    expect(await remainingPane.getText()).toContain("atrium-split-marker-two");
+  });
 });
 
 describe("project-wide search", () => {

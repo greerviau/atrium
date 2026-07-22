@@ -19,10 +19,11 @@ use tauri::{Emitter, Manager};
 /// Builds the native menu bar: `Atrium` (About, Quit), `File` (Open Folder,
 /// Save, New Terminal Tab), `Edit` (standard Undo/Redo/Cut/Copy/Paste/Select
 /// All, plus Find in Files), `View` (Toggle File Explorer, Toggle Terminal,
-/// Zoom In, Zoom Out, Reset Zoom), `Window` (standard), and `Theme` (Auto
-/// plus the three built-in themes). Menu items that need frontend behavior
-/// (Open Folder, Save, New Terminal Tab, Find in Files, both View toggles,
-/// all three zoom items, every Theme option) emit a `menu:*` event;
+/// Split Terminal, Zoom In, Zoom Out, Reset Zoom), `Window` (standard), and
+/// `Theme` (Auto plus the three built-in themes). Menu items that need
+/// frontend behavior (Open Folder, Save, New Terminal Tab, Find in Files,
+/// both View toggles, Split Terminal, all three zoom items, every Theme
+/// option) emit a `menu:*` event;
 /// `App.svelte` / `MenuBar.ts` listen for these and dispatch to the active
 /// pane, the search overlay, the panel-visibility store, the zoom store, or
 /// the theme store, since the menu itself has no notion of "the active
@@ -107,6 +108,13 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         Some("CmdOrCtrl+R"),
     )?;
+    let split_terminal = MenuItem::with_id(
+        app,
+        "menu:split-terminal",
+        "Split Terminal",
+        true,
+        Some("CmdOrCtrl+\\"),
+    )?;
     let zoom_in = MenuItem::with_id(app, "menu:zoom-in", "Zoom In", true, Some("CmdOrCtrl+="))?;
     let zoom_out = MenuItem::with_id(app, "menu:zoom-out", "Zoom Out", true, Some("CmdOrCtrl+-"))?;
     let zoom_reset = MenuItem::with_id(
@@ -123,6 +131,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         &[
             &toggle_explorer,
             &toggle_terminal,
+            &split_terminal,
             &PredefinedMenuItem::separator(app)?,
             &zoom_in,
             &zoom_out,
