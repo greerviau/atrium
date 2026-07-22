@@ -106,9 +106,9 @@ pub trait Workspace: Send + Sync {
     async fn delete(&self, path: &str, recursive: bool) -> Result<(), AppError>;
     /// Searches every text file under the workspace root for `query`,
     /// gitignore-aware and binary-safe, honoring `options`. Capped at 500
-    /// total matches and 50 per file (see `LocalWorkspace::search`'s doc
-    /// comment); `SearchResults.truncated` reports whether either cap was
-    /// hit.
+    /// total matches, 50 per file, and a wall-clock deadline (see
+    /// `local::search_root`'s doc comment); `SearchResults.truncated`
+    /// reports whether any of those limits was hit.
     async fn search(&self, query: &str, options: SearchOptions) -> Result<SearchResults, AppError>;
     /// The workspace root, used by `fs_resolve_candidates`'s third resolution
     /// step (relative to the workspace root).

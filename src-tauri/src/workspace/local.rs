@@ -9,11 +9,13 @@ use grep_matcher::Matcher;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::sinks::UTF8;
 use grep_searcher::{BinaryDetection, SearcherBuilder, SinkError};
+use ignore::WalkState;
 use notify_debouncer_full::{Debouncer, FileIdMap};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 
 /// Caps on `LocalWorkspace::search`'s result set (section 4.2 of the search
@@ -22,6 +24,13 @@ use tokio::sync::mpsc::UnboundedSender;
 /// for its own list.
 const SEARCH_TOTAL_MATCH_CAP: usize = 500;
 const SEARCH_PER_FILE_MATCH_CAP: usize = 50;
+
+/// Wall-clock budget for a single `search_root` walk. Bounds worst-case
+/// latency for a query that matches rarely or not at all (the case the
+/// match caps above don't help with, since they only fire once enough
+/// matches already exist) against a large, non-gitignored tree such as an
+/// un-excluded `node_modules`.
+const SEARCH_DEADLINE: Duration = Duration::from_secs(2);
 
 /// Builds the `grep-regex` matcher for a query: a real regex when
 /// `options.regex` is set, otherwise `fixed_strings` tells `grep-regex` to
@@ -135,10 +144,31 @@ fn byte_offset_to_utf16(line: &str, byte_offset: usize) -> u32 {
     line[..byte_offset].encode_utf16().count() as u32
 }
 
+/// Flushes one worker thread's locally-accumulated matches into `shared`
+/// when the thread's walk visitor is dropped (thread exit, whether by
+/// running out of work or by `WalkState::Quit`). Buffering locally and
+/// merging once per thread — rather than locking `shared` on every match —
+/// avoids lock contention on the hot path, since matches are only appended
+/// during the walk, never read.
+struct ThreadLocalMatches<'a> {
+    local: Vec<SearchMatch>,
+    shared: &'a Mutex<Vec<SearchMatch>>,
+}
+
+impl Drop for ThreadLocalMatches<'_> {
+    fn drop(&mut self) {
+        if !self.local.is_empty() {
+            self.shared.lock().unwrap().append(&mut self.local);
+        }
+    }
+}
+
 /// Walks `root` (gitignore-aware, hidden/VCS-dir-skipping, via
-/// `ignore::WalkBuilder`'s ripgrep-equivalent defaults) and searches every
-/// regular file's contents with `matcher`, stopping once either cap in
-/// section 4.2 is hit. Runs synchronously; `LocalWorkspace::search` runs it
+/// `ignore::WalkBuilder`'s ripgrep-equivalent defaults) in parallel —
+/// `WalkParallel` defaults its worker count to `available_parallelism()`
+/// (capped at 12) — and searches every regular file's contents with
+/// `matcher`, stopping once the total match cap in section 4.2 is hit or
+/// `deadline` elapses. Runs synchronously; `LocalWorkspace::search` runs it
 /// via `spawn_blocking` since directory walking and file I/O here are
 /// blocking calls, not `tokio::fs`.
 ///
@@ -148,86 +178,152 @@ fn byte_offset_to_utf16(line: &str, byte_offset: usize) -> u32 {
 /// supersedes this one, the walk stops immediately instead of running to
 /// completion for a result nobody will use — the cooperative-cancellation
 /// half of "a new keystroke cancels the previous in-flight search."
-fn search_root<M: Matcher>(
+///
+/// Because files are searched concurrently across threads, matches no
+/// longer arrive in a single walk order; all matches for a given file stay
+/// contiguous and in line order (one file is always searched entirely by
+/// one thread), but the result is sorted by path before returning so
+/// cross-file order is deterministic for callers (and so `SearchOverlay`'s
+/// per-file grouping, which merges adjacent same-path entries, never sees
+/// the same path twice non-adjacently).
+fn search_root<M: Matcher + Sync>(
     root: &Path,
     matcher: &M,
     current_generation: &AtomicU64,
     generation: u64,
+    deadline: Duration,
 ) -> SearchResults {
-    let mut searcher = SearcherBuilder::new()
-        .binary_detection(BinaryDetection::quit(0))
-        .line_number(true)
-        .build();
-
-    let mut matches = Vec::new();
-    let mut truncated = false;
+    let deadline = Instant::now() + deadline;
+    let total_match_count = AtomicUsize::new(0);
+    let truncated = AtomicBool::new(false);
+    let all_matches: Mutex<Vec<SearchMatch>> = Mutex::new(Vec::new());
 
     // `require_git(false)`: `WalkBuilder`'s default only honors `.gitignore`
     // inside an actual git repository, but an Atrium workspace is just
     // "whatever folder the user opened," git repo or not — gitignore-aware
     // filtering (section 4.2) needs to work either way.
-    for entry in ignore::WalkBuilder::new(root).require_git(false).build() {
-        if current_generation.load(Ordering::SeqCst) != generation {
-            break;
-        }
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(err) => {
-                eprintln!("atrium: search walk error: {err}");
-                continue;
-            }
-        };
-        if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-            continue;
-        }
+    ignore::WalkBuilder::new(root)
+        .require_git(false)
+        .build_parallel()
+        .run(|| {
+            let mut searcher = SearcherBuilder::new()
+                .binary_detection(BinaryDetection::quit(0))
+                .line_number(true)
+                .build();
+            let mut buffer = ThreadLocalMatches {
+                local: Vec::new(),
+                shared: &all_matches,
+            };
+            // Rebind as local references so this outer `mkf` closure (which
+            // `WalkParallel::run` calls once per worker thread, i.e. more
+            // than once) copies a reference into each thread's `move`
+            // visitor instead of moving the shared atomics themselves out
+            // of its environment on the first call.
+            let total_match_count = &total_match_count;
+            let truncated = &truncated;
 
-        let path = entry.into_path();
-        let path_str = path.to_string_lossy().to_string();
-        let mut file_match_count = 0usize;
+            Box::new(move |entry| {
+                if current_generation.load(Ordering::SeqCst) != generation {
+                    // A newer search superseded this one; its result is
+                    // thrown away regardless, so there's nothing to mark
+                    // truncated.
+                    return WalkState::Quit;
+                }
+                if Instant::now() >= deadline {
+                    truncated.store(true, Ordering::SeqCst);
+                    return WalkState::Quit;
+                }
+                if total_match_count.load(Ordering::SeqCst) >= SEARCH_TOTAL_MATCH_CAP {
+                    return WalkState::Quit;
+                }
 
-        let result = searcher.search_path(
-            matcher,
-            &path,
-            UTF8(|line_number, line| {
-                let line_text = line.trim_end_matches(['\n', '\r']);
-                let mut cap_hit = false;
-                matcher
-                    .find_iter(line_text.as_bytes(), |m| {
-                        let start = byte_offset_to_utf16(line_text, m.start());
-                        let end = byte_offset_to_utf16(line_text, m.end());
-                        matches.push(SearchMatch {
-                            path: path_str.clone(),
-                            line: line_number as u32,
-                            column: start + 1,
-                            line_text: line_text.to_string(),
-                            match_start: start,
-                            match_end: end,
-                        });
-                        file_match_count += 1;
-                        if matches.len() >= SEARCH_TOTAL_MATCH_CAP
-                            || file_match_count >= SEARCH_PER_FILE_MATCH_CAP
-                        {
-                            truncated = true;
-                            cap_hit = true;
-                            return false;
-                        }
-                        true
-                    })
-                    .map_err(io::Error::error_message)?;
-                Ok(!cap_hit)
-            }),
-        );
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(err) => {
+                        eprintln!("atrium: search walk error: {err}");
+                        return WalkState::Continue;
+                    }
+                };
+                if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                    return WalkState::Continue;
+                }
 
-        if let Err(err) = result {
-            eprintln!("atrium: search error in {}: {err}", path.display());
-        }
+                let path = entry.into_path();
+                let path_str = path.to_string_lossy().to_string();
+                let mut file_match_count = 0usize;
+                let mut total_cap_hit = false;
+                let mut per_file_cap_hit = false;
 
-        if matches.len() >= SEARCH_TOTAL_MATCH_CAP {
-            break;
-        }
+                let result = searcher.search_path(
+                    matcher,
+                    &path,
+                    UTF8(|line_number, line| {
+                        let line_text = line.trim_end_matches(['\n', '\r']);
+                        matcher
+                            .find_iter(line_text.as_bytes(), |m| {
+                                // `fetch_add` serializes every thread's
+                                // matches into a single global ordering, so
+                                // only the matches whose index lands below
+                                // the cap are kept — this is what keeps the
+                                // total cap exact under concurrency instead
+                                // of letting a check-then-append race let
+                                // multiple threads each squeeze one more
+                                // match past it.
+                                let global_index = total_match_count.fetch_add(1, Ordering::SeqCst);
+                                if global_index >= SEARCH_TOTAL_MATCH_CAP {
+                                    total_cap_hit = true;
+                                    return false;
+                                }
+                                let start = byte_offset_to_utf16(line_text, m.start());
+                                let end = byte_offset_to_utf16(line_text, m.end());
+                                buffer.local.push(SearchMatch {
+                                    path: path_str.clone(),
+                                    line: line_number as u32,
+                                    column: start + 1,
+                                    line_text: line_text.to_string(),
+                                    match_start: start,
+                                    match_end: end,
+                                });
+                                file_match_count += 1;
+                                if global_index + 1 >= SEARCH_TOTAL_MATCH_CAP {
+                                    total_cap_hit = true;
+                                    return false;
+                                }
+                                if file_match_count >= SEARCH_PER_FILE_MATCH_CAP {
+                                    per_file_cap_hit = true;
+                                    return false;
+                                }
+                                true
+                            })
+                            .map_err(io::Error::error_message)?;
+                        Ok(!(total_cap_hit || per_file_cap_hit))
+                    }),
+                );
+
+                if let Err(err) = result {
+                    eprintln!("atrium: search error in {}: {err}", path.display());
+                }
+
+                if total_cap_hit || per_file_cap_hit {
+                    truncated.store(true, Ordering::SeqCst);
+                }
+                if total_cap_hit {
+                    // The per-file cap only stops scanning *this* file;
+                    // only the total cap stops the whole walk, matching the
+                    // pre-parallel behavior.
+                    return WalkState::Quit;
+                }
+                WalkState::Continue
+            })
+        });
+
+    let mut matches = all_matches.into_inner().unwrap();
+    matches.sort_by(|a, b| a.path.cmp(&b.path));
+
+    SearchResults {
+        matches,
+        truncated: truncated.load(Ordering::SeqCst),
     }
-
-    SearchResults { matches, truncated }
 }
 
 /// The only `Workspace` implementation in the MVP: a directory on the local
@@ -384,14 +480,26 @@ impl Workspace for LocalWorkspace {
         if !options.regex && !options.case_sensitive {
             let matcher = AsciiCiLiteralMatcher::new(query)?;
             tokio::task::spawn_blocking(move || {
-                search_root(&root, &matcher, &current_generation, generation)
+                search_root(
+                    &root,
+                    &matcher,
+                    &current_generation,
+                    generation,
+                    SEARCH_DEADLINE,
+                )
             })
             .await
             .map_err(|err| AppError::Other(format!("search task panicked: {err}")))
         } else {
             let matcher = build_matcher(query, &options)?;
             tokio::task::spawn_blocking(move || {
-                search_root(&root, &matcher, &current_generation, generation)
+                search_root(
+                    &root,
+                    &matcher,
+                    &current_generation,
+                    generation,
+                    SEARCH_DEADLINE,
+                )
             })
             .await
             .map_err(|err| AppError::Other(format!("search task panicked: {err}")))
@@ -662,6 +770,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn search_total_cap_is_exact_under_concurrent_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        // Many single-match files, well past the cap and past the walk's
+        // worker-thread count, so multiple threads are appending matches
+        // near the cap boundary at the same time. The cap must land exactly
+        // on `SEARCH_TOTAL_MATCH_CAP` regardless of which threads' matches
+        // "win" the race to be counted — a plain check-then-append could
+        // let several threads each slip one more match past the cap.
+        let files = SEARCH_TOTAL_MATCH_CAP + 300;
+        for i in 0..files {
+            let name = format!("file{i}.txt");
+            ws.create_file(&name).await.unwrap();
+            ws.write_file(&name, "needle\n").await.unwrap();
+        }
+
+        let results = ws.search("needle", options(false, false)).await.unwrap();
+
+        assert_eq!(results.matches.len(), SEARCH_TOTAL_MATCH_CAP);
+        assert!(results.truncated);
+    }
+
+    #[tokio::test]
+    async fn search_root_truncates_when_deadline_elapses() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        // Enough files that a full walk cannot finish inside the 1ms
+        // deadline below, but few enough real matches (well under
+        // `SEARCH_TOTAL_MATCH_CAP`) that the total-match cap can never be
+        // what stops the walk — otherwise this test would still pass with
+        // the deadline check deleted entirely, since the cap alone would
+        // account for `truncated: true`.
+        let files = 2000;
+        let files_with_matches = 50;
+        for i in 0..files {
+            let name = format!("file{i}.txt");
+            ws.create_file(&name).await.unwrap();
+            let contents = if i < files_with_matches {
+                "needle\n"
+            } else {
+                "no match here\n"
+            };
+            ws.write_file(&name, contents).await.unwrap();
+        }
+        let matcher = build_matcher("needle", &options(false, false)).unwrap();
+        let current_generation = AtomicU64::new(1);
+
+        let start = Instant::now();
+        let results = search_root(
+            dir.path(),
+            &matcher,
+            &current_generation,
+            1,
+            Duration::from_millis(1),
+        );
+        let elapsed = start.elapsed();
+
+        // With at most `files_with_matches` (50) possible matches, nowhere
+        // near `SEARCH_TOTAL_MATCH_CAP` (500), the cap can never fire here —
+        // so this can only be `true` because the deadline check set it.
+        assert!(results.truncated);
+        // Bounded close to the injected deadline, not the time a full walk
+        // of this many files would take.
+        assert!(elapsed < Duration::from_secs(1), "elapsed: {elapsed:?}");
+    }
+
+    #[tokio::test]
+    async fn search_results_are_sorted_by_path_across_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        // File names deliberately out of alphabetical creation order, so a
+        // pass would only happen by sorting, not by walk order.
+        ws.create_file("zeta.txt").await.unwrap();
+        ws.write_file("zeta.txt", "needle").await.unwrap();
+        ws.create_file("alpha.txt").await.unwrap();
+        ws.write_file("alpha.txt", "needle").await.unwrap();
+        ws.create_file("mid.txt").await.unwrap();
+        ws.write_file("mid.txt", "needle\nneedle").await.unwrap();
+
+        let results = ws.search("needle", options(false, false)).await.unwrap();
+
+        let paths: Vec<_> = results.matches.iter().map(|m| m.path.clone()).collect();
+        let mut sorted = paths.clone();
+        sorted.sort();
+        assert_eq!(paths, sorted);
+        // Within a file, line order is still preserved by the sort (stable
+        // sort keeps `mid.txt`'s two matches in original line order).
+        let mid_lines: Vec<_> = results
+            .matches
+            .iter()
+            .filter(|m| m.path.ends_with("mid.txt"))
+            .map(|m| m.line)
+            .collect();
+        assert_eq!(mid_lines, vec![1, 2]);
+    }
+
+    #[tokio::test]
     async fn search_reports_each_match_on_a_line_with_multiple_matches() {
         let dir = tempfile::tempdir().unwrap();
         let ws = workspace(dir.path());
@@ -713,7 +918,13 @@ mod tests {
         // bail out before matching anything in `a.txt`, the same way a
         // superseded `LocalWorkspace::search` call does mid-walk.
         let current_generation = AtomicU64::new(2);
-        let results = search_root(dir.path(), &matcher, &current_generation, 1);
+        let results = search_root(
+            dir.path(),
+            &matcher,
+            &current_generation,
+            1,
+            SEARCH_DEADLINE,
+        );
 
         assert!(results.matches.is_empty());
         assert!(!results.truncated);
