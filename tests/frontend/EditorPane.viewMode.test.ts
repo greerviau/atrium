@@ -3,6 +3,7 @@ import { tick } from "svelte";
 import { render, cleanup } from "@testing-library/svelte";
 import { Compartment, type StateEffect } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { forceParsing } from "@codemirror/language";
 import EditorPane from "../../src/lib/editor/EditorPane.svelte";
 import { tabsState, toggleMarkdownViewMode, markDirty, type Tab } from "../../src/lib/stores/tabs";
 
@@ -18,6 +19,13 @@ const FILE_PATH = "/notes.md";
 // "raw source under cursor" rule (plan section 2.3) — the same setup
 // `decorations.test.ts` uses for its own heading assertions.
 const FIXTURE_DOC = "\n\n# Heading\n\n- [ ] todo\n";
+
+function findView(container: HTMLElement): EditorView {
+  const dom = container.querySelector(".cm-editor") as HTMLElement;
+  const view = EditorView.findFromDOM(dom);
+  if (!view) throw new Error("expected an EditorView to be mounted");
+  return view;
+}
 
 function seedMarkdownTab(): Tab {
   const tab: Tab = {
@@ -45,6 +53,12 @@ describe("EditorPane: markdown view-mode toggle", () => {
 
   it("renders live-preview decorations by default, with no line-number gutter", () => {
     const { container } = render(EditorPane, { filePath: FILE_PATH });
+
+    // Live-preview decorations only cover however far the background parser
+    // has gotten so far (issue #85) — drive it to completion the same way
+    // `livePreviewPlugin.test.ts` does, so this assertion doesn't depend on
+    // the parser having already finished this tiny document by chance.
+    forceParsing(findView(container), FIXTURE_DOC.length);
 
     expect(container.querySelector(".cm-heading-1")).not.toBeNull();
     expect(container.querySelector("input.cm-task-checkbox")).not.toBeNull();
