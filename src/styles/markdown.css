@@ -83,8 +83,7 @@
   border-left: 3px solid var(--atrium-border);
   padding: 0 0.6em;
   white-space: pre;
-  overflow-x: auto;
-  max-width: 100%;
+  box-sizing: content-box;
 }
 
 /* Block-level widget replacing a `mermaid` fenced code block. `text-align:
@@ -92,8 +91,8 @@
    clipped or wrapped — like a long code line or table row above, it scrolls
    via CodeMirror's own `.cm-scroller { overflow-x: auto }`, not a container
    of its own; `overflow-x: auto` here is a no-op today (this box's width
-   always matches its content, same as `.cm-code-block` above) kept as a
-   defensive match to that same precedent. */
+   always matches its content) kept as a defensive fallback in case that
+   ever stops being true. */
 .cm-mermaid-diagram {
   display: block;
   overflow-x: auto;

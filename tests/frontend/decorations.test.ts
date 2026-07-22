@@ -1175,12 +1175,16 @@ describe("markdown.css: inline code and mermaid error font-family", () => {
 
 describe("markdown.css: code block width cap", () => {
   // .cm-code-block's computed `width: <N>ch` (set per-block in decorations.ts)
-  // must stay capped at the pane's own width and keep its existing
-  // horizontal-scroll behavior for a line wider than that cap (issue #29 / #89).
-  it(".cm-code-block caps its computed width and keeps its overflow/whitespace behavior", () => {
+  // must stay capped at the pane's own width (issue #29 / #89) without
+  // reintroducing per-line scrolling (issue #135): `box-sizing: content-box`
+  // keeps the `ch` width honest against the block's own padding/border, and
+  // neither `overflow-x` nor `max-width` are set on the block itself anymore
+  // — a too-wide line now overflows the shared document-level scroller instead.
+  it(".cm-code-block uses content-box sizing and does not trap its own overflow", () => {
     const body = ruleBodyFor(".cm-code-block");
-    expect(body).toMatch(/max-width:\s*100%/);
-    expect(body).toMatch(/overflow-x:\s*auto/);
+    expect(body).toMatch(/box-sizing:\s*content-box/);
+    expect(body).not.toMatch(/max-width/);
+    expect(body).not.toMatch(/overflow-x/);
     expect(body).toMatch(/white-space:\s*pre/);
   });
 });
