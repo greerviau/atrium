@@ -28,7 +28,12 @@
     workspaceId,
     onExit,
     onTitleChange,
-  }: { cwd: string; workspaceId: string; onExit?: () => void; onTitleChange?: (title: string) => void } = $props();
+  }: {
+    cwd: string;
+    workspaceId: string;
+    onExit?: (elapsedMs: number) => void;
+    onTitleChange?: (title: string) => void;
+  } = $props();
 
   let container: HTMLDivElement;
   let terminal: Terminal;
@@ -128,11 +133,16 @@
       const cols = terminal.cols;
       const rows = terminal.rows;
       terminalId = await ptySpawn(cwd, cols, rows);
+      // Captured after ptySpawn resolves (not before) so the elapsed time
+      // measures the pty's own lifetime, not this call's IPC round-trip;
+      // performance.now() is monotonic, unlike Date.now(), so a backwards
+      // wall-clock correction can't produce a negative elapsed value.
+      const spawnedAt = performance.now();
       await ptySubscribe(terminalId, (event) => {
         if (event.type === "data") {
           terminal.write(base64ToBytes(event.data));
         } else if (event.type === "exit") {
-          onExit?.();
+          onExit?.(performance.now() - spawnedAt);
         }
       });
     })();

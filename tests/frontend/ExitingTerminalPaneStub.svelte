@@ -11,11 +11,16 @@
     cwd,
     workspaceId,
     onExit,
-  }: { cwd: string; workspaceId: string; onExit?: () => void; onTitleChange?: (title: string) => void } = $props();
+  }: {
+    cwd: string;
+    workspaceId: string;
+    onExit?: (elapsedMs: number) => void;
+    onTitleChange?: (title: string) => void;
+  } = $props();
 
   onMount(() => {
     mountLog.push(`spawn:${cwd}`);
-    queueMicrotask(() => onExit?.());
+    queueMicrotask(() => onExit?.(0));
   });
 </script>
 
