@@ -151,15 +151,33 @@
   // cursor, undo history, and scroll position. Guarded against firing on
   // unrelated tab-store updates (e.g. `markDirty` on every keystroke) by
   // comparing against the last-applied value before dispatching.
+  //
+  // The compartment swap alone leaves CodeMirror's viewport (the character
+  // range it considers "visible") carried over from the previous mode: its
+  // internal height-change detection only looks at `StateField`-registered
+  // decorations, not the `ViewPlugin`-supplied ones `livePreviewPlugin` uses
+  // for live-preview styling, so it doesn't see this transition as
+  // height-relevant and never recomputes the viewport on its own. Dispatching
+  // `EditorView.scrollIntoView` alongside the reconfigure forces a correct
+  // viewport recomputation anchored on the current selection head, and the
+  // explicit `requestMeasure()` after dispatch (same pattern as the
+  // background-tab fix below) guarantees a fresh measure pass re-derives the
+  // viewport from actual rendered DOM heights rather than relying on
+  // CodeMirror's implicit, best-effort async convergence.
   $effect(() => {
     const current = tab;
     if (!view || !current || current.viewMode === lastAppliedViewMode) {
       return;
     }
     lastAppliedViewMode = current.viewMode;
+    const head = view.state.selection.main.head;
     view.dispatch({
-      effects: viewModeCompartment.reconfigure(viewModeExtensions(current.mode, current.viewMode)),
+      effects: [
+        viewModeCompartment.reconfigure(viewModeExtensions(current.mode, current.viewMode)),
+        EditorView.scrollIntoView(head, { y: "nearest" }),
+      ],
     });
+    view.requestMeasure();
   });
 
   // Forces a fresh CodeMirror measurement and pushes this pane's cursor
