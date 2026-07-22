@@ -20,7 +20,8 @@
   } from "./lib/stores/tabs";
   import { closePrompt } from "./lib/stores/closePrompt";
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
-  import { onFsChanged, onDockOpenPath, onCloseRequested } from "./lib/ipc/events";
+  import { onFsChanged, onDockOpenPath, onCloseRequested, onDragDropEvent } from "./lib/ipc/events";
+  import { insertPathsAtScreenPoint } from "./lib/terminal/terminalDropTargets";
   import { workspaceTakePendingOpen, appConfirmClose } from "./lib/ipc/commands";
   import { initMenuBar } from "./lib/shell/MenuBar";
   import {
@@ -300,6 +301,11 @@
       void refreshDirectoryContaining(event.path);
     });
     void onDockOpenPath((path) => void openWorkspacePath(path));
+    void onDragDropEvent((event) => {
+      if (event.type !== "drop") return;
+      const logical = event.position.toLogical(window.devicePixelRatio);
+      insertPathsAtScreenPoint(event.paths, logical.x, logical.y);
+    });
     void onCloseRequested(() => {
       const dirty = $tabsState.tabs.filter((t) => t.isDirty);
       if (dirty.length === 0) {
