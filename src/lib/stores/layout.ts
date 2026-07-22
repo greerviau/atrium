@@ -88,8 +88,8 @@ export function saveTerminalLayout(layout: TerminalLayout): void {
  * Canonical terminal dock position, initialized from `loadTerminalLayout()`.
  * Height/width stay as `App.svelte`'s own local resize state rather than
  * living here too — position is the one dimension a control outside the
- * resize gesture itself (`DockSettingsMenu`, the settings dialog) needs to
- * read and change directly.
+ * resize gesture itself (the settings dialog) needs to read and change
+ * directly.
  */
 export const terminalPosition = writable<TerminalPosition>(loadTerminalLayout().position);
 

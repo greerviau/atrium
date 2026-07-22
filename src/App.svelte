@@ -8,7 +8,6 @@
   import UnsavedChangesDialog from "./lib/shell/UnsavedChangesDialog.svelte";
   import SettingsDialog from "./lib/shell/SettingsDialog.svelte";
   import StatusBar from "./lib/shell/StatusBar.svelte";
-  import DockSettingsMenu from "./lib/terminal/DockSettingsMenu.svelte";
   import { workspace, openWorkspacePath } from "./lib/stores/workspace";
   import {
     tabsState,
@@ -279,10 +278,10 @@
       terminalHeight = clampToContainer(terminalHeight, HEIGHT_MIN, mainEl.clientHeight);
       terminalWidth = clampToContainer(terminalWidth, WIDTH_MIN, mainEl.clientWidth);
       // Persists the clamp immediately, not just in memory: otherwise a
-      // later position change (from DockSettingsMenu or the settings
-      // dialog) would read the pre-clamp, potentially oversized dimension
-      // straight back out of localStorage via setTerminalPosition, undoing
-      // the clamp this mount just applied.
+      // later position change (from the settings dialog) would read the
+      // pre-clamp, potentially oversized dimension straight back out of
+      // localStorage via setTerminalPosition, undoing the clamp this mount
+      // just applied.
       saveTerminalLayout({ position: $terminalPosition, height: terminalHeight, width: terminalWidth });
     }
     void initMenuBar(newTerminalTab, () => splitFocusedPane("right"));
@@ -404,9 +403,6 @@
           class:hidden={!$terminalVisible}
           style={$terminalPosition === "bottom" ? `height: ${terminalHeight}px` : `width: ${terminalWidth}px`}
         >
-          <div class="terminal-dock-header">
-            <DockSettingsMenu />
-          </div>
           <div class="terminal-panes">
             {#if terminalPaneTree}
               <div class="terminal-pane-slot">
@@ -604,13 +600,5 @@
   }
   .terminal-area.hidden {
     display: none;
-  }
-  .terminal-dock-header {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    flex-shrink: 0;
-    padding: 2px 4px;
-    border-bottom: 1px solid var(--atrium-border);
   }
 </style>
