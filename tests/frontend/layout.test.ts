@@ -102,6 +102,37 @@ describe("loadTerminalLayout / saveTerminalLayout", () => {
   });
 });
 
+describe("terminalPosition", () => {
+  it("defaults to the default layout's position when nothing is stored", async () => {
+    const { terminalPosition } = await freshLayoutStore();
+    expect(get(terminalPosition)).toBe("bottom");
+  });
+
+  it("initializes from a persisted layout's position", async () => {
+    saveTerminalLayout({ position: "right", height: 300, width: 400 });
+    const { terminalPosition } = await freshLayoutStore();
+    expect(get(terminalPosition)).toBe("right");
+  });
+
+  it("setTerminalPosition updates the store and persists it, preserving the current height/width", async () => {
+    saveTerminalLayout({ position: "bottom", height: 300, width: 400 });
+    const { terminalPosition, setTerminalPosition } = await freshLayoutStore();
+
+    setTerminalPosition("left");
+
+    expect(get(terminalPosition)).toBe("left");
+    expect(loadTerminalLayout()).toEqual({ position: "left", height: 300, width: 400 });
+  });
+
+  it("round-trips a set position through localStorage on a fresh import", async () => {
+    const { setTerminalPosition } = await freshLayoutStore();
+    setTerminalPosition("right");
+
+    const reloaded = await freshLayoutStore();
+    expect(get(reloaded.terminalPosition)).toBe("right");
+  });
+});
+
 /**
  * The panel-visibility store reads its persisted state once at import time
  * (module-level `const initialPanelVisibility = loadPanelVisibility()`), so

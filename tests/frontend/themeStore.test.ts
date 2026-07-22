@@ -133,3 +133,51 @@ describe("setTheme", () => {
     expect(localStorage.getItem(STORAGE_KEY)).toBe("auto");
   });
 });
+
+describe("themeSelection", () => {
+  it("starts at the persisted selection, defaulting to auto when nothing is persisted", async () => {
+    const { themeSelection } = await freshThemeStore("dark");
+
+    expect(get(themeSelection)).toBe("auto");
+  });
+
+  it("initializes from a persisted concrete selection", async () => {
+    localStorage.setItem(STORAGE_KEY, "atrium-high-contrast");
+    const { themeSelection } = await freshThemeStore("dark");
+
+    expect(get(themeSelection)).toBe("atrium-high-contrast");
+  });
+
+  it("updates when setTheme selects a concrete theme", async () => {
+    const { initTheme, setTheme, themeSelection } = await freshThemeStore("dark");
+    await initTheme();
+
+    setTheme("atrium-light");
+
+    expect(get(themeSelection)).toBe("atrium-light");
+  });
+
+  it("stays 'auto' when setTheme(\"auto\") is chosen, even though the resolved theme store shows a concrete theme", async () => {
+    const { initTheme, setTheme, theme, themeSelection } = await freshThemeStore("dark");
+    await initTheme();
+
+    setTheme("atrium-light");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(get(themeSelection)).toBe("atrium-light");
+
+    setTheme("auto");
+    await vi.waitFor(() => expect(get(theme)).toEqual(atriumDark));
+
+    expect(get(themeSelection)).toBe("auto");
+  });
+
+  it("does not change on an unrecognized id", async () => {
+    const { initTheme, setTheme, themeSelection } = await freshThemeStore("dark");
+    await initTheme();
+
+    setTheme("not-a-real-theme");
+
+    expect(get(themeSelection)).toBe("auto");
+  });
+});
