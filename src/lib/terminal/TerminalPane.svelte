@@ -129,16 +129,20 @@
       }
     });
 
-    const spawnedAt = Date.now();
     (async () => {
       const cols = terminal.cols;
       const rows = terminal.rows;
       terminalId = await ptySpawn(cwd, cols, rows);
+      // Captured after ptySpawn resolves (not before) so the elapsed time
+      // measures the pty's own lifetime, not this call's IPC round-trip;
+      // performance.now() is monotonic, unlike Date.now(), so a backwards
+      // wall-clock correction can't produce a negative elapsed value.
+      const spawnedAt = performance.now();
       await ptySubscribe(terminalId, (event) => {
         if (event.type === "data") {
           terminal.write(base64ToBytes(event.data));
         } else if (event.type === "exit") {
-          onExit?.(Date.now() - spawnedAt);
+          onExit?.(performance.now() - spawnedAt);
         }
       });
     })();

@@ -4,7 +4,7 @@ import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import App from "../../src/App.svelte";
 import { workspace } from "../../src/lib/stores/workspace";
 import { terminalVisible } from "../../src/lib/stores/layout";
-import { setDefaultSimulateElapsedMs } from "./TerminalPaneStub.svelte";
+import { setDefaultSimulateElapsedMs, DEFAULT_SIMULATE_ELAPSED_MS } from "./TerminalPaneStub.svelte";
 
 // Regression coverage for issue #118: a shell the user worked in for a
 // while and then deliberately exited (typing `exit` or Ctrl-D) must
@@ -58,16 +58,16 @@ describe("App terminal auto-spawn — deliberate exit", () => {
 
   afterEach(() => {
     cleanup();
-    setDefaultSimulateElapsedMs(60_000);
+    setDefaultSimulateElapsedMs(DEFAULT_SIMULATE_ELAPSED_MS);
   });
 
   it("a session exiting well above the crash-exit window respawns instead of leaving the empty placeholder", async () => {
     const { container } = render(App);
     await spawnInitialSession(container);
 
-    // TerminalPaneStub's exit button defaults simulateElapsedMs to 60_000,
-    // well above CRASH_EXIT_WINDOW_MS — models a shell the user worked in
-    // and then deliberately exited.
+    // TerminalPaneStub's exit button defaults simulateElapsedMs to
+    // DEFAULT_SIMULATE_ELAPSED_MS, well above CRASH_EXIT_WINDOW_MS — models
+    // a shell the user worked in and then deliberately exited.
     const exitButton = container.querySelector(".terminal-pane-stub-exit");
     expect(exitButton).not.toBeNull();
     await fireEvent.click(exitButton!);

@@ -5,7 +5,8 @@
   // passing the prop directly. A prop-destructuring default expression is
   // evaluated once per component instantiation, so setting this before a
   // render picks it up for that render's session.
-  let defaultSimulateElapsedMs = 60_000;
+  export const DEFAULT_SIMULATE_ELAPSED_MS = 60_000;
+  let defaultSimulateElapsedMs = DEFAULT_SIMULATE_ELAPSED_MS;
   export function setDefaultSimulateElapsedMs(value: number): void {
     defaultSimulateElapsedMs = value;
   }

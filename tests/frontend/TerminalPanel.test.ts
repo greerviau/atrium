@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import TerminalPanel from "../../src/lib/terminal/TerminalPanel.svelte";
 import type { LeafPane } from "../../src/lib/terminal/paneTree";
+import { DEFAULT_SIMULATE_ELAPSED_MS } from "./TerminalPaneStub.svelte";
 
 vi.mock("../../src/lib/terminal/TerminalPane.svelte", async () => {
   const mod = await import("./TerminalPaneStub.svelte");
@@ -90,7 +91,7 @@ describe("TerminalPanel", () => {
     const exitTriggers = container.querySelectorAll(".terminal-pane-stub-exit");
     await fireEvent.click(exitTriggers[0]);
 
-    expect(onSessionExit).toHaveBeenCalledWith("s1", 60_000);
+    expect(onSessionExit).toHaveBeenCalledWith("s1", DEFAULT_SIMULATE_ELAPSED_MS);
     expect(onCloseTab).not.toHaveBeenCalled();
   });
 
