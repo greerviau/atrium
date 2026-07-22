@@ -36,24 +36,30 @@
     return idx <= 0 ? path : path.slice(0, idx);
   }
 
+  async function beginCreate(dir: string, isDir: boolean): Promise<void> {
+    closeContextMenu();
+    settleActiveEdit();
+    try {
+      // Ensures the target directory is expanded/loaded so the new row is visible.
+      await loadChildren(dir);
+    } catch (err) {
+      console.error("atrium: failed to load directory for new entry", err);
+      return;
+    }
+    editingPath.set(null);
+    pendingCreate.set({ parentPath: dir, isDir });
+  }
+
   async function startNewFile(): Promise<void> {
     if (!$contextMenu) return;
     const dir = $contextMenu.isDir ? $contextMenu.path : dirOf($contextMenu.path);
-    closeContextMenu();
-    settleActiveEdit();
-    await loadChildren(dir); // ensures the target directory is expanded/loaded so the new row is visible
-    editingPath.set(null);
-    pendingCreate.set({ parentPath: dir, isDir: false });
+    await beginCreate(dir, false);
   }
 
   async function startNewFolder(): Promise<void> {
     if (!$contextMenu) return;
     const dir = $contextMenu.isDir ? $contextMenu.path : dirOf($contextMenu.path);
-    closeContextMenu();
-    settleActiveEdit();
-    await loadChildren(dir);
-    editingPath.set(null);
-    pendingCreate.set({ parentPath: dir, isDir: true });
+    await beginCreate(dir, true);
   }
 
   function startRename(): void {

@@ -263,17 +263,20 @@ describe("FileTree: inline create/rename", () => {
     expect(container.querySelector("input")).toBeNull();
   });
 
-  it("leaves the input open and shows the error text when a rename is rejected", async () => {
+  it("leaves the input open and shows a friendly error when a rename collides with an existing name", async () => {
     vi.mocked(commands.fsListDir).mockResolvedValue([
       { name: "notes.txt", path: `${ROOT}/notes.txt`, isDir: false, isSymlink: false },
     ]);
+    // Mirrors the real backend contract: `AppError::AlreadyExists` serializes to
+    // `{ code: "ALREADY_EXISTS", message: <the raw path> }` (`src-tauri/src/error.rs`) — the
+    // message itself is not a sentence fit for display, so the UI must map on `code`, not echo it.
     vi.mocked(commands.fsRename).mockRejectedValue({
       code: "ALREADY_EXISTS",
-      message: "A file with that name already exists",
+      message: `${ROOT}/dup.txt`,
     });
     await loadRoot(ROOT);
 
-    const { container, findByText } = render(FileTree);
+    const { container, findByText, queryByText } = render(FileTree);
     await fireEvent.contextMenu(await findByText("notes.txt"));
     await fireEvent.click(await findByText("Rename"));
 
@@ -281,8 +284,10 @@ describe("FileTree: inline create/rename", () => {
     await fireEvent.input(input, { target: { value: "dup.txt" } });
     await fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(await findByText("A file with that name already exists")).toBeTruthy();
+    expect(await findByText('A file or folder named "dup.txt" already exists')).toBeTruthy();
+    expect(queryByText(`${ROOT}/dup.txt`)).toBeNull();
     expect(container.querySelector("input")).toBeTruthy();
+    expect(document.activeElement).toBe(container.querySelector("input"));
   });
 
   it("resolves an in-progress rename before starting a new create (settleActiveEdit backstop)", async () => {

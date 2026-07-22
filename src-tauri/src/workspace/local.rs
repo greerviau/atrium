@@ -454,6 +454,13 @@ impl Workspace for LocalWorkspace {
     async fn rename(&self, from: &str, to: &str) -> Result<(), AppError> {
         let from_path = self.resolve_within_root(from)?;
         let to_path = self.resolve_within_root(to)?;
+        // `tokio::fs::rename` (POSIX `rename(2)`) silently replaces an existing
+        // destination, unlike `create_file`/`create_dir` above, so a rename onto an
+        // existing name must be rejected the same way — except a no-op rename onto
+        // itself (an unchanged name submitted via Enter), which should still succeed.
+        if from_path != to_path && to_path.exists() {
+            return Err(AppError::AlreadyExists(to.to_string()));
+        }
         tokio::fs::rename(&from_path, &to_path).await?;
         Ok(())
     }
@@ -553,6 +560,31 @@ mod tests {
         ws.create_file("note.md").await.unwrap();
         let err = ws.create_file("note.md").await.unwrap_err();
         assert!(matches!(err, AppError::AlreadyExists(_)));
+    }
+
+    #[tokio::test]
+    async fn rename_errors_if_destination_exists_instead_of_overwriting_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("notes.md").await.unwrap();
+        ws.create_file("dup.md").await.unwrap();
+        ws.write_file("dup.md", "keep me").await.unwrap();
+
+        let err = ws.rename("notes.md", "dup.md").await.unwrap_err();
+        assert!(matches!(err, AppError::AlreadyExists(_)));
+        assert_eq!(ws.read_file("dup.md").await.unwrap(), "keep me");
+        assert!(dir.path().join("notes.md").exists());
+    }
+
+    #[tokio::test]
+    async fn rename_onto_the_same_path_is_a_no_op() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("notes.md").await.unwrap();
+        ws.write_file("notes.md", "hello").await.unwrap();
+
+        ws.rename("notes.md", "notes.md").await.unwrap();
+        assert_eq!(ws.read_file("notes.md").await.unwrap(), "hello");
     }
 
     #[tokio::test]

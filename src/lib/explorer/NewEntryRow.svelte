@@ -15,9 +15,9 @@
   } = $props();
 </script>
 
-<div class="row" style={`padding-left: ${depth * 14 + 6}px`}>
+<div class="row" style={`padding-left: ${depth * 14 + 6}px`} role="treeitem" aria-selected="false">
   <ExplorerIcon entry={{ name: "", path: "", isDir, isSymlink: false }} expanded={false} />
-  <InlineNameInput initialValue="" selectExtension={false} {onCommit} {onCancel} />
+  <InlineNameInput initialValue="" selectBaseNameOnly={false} {onCommit} {onCancel} />
 </div>
 
 <style>

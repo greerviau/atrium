@@ -4,16 +4,21 @@
 
   let {
     initialValue,
-    selectExtension,
+    selectBaseNameOnly,
     onCommit,
     onCancel,
   }: {
     initialValue: string;
-    selectExtension: boolean;
+    selectBaseNameOnly: boolean;
     onCommit: (value: string) => Promise<void>;
     onCancel: () => void;
   } = $props();
 
+  // Reads the prop once at creation time; this component is always freshly mounted for a given
+  // edit session (keyed on `#if $editingPath === ...` / `$pendingCreate`), so `initialValue`
+  // never changes during its lifetime. `untrack` doesn't change that (there's no reactive
+  // context here to track against) — it only silences the compiler's `state_referenced_locally`
+  // warning, which otherwise fires on any prop read used to seed local state.
   let value = $state(untrack(() => initialValue));
   let error = $state<string | null>(null);
   let inputEl: HTMLInputElement | undefined = $state();
@@ -24,33 +29,44 @@
   let settled = false;
   let pending = false;
 
-  function describeError(err: unknown): string {
+  function describeError(err: unknown, submittedName: string): string {
+    if (isAppError(err) && err.code === "ALREADY_EXISTS") {
+      return `A file or folder named "${submittedName}" already exists`;
+    }
     if (isAppError(err)) return err.message;
     if (err instanceof Error) return err.message;
     return "an unknown error";
   }
 
-  onMount(() => {
+  function focusAndSelect(): void {
     if (!inputEl) return;
     inputEl.focus();
-    if (selectExtension) {
+    if (selectBaseNameOnly) {
       const dot = initialValue.lastIndexOf(".");
       const end = dot <= 0 ? initialValue.length : dot;
       inputEl.setSelectionRange(0, end);
     } else {
       inputEl.select();
     }
-  });
+  }
+
+  onMount(focusAndSelect);
 
   async function commit(): Promise<void> {
     if (pending) return;
     pending = true;
     error = null;
+    const submitted = value.trim();
     try {
-      await onCommit(value.trim());
+      await onCommit(submitted);
       settled = true;
     } catch (err) {
-      error = describeError(err);
+      error = describeError(err, submitted);
+      // A commit rejection reached via blur leaves the input unfocused; re-focus it so the
+      // error is actionable (Escape/retyping) without the user having to click back in — the
+      // row's own click handling is suppressed while it's mid-edit (`FileTreeNode.svelte`).
+      inputEl?.focus();
+      inputEl?.select();
     } finally {
       pending = false;
     }

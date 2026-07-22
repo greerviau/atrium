@@ -60,7 +60,7 @@
     {#if isEditing}
       <InlineNameInput
         initialValue={node.entry.name}
-        selectExtension={!node.entry.isDir}
+        selectBaseNameOnly={!node.entry.isDir}
         onCommit={(value) => commitRename(node.entry.path, value)}
         onCancel={() => editingPath.set(null)}
       />
