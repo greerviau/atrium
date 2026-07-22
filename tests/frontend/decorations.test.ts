@@ -1039,6 +1039,39 @@ describe("buildDecorations: blockquotes", () => {
       );
       expect(decos.some((d) => d.from === headerLine.from && d.class === "cm-blockquote")).toBe(true);
     });
+
+    // Regression coverage for a review finding on the original PR: a table
+    // nested inside a *nested* blockquote (two or more `>` markers before
+    // the row) defeated the original guard, which only recognized "marker's
+    // parent is Table" and "marker's next sibling is Table" — for the
+    // outermost of several nested markers, the next sibling is the *inner*
+    // Blockquote, not Table, so neither branch matched and it emitted a
+    // stray replace decoration overlapping decorateTableRow's own leading
+    // gap. `lineOwnedByTableRow` fixes this by checking whether the row (or
+    // the table's alignment-delimiter row) starts on the marker's physical
+    // line at all, regardless of nesting depth or tree shape.
+    it("tiles the header and delimiter rows with no gap or overlap when the table sits inside a nested blockquote", () => {
+      const doc = "> > | a | b |\n> > | - | - |";
+      const state = stateFor(doc, doc.length);
+      const decos = collect(state);
+      for (const lineNum of [1, 2]) {
+        const line = state.doc.line(lineNum);
+        const covering = decos
+          .filter((d) => d.from >= line.from && d.to <= line.to && (d.isReplace || d.tableGap))
+          .sort((a, b) => a.from - b.from);
+        let pos = line.from;
+        for (const d of covering) {
+          expect(d.from).toBeGreaterThanOrEqual(pos); // no overlap with the previous decoration
+          pos = Math.max(pos, d.to);
+        }
+      }
+      // The header row's line decoration still gets both classes.
+      const headerLine = state.doc.line(1);
+      expect(decos.some((d) => d.from === headerLine.from && d.class?.split(" ").includes("cm-table-row"))).toBe(
+        true,
+      );
+      expect(decos.some((d) => d.from === headerLine.from && d.class === "cm-blockquote")).toBe(true);
+    });
   });
 
   it("keeps the marker hidden when hasFocus is false, even with the selection on that line", () => {

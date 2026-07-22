@@ -238,6 +238,38 @@ function decorateBlockquote(state: EditorState, node: SyntaxNode, out: Range<Dec
 }
 
 /**
+ * The three node types `decorateTableRow`/`decorateTable` treat as owning
+ * an entire physical line's leading span: `TableHeader`/`TableRow` (a data
+ * row, via `decorateTableRow`'s gap) and `TableDelimiter` (the alignment
+ * row, via `decorateTable`'s own line-replace). Any of the three starting
+ * on a given physical line means that line's leading span — including a
+ * preceding `>` marker or list indent, at any nesting depth — is already
+ * spoken for.
+ */
+const TABLE_ROW_NODE_NAMES = new Set(["TableHeader", "TableRow", "TableDelimiter"]);
+
+/**
+ * True when physical line `lineNumber` is the start of a table row or the
+ * table's own alignment-delimiter row — i.e. a line `decorateTableRow`'s
+ * leading gap (or `decorateTable`'s delimiter-line replace) already fully
+ * owns from the line's start. Resolves into the tree at the line's own end
+ * (innermost node first) and walks up, rather than walking down from a
+ * known ancestor, because for a leading `>` marker the table node is a
+ * later sibling in the tree, not a descendant or ancestor of the marker.
+ */
+function lineOwnedByTableRow(state: EditorState, lineNumber: number): boolean {
+  const line = state.doc.line(lineNumber);
+  let n: SyntaxNode | null = syntaxTree(state).resolveInner(line.to, -1);
+  while (n) {
+    if (TABLE_ROW_NODE_NAMES.has(n.type.name) && state.doc.lineAt(n.from).number === lineNumber) {
+      return true;
+    }
+    n = n.parent;
+  }
+  return false;
+}
+
+/**
  * Hides one blockquote `>` marker (plus its optional following space —
  * unlike an ATX heading's `#`, the grammar doesn't require a space after
  * `>`, so it's only consumed when actually present), gated per-line through
@@ -247,24 +279,15 @@ function decorateBlockquote(state: EditorState, node: SyntaxNode, out: Range<Dec
  * lines, without the fenced-code precedent's "reveal the whole block" being
  * a much bigger disruption here.
  *
- * Skips itself when `decorateTableRow`'s own leading "gap" decoration
- * already owns this marker's span — a table row's gap is anchored at the
- * physical line's start specifically to swallow a preceding `>` marker or
- * list indent, so a second, independent replace decoration here would
- * overlap it. This is true exactly when the marker's parent is `Table`
- * (the per-row-marker case) or its next sibling is a `Table` starting on
- * the same physical line (the lazy-leading-marker case).
+ * Skips itself whenever `lineOwnedByTableRow` says this marker's physical
+ * line is already owned by a table row's own leading span — a second,
+ * independent replace decoration here would overlap it. This holds
+ * regardless of blockquote nesting depth: a marker on a table-owned line is
+ * always inside that line's leading span, whether it's the sole marker or
+ * one of several nested `>` markers preceding the row.
  */
 function decorateQuoteMark(state: EditorState, node: SyntaxNode, out: Range<Decoration>[], hasFocus: boolean): void {
-  if (node.parent?.type.name === "Table") {
-    return;
-  }
-  const next = node.nextSibling;
-  if (
-    next &&
-    next.type.name === "Table" &&
-    state.doc.lineAt(next.from).number === state.doc.lineAt(node.from).number
-  ) {
+  if (lineOwnedByTableRow(state, state.doc.lineAt(node.from).number)) {
     return;
   }
   if (isUnderCursor(state, node.from, node.to, hasFocus)) {
