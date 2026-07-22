@@ -12,5 +12,6 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: ["tests/frontend/**/*.test.ts"],
+    css: true,
   },
 });
