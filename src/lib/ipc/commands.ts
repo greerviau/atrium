@@ -35,7 +35,8 @@ export interface PathCandidate {
 
 export type PtyEvent =
   | { type: "data"; data: string }
-  | { type: "exit"; code: number | null };
+  | { type: "exit"; code: number | null }
+  | { type: "title"; cwd: string; program: string | null };
 
 const LOCAL_WORKSPACE_ID = "local";
 

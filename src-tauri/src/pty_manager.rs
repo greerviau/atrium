@@ -5,12 +5,34 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tauri::ipc::Channel;
 
 /// Cap on buffered output kept before the frontend calls `pty_subscribe`.
 /// Generous enough to hold a shell's startup banner/prompt without growing
 /// unbounded if a subscriber never shows up.
 const BUFFER_CAP: usize = 64 * 1024;
+
+/// How often the shared poller re-checks every live session's cwd and
+/// foreground process. Cheap enough per tick (a handful of sessions, each a
+/// couple of targeted `sysinfo` refreshes) to run for the app's whole
+/// lifetime, and fast enough that a tab title update never feels laggy.
+const TITLE_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// The last `(cwd, program)` pair reported for a session, kept so a poll
+/// tick that finds nothing has actually changed can skip sending an event.
+type TitleSnapshot = (String, Option<String>);
+
+/// One session's poll-tick inputs: its id, shell pid, event channel, and
+/// last-reported title, snapshotted together while the sessions map is
+/// briefly locked (see `poll_titles_loop`).
+type SessionPollSnapshot = (
+    String,
+    u32,
+    Arc<Mutex<Shared>>,
+    Arc<Mutex<Option<TitleSnapshot>>>,
+);
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -19,6 +41,11 @@ pub enum PtyEvent {
     Data { data: String },
     #[serde(rename = "exit")]
     Exit { code: Option<i32> },
+    #[serde(rename = "title")]
+    Title {
+        cwd: String,
+        program: Option<String>,
+    },
 }
 
 struct Shared {
@@ -55,6 +82,17 @@ impl Shared {
             }
         }
     }
+
+    /// Unlike `push_data`/`push_exit`, a `Title` event with no subscriber
+    /// attached yet is simply dropped rather than buffered: the frontend
+    /// already seeds the tab's initial title synchronously from the spawn
+    /// cwd, so a poll tick firing before `pty_subscribe` runs would only be
+    /// reporting a state the frontend already has.
+    fn push_title(&self, cwd: String, program: Option<String>) {
+        if let Some(channel) = &self.channel {
+            let _ = channel.send(PtyEvent::Title { cwd, program });
+        }
+    }
 }
 
 struct PtySession {
@@ -62,14 +100,32 @@ struct PtySession {
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     shared: Arc<Mutex<Shared>>,
+    /// The shell's own pid, captured once at spawn. `None` on a pty backend
+    /// that can't report it, in which case the title poller simply skips
+    /// this session.
+    shell_pid: Option<u32>,
+    last_title: Arc<Mutex<Option<TitleSnapshot>>>,
 }
 
-#[derive(Default)]
 pub struct PtyManager {
-    sessions: Mutex<HashMap<String, PtySession>>,
+    sessions: Arc<Mutex<HashMap<String, PtySession>>>,
 }
 
 impl PtyManager {
+    /// Constructs a manager and starts its single shared title-polling
+    /// thread. Replaces the previous `#[derive(Default)]` because the
+    /// poller needs to be started exactly once, alongside the sessions map
+    /// it watches — a session added to the map later is simply picked up on
+    /// the poller's next tick, and one removed via `kill` is simply absent
+    /// from it, with no separate registration/cancellation needed.
+    pub fn new() -> Self {
+        let sessions: Arc<Mutex<HashMap<String, PtySession>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let poller_sessions = sessions.clone();
+        std::thread::spawn(move || Self::poll_titles_loop(poller_sessions));
+        Self { sessions }
+    }
+
     pub fn spawn(&self, cwd: String, cols: u16, rows: u16) -> Result<String, AppError> {
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -131,6 +187,8 @@ impl PtyManager {
             }
         });
 
+        let shell_pid = child.process_id();
+
         self.sessions.lock().unwrap().insert(
             terminal_id.clone(),
             PtySession {
@@ -138,6 +196,8 @@ impl PtyManager {
                 master: pair.master,
                 child,
                 shared,
+                shell_pid,
+                last_title: Arc::new(Mutex::new(None)),
             },
         );
 
@@ -206,13 +266,148 @@ impl PtyManager {
             let _ = session.child.kill();
         }
     }
+
+    /// Runs for the app's entire lifetime on its own thread, re-checking
+    /// every live session's cwd/foreground-process once per tick and
+    /// pushing a `Title` event wherever it has changed since the last one
+    /// reported for that session.
+    fn poll_titles_loop(sessions: Arc<Mutex<HashMap<String, PtySession>>>) {
+        let mut system = System::new();
+        loop {
+            std::thread::sleep(TITLE_POLL_INTERVAL);
+
+            // Snapshot id/shell-pid/channel/last-title for every live
+            // session, then drop the lock before touching the OS — a
+            // session's own spawn/write/resize/kill calls should never
+            // block on this scan.
+            let snapshots: Vec<SessionPollSnapshot> = {
+                let sessions = sessions.lock().unwrap();
+                sessions
+                    .iter()
+                    .filter_map(|(id, session)| {
+                        session.shell_pid.map(|pid| {
+                            (
+                                id.clone(),
+                                pid,
+                                session.shared.clone(),
+                                session.last_title.clone(),
+                            )
+                        })
+                    })
+                    .collect()
+            };
+
+            for (terminal_id, shell_pid, shared, last_title) in snapshots {
+                let Some(new_title) =
+                    Self::poll_one(&sessions, &terminal_id, shell_pid, &mut system)
+                else {
+                    continue;
+                };
+                let mut last = last_title.lock().unwrap();
+                if last.as_ref() != Some(&new_title) {
+                    shared
+                        .lock()
+                        .unwrap()
+                        .push_title(new_title.0.clone(), new_title.1.clone());
+                    *last = Some(new_title);
+                }
+            }
+        }
+    }
+
+    /// Resolves one session's current `(cwd, program)`, or `None` if the
+    /// session was killed since the snapshot, or its shell has (momentarily)
+    /// vanished from the process table.
+    fn poll_one(
+        sessions: &Mutex<HashMap<String, PtySession>>,
+        terminal_id: &str,
+        shell_pid: u32,
+        system: &mut System,
+    ) -> Option<TitleSnapshot> {
+        // Re-lock just long enough for `tcgetpgrp` (a single syscall on the
+        // pty's own fd) — the actual OS-inspection work below (targeted
+        // `sysinfo` refreshes) runs with no lock held at all, so it never
+        // blocks this session's own spawn/write/resize/kill calls.
+        let fg_pid = {
+            let sessions = sessions.lock().unwrap();
+            sessions.get(terminal_id)?.master.process_group_leader()
+        };
+
+        // A foreign foreground process is only "foreign" if its pid differs
+        // from the shell's own — a builtin (`cd`, a shell function) never
+        // forks, so `tcgetpgrp` correctly keeps reporting the shell's own
+        // pid for those.
+        let foreign_pid = fg_pid.map(|pid| pid as u32).filter(|&pid| pid != shell_pid);
+
+        let mut pids = vec![Pid::from_u32(shell_pid)];
+        if let Some(pid) = foreign_pid {
+            pids.push(Pid::from_u32(pid));
+        }
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&pids),
+            true,
+            ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always),
+        );
+
+        // Always read cwd from the shell's own pid, not the foreground
+        // program's — this keeps the folder segment live and correct even
+        // mid-command, and doesn't jump the tab's title to a directory a
+        // running program `chdir()`s into internally that the user never
+        // navigated to themselves.
+        let cwd = system
+            .process(Pid::from_u32(shell_pid))?
+            .cwd()?
+            .to_string_lossy()
+            .into_owned();
+
+        let program = foreign_pid
+            .and_then(|pid| system.process(Pid::from_u32(pid)))
+            .map(|process| process.name().to_string_lossy().into_owned());
+
+        Some((cwd, program))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
     use tauri::ipc::InvokeResponseBody;
+
+    /// Polls `condition` until it returns `true`, panicking with `message`
+    /// if it hasn't within `timeout` — used throughout instead of a fixed
+    /// sleep since the title poller's 1s tick means a fixed short sleep
+    /// would be flaky and a fixed long one would be needlessly slow.
+    fn wait_for(timeout: Duration, message: &str, mut condition: impl FnMut() -> bool) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if condition() {
+                return;
+            }
+            if Instant::now() > deadline {
+                panic!("{message}");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    type ReceivedTitles = Arc<Mutex<Vec<TitleSnapshot>>>;
+
+    fn title_events_channel() -> (Channel<PtyEvent>, ReceivedTitles) {
+        let titles: ReceivedTitles = Arc::new(Mutex::new(Vec::new()));
+        let titles_clone = titles.clone();
+        let channel = Channel::new(move |body| {
+            if let InvokeResponseBody::Json(json) = body {
+                if let Ok(PtyEvent::Title { cwd, program }) =
+                    serde_json::from_str::<PtyEvent>(&json)
+                {
+                    titles_clone.lock().unwrap().push((cwd, program));
+                }
+            }
+            Ok(())
+        });
+        (channel, titles)
+    }
 
     /// Spawns a real shell (no mocking — PTY line discipline, resizing, and
     /// EOF handling are exactly the kind of thing that's subtly wrong when
@@ -220,7 +415,7 @@ mod tests {
     /// `Channel`'s received output within a timeout.
     #[test]
     fn spawned_shell_echoes_written_command() {
-        let manager = PtyManager::default();
+        let manager = PtyManager::new();
         let dir = tempfile::tempdir().unwrap();
         let terminal_id = manager
             .spawn(dir.path().to_string_lossy().to_string(), 80, 24)
@@ -244,20 +439,129 @@ mod tests {
             .write(&terminal_id, "echo atrium-test-marker\n")
             .unwrap();
 
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            let seen = received.lock().unwrap().clone();
-            if String::from_utf8_lossy(&seen).contains("atrium-test-marker") {
-                break;
-            }
-            if Instant::now() > deadline {
-                panic!(
-                    "marker never appeared in pty output; got: {:?}",
-                    String::from_utf8_lossy(&seen)
-                );
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        wait_for(
+            Duration::from_secs(10),
+            "marker never appeared in pty output",
+            || String::from_utf8_lossy(&received.lock().unwrap()).contains("atrium-test-marker"),
+        );
+
+        manager.kill(&terminal_id).unwrap();
+    }
+
+    /// Proves the core of #152's fix: a real foreground program is detected
+    /// and named via OS-level process inspection alone, with no shell
+    /// cooperation (no OSC 133 "command started" marker involved at all),
+    /// and the report clears back to `None` once the program exits.
+    #[test]
+    fn foreground_program_reported_while_running_then_cleared_on_exit() {
+        let manager = PtyManager::new();
+        let dir = tempfile::tempdir().unwrap();
+        let terminal_id = manager
+            .spawn(dir.path().to_string_lossy().to_string(), 80, 24)
+            .unwrap();
+
+        let (channel, titles) = title_events_channel();
+        manager.subscribe(&terminal_id, channel).unwrap();
+
+        manager.write(&terminal_id, "sleep 5\n").unwrap();
+
+        wait_for(
+            Duration::from_secs(10),
+            "no Title event ever reported program: Some(\"sleep\") while it was running",
+            || {
+                titles
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(_, program)| program.as_deref() == Some("sleep"))
+            },
+        );
+
+        wait_for(
+            Duration::from_secs(10),
+            "no Title event reported program: None after the foreground process exited",
+            || {
+                titles
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .is_some_and(|(_, program)| program.is_none())
+            },
+        );
+
+        manager.kill(&terminal_id).unwrap();
+    }
+
+    /// Proves the cwd half of #152's fix: the reported cwd updates after a
+    /// plain `cd`, with nothing written to the pty by the shell itself (no
+    /// OSC 7) — the poller reads it independently via the shell's own pid.
+    #[test]
+    fn cwd_updates_after_cd_with_no_shell_cooperation() {
+        let manager = PtyManager::new();
+        let start_dir = tempfile::tempdir().unwrap();
+        let target_dir = tempfile::tempdir().unwrap();
+        let target_canonical = std::fs::canonicalize(target_dir.path()).unwrap();
+
+        let terminal_id = manager
+            .spawn(start_dir.path().to_string_lossy().to_string(), 80, 24)
+            .unwrap();
+
+        let (channel, titles) = title_events_channel();
+        manager.subscribe(&terminal_id, channel).unwrap();
+
+        manager
+            .write(
+                &terminal_id,
+                &format!("cd {}\n", target_dir.path().display()),
+            )
+            .unwrap();
+
+        wait_for(
+            Duration::from_secs(10),
+            "no Title event ever reported the post-cd cwd",
+            || {
+                titles.lock().unwrap().iter().any(|(cwd, _)| {
+                    std::fs::canonicalize(cwd)
+                        .map(|resolved| resolved == target_canonical)
+                        .unwrap_or(false)
+                })
+            },
+        );
+
+        manager.kill(&terminal_id).unwrap();
+    }
+
+    /// A poll tick that finds nothing changed since the last one must not
+    /// emit a redundant `Title` event.
+    #[test]
+    fn no_title_event_when_nothing_changed_since_last_tick() {
+        let manager = PtyManager::new();
+        let dir = tempfile::tempdir().unwrap();
+        let terminal_id = manager
+            .spawn(dir.path().to_string_lossy().to_string(), 80, 24)
+            .unwrap();
+
+        let (channel, titles) = title_events_channel();
+        manager.subscribe(&terminal_id, channel).unwrap();
+
+        // Let the poller observe the idle shell at least once — its first
+        // tick always reports the initial state, since `last_title` starts
+        // as `None`.
+        wait_for(
+            Duration::from_secs(10),
+            "no Title event ever arrived",
+            || !titles.lock().unwrap().is_empty(),
+        );
+        let count_after_first_tick = titles.lock().unwrap().len();
+
+        // Nothing changes for several more ticks; no further event should
+        // arrive.
+        std::thread::sleep(Duration::from_secs(3));
+        assert_eq!(
+            titles.lock().unwrap().len(),
+            count_after_first_tick,
+            "a Title event fired for an idle session with nothing changed"
+        );
 
         manager.kill(&terminal_id).unwrap();
     }
