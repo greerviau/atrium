@@ -8,6 +8,7 @@ import { settingsOverlay } from "../../src/lib/stores/settingsOverlay";
 import { setTheme, themeSelection } from "../../src/lib/stores/theme";
 import { terminalPosition } from "../../src/lib/stores/layout";
 import { zoom, zoomIn, DEFAULT_ZOOM } from "../../src/lib/stores/textSize";
+import { recents } from "../../src/lib/stores/recents";
 import * as commands from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
@@ -36,6 +37,7 @@ describe("SettingsDialog", () => {
     setTheme("auto");
     terminalPosition.set("bottom");
     zoom.set(DEFAULT_ZOOM);
+    recents.set([{ path: "/projects/foo", name: "foo", lastOpenedAt: 1 }]);
   });
 
   afterEach(() => {
@@ -175,7 +177,7 @@ describe("SettingsDialog", () => {
   });
 
   describe("recent projects", () => {
-    it("Clear Recent Projects calls workspaceClearRecents and shows a confirmation", async () => {
+    it("Clear Recent Projects calls workspaceClearRecents, shows a confirmation, and empties the shared recents store", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
@@ -185,9 +187,13 @@ describe("SettingsDialog", () => {
 
       expect(commands.workspaceClearRecents).toHaveBeenCalledOnce();
       expect(await screen.findByText("Cleared")).toBeTruthy();
+      // Proves the fix for the stale-welcome-screen bug: WelcomeScreen reads
+      // this same store, so it reflects the clear immediately with no
+      // remount required.
+      expect(get(recents)).toEqual([]);
     });
 
-    it("shows an error message if clearing fails", async () => {
+    it("shows an error message if clearing fails, leaving the shared recents store untouched", async () => {
       vi.mocked(commands.workspaceClearRecents).mockRejectedValueOnce(new Error("disk full"));
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
@@ -197,6 +203,7 @@ describe("SettingsDialog", () => {
       await flush();
 
       expect(await screen.findByText(/disk full/)).toBeTruthy();
+      expect(get(recents)).toHaveLength(1);
     });
   });
 });
