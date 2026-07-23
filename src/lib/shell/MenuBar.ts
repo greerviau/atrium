@@ -16,8 +16,9 @@ import { get } from "svelte/store";
  * the same `saveRequest` store an `EditorPane` would react to for a
  * synthetic Cmd+S; `menu:open-folder`, `menu:new-terminal-tab`, and
  * `menu:split-terminal` call the same functions their in-app buttons would;
- * `menu:find-in-files` opens the search overlay, guarded on a workspace
- * being open the same way `menu:save` is guarded on an active tab;
+ * `menu:find-in-files` opens the search overlay in content mode, guarded on
+ * a workspace being open the same way `menu:save` is guarded on an active
+ * tab; `menu:go-to-file` opens it in Files mode under the same guard;
  * `menu:settings` opens the settings dialog unconditionally, since it's
  * reachable whether or not a workspace is open;
  * `menu:toggle-explorer` and `menu:toggle-terminal` call the same
@@ -44,6 +45,11 @@ export async function initMenuBar(onNewTerminalTab: () => void, onSplitTerminal:
   await onMenuEvent("menu:find-in-files", () => {
     if (get(workspace).root) {
       openSearch();
+    }
+  });
+  await onMenuEvent("menu:go-to-file", () => {
+    if (get(workspace).root) {
+      openSearch("files");
     }
   });
   await onMenuEvent("menu:toggle-explorer", () => toggleExplorerVisible());

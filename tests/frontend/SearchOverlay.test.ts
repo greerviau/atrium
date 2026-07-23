@@ -7,10 +7,11 @@ import { searchOverlay } from "../../src/lib/search/searchOverlay";
 import { workspace } from "../../src/lib/stores/workspace";
 import * as commands from "../../src/lib/ipc/commands";
 import * as tabsStore from "../../src/lib/stores/tabs";
-import type { SearchResults } from "../../src/lib/ipc/commands";
+import type { SearchResults, FileSearchResults } from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
   searchWorkspace: vi.fn(),
+  findFiles: vi.fn(),
   isAppError: (value: unknown): value is { code: string; message: string } =>
     typeof value === "object" &&
     value !== null &&
@@ -40,8 +41,16 @@ function deferred<T>(): {
 }
 
 const PLACEHOLDER = "Search across the project…";
+const FILES_PLACEHOLDER = "Go to file…";
 
 function results(matches: SearchResults["matches"], truncated = false): SearchResults {
+  return { matches, truncated };
+}
+
+function fileResults(
+  matches: FileSearchResults["matches"],
+  truncated = false,
+): FileSearchResults {
   return { matches, truncated };
 }
 
@@ -49,7 +58,7 @@ describe("SearchOverlay", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
-    searchOverlay.set({ open: false });
+    searchOverlay.set({ open: false, mode: "content" });
     workspace.set({ id: "local", root: "/proj" });
   });
 
@@ -60,7 +69,7 @@ describe("SearchOverlay", () => {
 
   it("disables native browser autocomplete/spellcheck suggestions on the query input", async () => {
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -74,7 +83,7 @@ describe("SearchOverlay", () => {
     const { container } = render(SearchOverlay);
     expect(container.querySelector(".search-panel")).toBeNull();
 
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     expect(container.querySelector(".search-panel")).not.toBeNull();
@@ -83,7 +92,7 @@ describe("SearchOverlay", () => {
   it("debounces typing before calling searchWorkspace", async () => {
     vi.mocked(commands.searchWorkspace).mockResolvedValue(results([]));
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -105,7 +114,7 @@ describe("SearchOverlay", () => {
     vi.mocked(commands.searchWorkspace).mockReturnValueOnce(first.promise);
 
     const { container } = render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -128,7 +137,7 @@ describe("SearchOverlay", () => {
 
   it("does not show a loading spinner for a query below the minimum length", async () => {
     const { container } = render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -141,7 +150,7 @@ describe("SearchOverlay", () => {
 
   it("does not search below the minimum query length, and shows a hint instead", async () => {
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -162,7 +171,7 @@ describe("SearchOverlay", () => {
     vi.mocked(commands.searchWorkspace).mockReturnValueOnce(first.promise);
 
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -190,7 +199,7 @@ describe("SearchOverlay", () => {
   it("re-fires a query with updated options when a toggle changes", async () => {
     vi.mocked(commands.searchWorkspace).mockResolvedValue(results([]));
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -216,7 +225,7 @@ describe("SearchOverlay", () => {
       .mockReturnValueOnce(second.promise);
 
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -250,7 +259,7 @@ describe("SearchOverlay", () => {
       ]),
     );
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -272,7 +281,7 @@ describe("SearchOverlay", () => {
       ]),
     );
     const { container } = render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -296,7 +305,7 @@ describe("SearchOverlay", () => {
       ]),
     );
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -313,7 +322,7 @@ describe("SearchOverlay", () => {
 
   it("clicking the backdrop closes the overlay; clicking inside the panel does not", async () => {
     const { container } = render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const panel = container.querySelector(".search-panel")!;
@@ -333,7 +342,7 @@ describe("SearchOverlay", () => {
       message: "invalid regex: unterminated",
     });
     const { container } = render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -344,5 +353,125 @@ describe("SearchOverlay", () => {
 
     expect(await screen.findByText("invalid regex: unterminated")).toBeTruthy();
     expect(container.querySelector(".search-empty")).toBeNull();
+  });
+
+  it("clicking the Files tab switches mode and calls findFiles with the current query instead of searchWorkspace", async () => {
+    vi.mocked(commands.searchWorkspace).mockResolvedValue(results([]));
+    vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+
+    const input = await screen.findByPlaceholderText(PLACEHOLDER);
+    await fireEvent.input(input, { target: { value: "over" } });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(commands.searchWorkspace).toHaveBeenCalledTimes(1);
+
+    const filesTab = Array.from(container.querySelectorAll(".search-mode-tabs button")).find(
+      (el) => el.textContent?.trim() === "Files",
+    )!;
+    await fireEvent.click(filesTab);
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(commands.findFiles).toHaveBeenCalledWith("local", "over");
+    expect(get(searchOverlay).mode).toBe("files");
+    expect(await screen.findByPlaceholderText(FILES_PLACEHOLDER)).toBeTruthy();
+  });
+
+  it("searches in Files mode even with a query shorter than the minimum content-mode length", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+
+    const input = await screen.findByPlaceholderText(FILES_PLACEHOLDER);
+    await fireEvent.input(input, { target: { value: "ab" } });
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(commands.findFiles).toHaveBeenCalledWith("local", "ab");
+  });
+
+  it("fires a findFiles request for an empty query in Files mode (browsing behavior)", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([{ path: "/proj/a.txt", displayPath: "a.txt", score: 0, matchIndices: [] }]),
+    );
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(commands.findFiles).toHaveBeenCalledWith("local", "");
+    expect(await screen.findByText("a.txt")).toBeTruthy();
+  });
+
+  it("hides the case-sensitivity/regex toggles in Files mode", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+
+    expect(screen.queryByLabelText("Match case")).toBeNull();
+    expect(screen.queryByLabelText("Use regular expression")).toBeNull();
+  });
+
+  it("selecting a file result calls openFile with no selection argument and closes the overlay", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([
+        { path: "/proj/SearchOverlay.svelte", displayPath: "src/lib/search/SearchOverlay.svelte", score: 100, matchIndices: [0, 1] },
+      ]),
+    );
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("SearchOverlay.svelte", { exact: false });
+
+    const row = container.querySelector(".search-result-row");
+    expect(row).not.toBeNull();
+    await fireEvent.click(row!);
+    await tick();
+
+    expect(tabsStore.openFile).toHaveBeenCalledWith("/proj/SearchOverlay.svelte");
+    expect(get(searchOverlay).open).toBe(false);
+  });
+
+  it("discards a stale Files-mode response that resolves after a newer one", async () => {
+    const first = deferred<FileSearchResults>();
+    const second = deferred<FileSearchResults>();
+    vi.mocked(commands.findFiles).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+
+    const input = await screen.findByPlaceholderText(FILES_PLACEHOLDER);
+    await fireEvent.input(input, { target: { value: "foo" } });
+    await vi.advanceTimersByTimeAsync(150);
+    await fireEvent.input(input, { target: { value: "foobar" } });
+    await vi.advanceTimersByTimeAsync(150);
+
+    second.resolve(
+      fileResults([{ path: "/proj/foobar.txt", displayPath: "foobar.txt", score: 10, matchIndices: [] }]),
+    );
+    await tick();
+    first.resolve(
+      fileResults([{ path: "/proj/foo.txt", displayPath: "foo.txt", score: 10, matchIndices: [] }]),
+    );
+    await tick();
+
+    expect(await screen.findByText("foobar.txt")).toBeTruthy();
+    expect(screen.queryByText("foo.txt")).toBeNull();
+  });
+
+  it("openSearch(\"files\") sets the store's mode to files, and the component picks it up on open", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
+    render(SearchOverlay);
+
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+
+    expect(get(searchOverlay).mode).toBe("files");
+    expect(await screen.findByPlaceholderText(FILES_PLACEHOLDER)).toBeTruthy();
   });
 });

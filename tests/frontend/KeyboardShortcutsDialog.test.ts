@@ -76,6 +76,7 @@ describe("KeyboardShortcutsDialog", () => {
       "Save",
       "New Terminal Tab",
       "Find in Files",
+      "Go to File",
       "Toggle File Explorer",
       "Toggle Terminal",
       "Split Terminal",

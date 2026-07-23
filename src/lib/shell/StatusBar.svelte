@@ -90,7 +90,7 @@
       </button>
       <button
         class="status-btn"
-        onclick={openSearch}
+        onclick={() => openSearch()}
         aria-label={`Search (${SHORTCUT_LABELS.findInFiles})`}
         use:tooltip={{ label: "Search", shortcut: SHORTCUT_LABELS.findInFiles }}
       >

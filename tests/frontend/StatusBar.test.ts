@@ -115,13 +115,19 @@ describe("StatusBar", () => {
     expect(screen.getByText("Ln 6, Col 1 (3 lines, 40 selected)")).toBeTruthy();
   });
 
-  it("clicking the search button calls openSearch", async () => {
+  it("clicking the search button calls openSearch with no arguments (content mode), not the click MouseEvent", async () => {
     const { openSearch } = await import("../../src/lib/search/searchOverlay");
     render(StatusBar);
 
     await fireEvent.click(screen.getByLabelText("Search (⌘⇧F)"));
 
+    // Regression test for the `onclick={openSearch}` bare-reference bug:
+    // a bare reference forwards the native MouseEvent as `openSearch`'s
+    // first argument, which is neither "content" nor "files" and would
+    // fail to typecheck as `SearchMode`. `onclick={() => openSearch()}`
+    // must call it with zero arguments so the default ("content") applies.
     expect(openSearch).toHaveBeenCalledOnce();
+    expect(openSearch).toHaveBeenCalledWith();
   });
 
   it("clicking the settings button calls openSettings", async () => {

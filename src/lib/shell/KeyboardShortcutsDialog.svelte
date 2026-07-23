@@ -28,7 +28,13 @@
         { label: "New Terminal Tab", keys: "⌘T" },
       ],
     },
-    { title: "Edit", rows: [{ label: "Find in Files", keys: SHORTCUT_LABELS.findInFiles }] },
+    {
+      title: "Edit",
+      rows: [
+        { label: "Find in Files", keys: SHORTCUT_LABELS.findInFiles },
+        { label: "Go to File", keys: SHORTCUT_LABELS.goToFile },
+      ],
+    },
     {
       title: "View",
       rows: [

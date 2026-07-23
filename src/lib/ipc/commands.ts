@@ -153,6 +153,22 @@ export function searchWorkspace(
   return invoke("search_workspace", { workspaceId, query, options });
 }
 
+export interface FileMatch {
+  path: string;
+  displayPath: string;
+  score: number;
+  matchIndices: number[];
+}
+
+export interface FileSearchResults {
+  matches: FileMatch[];
+  truncated: boolean;
+}
+
+export function findFiles(workspaceId: string, query: string): Promise<FileSearchResults> {
+  return invoke("find_files", { workspaceId, query });
+}
+
 export function ptySpawn(cwd: string, cols: number, rows: number): Promise<string> {
   return invoke("pty_spawn", { cwd, cols, rows });
 }

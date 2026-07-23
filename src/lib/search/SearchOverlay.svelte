@@ -1,25 +1,31 @@
 <script lang="ts">
-  import { searchOverlay, closeSearch } from "./searchOverlay";
+  import { searchOverlay, closeSearch, openSearch, type SearchMode } from "./searchOverlay";
   import {
     searchWorkspace,
+    findFiles,
     isAppError,
     localWorkspaceId,
     type SearchMatch,
+    type FileMatch,
   } from "../ipc/commands";
   import { openFile } from "../stores/tabs";
   import { workspace } from "../stores/workspace";
   import { tooltip } from "../ui/tooltip";
 
   const DEBOUNCE_MS = 150;
-  // Below this, a query is too low-selectivity to be worth a workspace-wide
-  // search (a 1-2 character query matches almost everything in most
-  // projects) and firing one just produces slow, throwaway results.
+  // Below this, a content-search query is too low-selectivity to be worth a
+  // workspace-wide search (a 1-2 character query matches almost everything
+  // in most projects) and firing one just produces slow, throwaway results.
+  // Files mode has no equivalent gate — an empty/short query there is a
+  // legitimate "browse all files" state, not a too-low-selectivity query.
   const MIN_QUERY_LENGTH = 3;
 
+  let mode = $state<SearchMode>("content");
   let query = $state("");
   let caseSensitive = $state(false);
   let regexMode = $state(false);
   let results = $state<SearchMatch[]>([]);
+  let fileResults = $state<FileMatch[]>([]);
   let truncated = $state(false);
   let errorMessage = $state<string | null>(null);
   let hasSearched = $state(false);
@@ -29,13 +35,15 @@
   let inputEl: HTMLInputElement | undefined = $state();
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   let requestId = 0;
-  let wasOpen = false;
+  let previousOpen = false;
+  let previousMode: SearchMode | undefined;
 
   function resetState(): void {
     query = "";
     caseSensitive = false;
     regexMode = false;
     results = [];
+    fileResults = [];
     truncated = false;
     errorMessage = null;
     hasSearched = false;
@@ -44,95 +52,139 @@
     requestId += 1;
   }
 
-  // Opening from closed resets every field (section 4.4: toggles, and by
-  // extension the rest of the transient UI state, default fresh each time);
-  // the freshly (re)created `<input autofocus>` below picks up focus on its
-  // own. Pressing the shortcut again while already open does not reset —
-  // it only refocuses and selects the existing query text, matching VS
-  // Code's own Ctrl/Cmd+Shift+F behavior, so a second press doesn't wipe
-  // out what the user already typed.
+  // One effect owns every transition of the store's `open`/`mode` pair, so
+  // the four cases below are mutually exclusive and evaluated in one
+  // deterministic place — no second effect racing this one over the same
+  // state.
   $effect(() => {
     const isOpen = $searchOverlay.open;
-    if (isOpen) {
-      if (!wasOpen) {
-        resetState();
-      } else {
-        inputEl?.focus();
-        inputEl?.select();
-      }
-    } else if (wasOpen && debounceTimer) {
+    const storeMode = $searchOverlay.mode;
+
+    if (isOpen && !previousOpen) {
+      // Closed -> open: fresh start, adopting whichever mode this
+      // openSearch(mode) call requested. The freshly (re)created
+      // <input autofocus> picks up focus on its own.
+      resetState();
+      mode = storeMode;
+    } else if (isOpen && previousOpen && storeMode !== previousMode) {
+      // Already open, openSearch(otherMode) was called — the other mode's
+      // shortcut, menu item, or in-panel tab (the tab strip below calls
+      // openSearch directly, the same path as the shortcuts): switch mode
+      // in place, keep the typed query, refocus/select like a re-press.
+      mode = storeMode;
+      inputEl?.focus();
+      inputEl?.select();
+    } else if (isOpen && previousOpen && storeMode === previousMode) {
+      // Already open, openSearch(sameMode) was called again — the same
+      // mode's shortcut, menu item, or already-active tab: refocus and
+      // select the existing query text, matching VS Code's own
+      // Ctrl/Cmd+Shift+F behavior, so a second press doesn't wipe out what
+      // the user already typed.
+      inputEl?.focus();
+      inputEl?.select();
+    } else if (!isOpen && previousOpen && debounceTimer) {
       clearTimeout(debounceTimer);
     }
-    wasOpen = isOpen;
+
+    previousOpen = isOpen;
+    previousMode = storeMode;
   });
 
   async function runSearch(myRequestId: number): Promise<void> {
     const q = query;
-    if (q === "" || q.length < MIN_QUERY_LENGTH) {
-      results = [];
-      truncated = false;
-      errorMessage = null;
-      hasSearched = false;
-      selectedIndex = 0;
-      return;
-    }
-    try {
-      const response = await searchWorkspace(localWorkspaceId(), q, {
-        caseSensitive,
-        regex: regexMode,
-      });
-      if (myRequestId !== requestId) return; // superseded by a newer query
-      results = response.matches;
-      truncated = response.truncated;
-      errorMessage = null;
-      hasSearched = true;
-      selectedIndex = 0;
-      isSearching = false;
-    } catch (err) {
-      if (myRequestId !== requestId) return;
-      if (isAppError(err) && err.code === "INVALID_REGEX") {
-        errorMessage = err.message;
-      } else {
-        console.error("atrium: search failed", err);
+    if (mode === "content") {
+      if (q === "" || q.length < MIN_QUERY_LENGTH) {
+        results = [];
+        truncated = false;
         errorMessage = null;
+        hasSearched = false;
+        selectedIndex = 0;
+        return;
       }
-      results = [];
-      truncated = false;
-      hasSearched = true;
-      isSearching = false;
+      try {
+        const response = await searchWorkspace(localWorkspaceId(), q, {
+          caseSensitive,
+          regex: regexMode,
+        });
+        if (myRequestId !== requestId) return; // superseded by a newer query
+        results = response.matches;
+        truncated = response.truncated;
+        errorMessage = null;
+        hasSearched = true;
+        selectedIndex = 0;
+        isSearching = false;
+      } catch (err) {
+        if (myRequestId !== requestId) return;
+        if (isAppError(err) && err.code === "INVALID_REGEX") {
+          errorMessage = err.message;
+        } else {
+          console.error("atrium: search failed", err);
+          errorMessage = null;
+        }
+        results = [];
+        truncated = false;
+        hasSearched = true;
+        isSearching = false;
+      }
+    } else {
+      try {
+        const response = await findFiles(localWorkspaceId(), q);
+        if (myRequestId !== requestId) return; // superseded by a newer query
+        fileResults = response.matches;
+        truncated = response.truncated;
+        errorMessage = null;
+        hasSearched = true;
+        selectedIndex = 0;
+        isSearching = false;
+      } catch (err) {
+        if (myRequestId !== requestId) return;
+        console.error("atrium: find files failed", err);
+        fileResults = [];
+        truncated = false;
+        errorMessage = null;
+        hasSearched = true;
+        isSearching = false;
+      }
     }
   }
 
-  // Every keystroke (or toggle change) bumps `requestId` immediately, not
-  // just when a new backend call actually fires. That's what makes a
+  // Every keystroke (or toggle/mode change) bumps `requestId` immediately,
+  // not just when a new backend call actually fires. That's what makes a
   // still-running search's response get ignored the instant it's
   // superseded — including when the query is cleared or shortened below
   // `MIN_QUERY_LENGTH` before that response ever arrives, which previously
   // let a stale response repopulate the results list after the user had
   // already moved on. The backend call itself stays debounced by
   // `DEBOUNCE_MS`; only the invalidation is immediate. `LocalWorkspace::search`
-  // (src-tauri) mirrors this with its own generation counter, so a
-  // superseded search is also abandoned mid-walk on the backend instead of
-  // running to completion for a result nobody will use.
+  // / `LocalWorkspace::find_files` (src-tauri) mirror this with their own
+  // (independent) generation counters, so a superseded search is also
+  // abandoned mid-walk on the backend instead of running to completion for
+  // a result nobody will use.
   //
   // `isSearching` turns on right here — covering the debounce wait itself,
   // not just the backend round trip — so the loading indicator is visible
   // from the moment a qualifying keystroke lands, since that wait is exactly
   // what otherwise looks like nothing is happening. It turns off in
   // `runSearch` once the (non-superseded) result settles, or immediately
-  // here if the query no longer qualifies for a search at all.
+  // here if a content-mode query no longer qualifies for a search at all.
+  // Files mode has no such disqualifying length, so it's always "searching"
+  // once the debounce fires.
   $effect(() => {
     void query;
     void caseSensitive;
     void regexMode;
+    void mode;
     requestId += 1;
     const myRequestId = requestId;
-    isSearching = query.length >= MIN_QUERY_LENGTH;
+    isSearching = mode === "content" ? query.length >= MIN_QUERY_LENGTH : true;
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => void runSearch(myRequestId), DEBOUNCE_MS);
   });
 
-  let belowMinLength = $derived(query.length > 0 && query.length < MIN_QUERY_LENGTH);
+  let belowMinLength = $derived(
+    mode === "content" && query.length > 0 && query.length < MIN_QUERY_LENGTH,
+  );
+  let resultCount = $derived(mode === "content" ? results.length : fileResults.length);
 
   interface ResultGroup {
     path: string;
@@ -159,23 +211,63 @@
     return path.startsWith(prefix) ? path.slice(prefix.length) : path;
   }
 
+  interface HighlightSegment {
+    text: string;
+    matched: boolean;
+  }
+
+  // `Array.from(displayPath)`, not `displayPath[i]`/`.slice()`: splits by
+  // Unicode code point so array indices line up with the char (Unicode
+  // scalar) indices the backend's `match_indices` are computed in, which
+  // would otherwise be off for any path containing a non-BMP character (a
+  // raw UTF-16 index into `displayPath` can split a surrogate pair). Walks
+  // the code-point array once, coalescing adjacent matched indices into one
+  // `{ text, matched: true }` segment so a contiguous run renders as a
+  // single <mark>, not one per character.
+  function highlightSegments(displayPath: string, indices: number[]): HighlightSegment[] {
+    const chars = Array.from(displayPath);
+    const matched = new Set(indices);
+    const segments: HighlightSegment[] = [];
+    let current = "";
+    let currentMatched = false;
+    for (let i = 0; i < chars.length; i++) {
+      const isMatched = matched.has(i);
+      if (current !== "" && isMatched !== currentMatched) {
+        segments.push({ text: current, matched: currentMatched });
+        current = "";
+      }
+      current += chars[i];
+      currentMatched = isMatched;
+    }
+    if (current !== "") {
+      segments.push({ text: current, matched: currentMatched });
+    }
+    return segments;
+  }
+
   async function selectResult(index: number): Promise<void> {
-    const match = results[index];
-    if (!match) return;
-    await openFile(match.path, { line: match.line, col: match.column });
+    if (mode === "content") {
+      const match = results[index];
+      if (!match) return;
+      await openFile(match.path, { line: match.line, col: match.column });
+    } else {
+      const match = fileResults[index];
+      if (!match) return;
+      await openFile(match.path);
+    }
     closeSearch();
   }
 
   function onInputKeydown(event: KeyboardEvent): void {
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      if (results.length > 0) {
-        selectedIndex = (selectedIndex + 1) % results.length;
+      if (resultCount > 0) {
+        selectedIndex = (selectedIndex + 1) % resultCount;
       }
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      if (results.length > 0) {
-        selectedIndex = (selectedIndex - 1 + results.length) % results.length;
+      if (resultCount > 0) {
+        selectedIndex = (selectedIndex - 1 + resultCount) % resultCount;
       }
     } else if (event.key === "Enter") {
       event.preventDefault();
@@ -199,13 +291,22 @@
       aria-label="Find in Files"
       tabindex="-1"
     >
+      <div class="search-mode-tabs">
+        <button class="search-toggle" class:active={mode === "content"} onclick={() => openSearch("content")}>
+          Content
+        </button>
+        <button class="search-toggle" class:active={mode === "files"} onclick={() => openSearch("files")}>
+          Files
+        </button>
+      </div>
+
       <div class="search-input-row">
         <!-- svelte-ignore a11y_autofocus -->
         <input
           bind:this={inputEl}
           bind:value={query}
           onkeydown={onInputKeydown}
-          placeholder="Search across the project…"
+          placeholder={mode === "content" ? "Search across the project…" : "Go to file…"}
           autofocus
           autocomplete="off"
           autocorrect="off"
@@ -215,26 +316,28 @@
         {#if isSearching}
           <span class="search-spinner" aria-hidden="true"></span>
         {/if}
-        <button
-          class="search-toggle"
-          class:active={caseSensitive}
-          onclick={() => (caseSensitive = !caseSensitive)}
-          aria-label="Match case"
-          aria-pressed={caseSensitive}
-          use:tooltip={{ label: "Match case" }}
-        >
-          Aa
-        </button>
-        <button
-          class="search-toggle"
-          class:active={regexMode}
-          onclick={() => (regexMode = !regexMode)}
-          aria-label="Use regular expression"
-          aria-pressed={regexMode}
-          use:tooltip={{ label: "Use regular expression" }}
-        >
-          .*
-        </button>
+        {#if mode === "content"}
+          <button
+            class="search-toggle"
+            class:active={caseSensitive}
+            onclick={() => (caseSensitive = !caseSensitive)}
+            aria-label="Match case"
+            aria-pressed={caseSensitive}
+            use:tooltip={{ label: "Match case" }}
+          >
+            Aa
+          </button>
+          <button
+            class="search-toggle"
+            class:active={regexMode}
+            onclick={() => (regexMode = !regexMode)}
+            aria-label="Use regular expression"
+            aria-pressed={regexMode}
+            use:tooltip={{ label: "Use regular expression" }}
+          >
+            .*
+          </button>
+        {/if}
       </div>
 
       {#if errorMessage}
@@ -242,41 +345,70 @@
       {:else if belowMinLength}
         <div class="search-empty">Type at least {MIN_QUERY_LENGTH} characters to search</div>
       {:else if hasSearched}
-        {#if results.length === 0}
-          <div class="search-empty">No results</div>
+        {#if mode === "content"}
+          {#if results.length === 0}
+            <div class="search-empty">No results</div>
+          {:else}
+            <div class="search-status">
+              {results.length} result{results.length === 1 ? "" : "s"} in {groups.length}
+              file{groups.length === 1 ? "" : "s"}{truncated
+                ? " — results truncated, refine your search"
+                : ""}
+            </div>
+            <div class="search-results" role="listbox">
+              {#each groups as group (group.path)}
+                <div class="search-group">
+                  <div class="search-group-header">{relativePath(group.path)}</div>
+                  {#each group.matches as match (match.index)}
+                    <!-- svelte-ignore a11y_click_events_have_key_events -->
+                    <div
+                      class="search-result-row"
+                      class:selected={match.index === selectedIndex}
+                      onclick={() => void selectResult(match.index)}
+                      role="option"
+                      tabindex="-1"
+                      aria-selected={match.index === selectedIndex}
+                    >
+                      <span class="search-result-line">{match.line}</span>
+                      <span class="search-result-text"
+                        >{match.lineText.slice(
+                          0,
+                          match.matchStart,
+                        )}<mark>{match.lineText.slice(
+                          match.matchStart,
+                          match.matchEnd,
+                        )}</mark>{match.lineText.slice(match.matchEnd)}</span
+                      >
+                    </div>
+                  {/each}
+                </div>
+              {/each}
+            </div>
+          {/if}
+        {:else if fileResults.length === 0}
+          <div class="search-empty">No matching files</div>
         {:else}
           <div class="search-status">
-            {results.length} result{results.length === 1 ? "" : "s"} in {groups.length}
-            file{groups.length === 1 ? "" : "s"}{truncated
+            {fileResults.length} file{fileResults.length === 1 ? "" : "s"}{truncated
               ? " — results truncated, refine your search"
               : ""}
           </div>
           <div class="search-results" role="listbox">
-            {#each groups as group (group.path)}
-              <div class="search-group">
-                <div class="search-group-header">{relativePath(group.path)}</div>
-                {#each group.matches as match (match.index)}
-                  <!-- svelte-ignore a11y_click_events_have_key_events -->
-                  <div
-                    class="search-result-row"
-                    class:selected={match.index === selectedIndex}
-                    onclick={() => void selectResult(match.index)}
-                    role="option"
-                    tabindex="-1"
-                    aria-selected={match.index === selectedIndex}
-                  >
-                    <span class="search-result-line">{match.line}</span>
-                    <span class="search-result-text"
-                      >{match.lineText.slice(
-                        0,
-                        match.matchStart,
-                      )}<mark>{match.lineText.slice(
-                        match.matchStart,
-                        match.matchEnd,
-                      )}</mark>{match.lineText.slice(match.matchEnd)}</span
-                    >
-                  </div>
-                {/each}
+            {#each fileResults as match, index (match.path)}
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <div
+                class="search-result-row"
+                class:selected={index === selectedIndex}
+                onclick={() => void selectResult(index)}
+                role="option"
+                tabindex="-1"
+                aria-selected={index === selectedIndex}
+              >
+                <span class="search-result-text">
+                  {#each highlightSegments(match.displayPath, match.matchIndices) as segment}
+                    {#if segment.matched}<mark>{segment.text}</mark>{:else}{segment.text}{/if}
+                  {/each}
+                </span>
               </div>
             {/each}
           </div>
@@ -308,6 +440,12 @@
     flex-direction: column;
     overflow: hidden;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+  .search-mode-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 10px 10px 0;
+    flex-shrink: 0;
   }
   .search-input-row {
     display: flex;

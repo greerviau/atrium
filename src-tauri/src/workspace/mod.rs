@@ -66,6 +66,32 @@ pub struct SearchResults {
     pub truncated: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileMatch {
+    /// Absolute path, same convention as `SearchMatch.path` / `DirEntry.path`;
+    /// passed to `openFile` as-is.
+    pub path: String,
+    /// Workspace-root-relative path — the exact string fuzzy-matched against
+    /// and that `match_indices` indexes into, so the frontend never has to
+    /// re-derive it itself and risk misaligning highlights.
+    pub display_path: String,
+    /// Fuzzy-match score, descending = better; opaque to the frontend. `0`
+    /// and `match_indices: []` for an unranked empty-query listing.
+    pub score: i64,
+    /// Char (Unicode scalar) indices into `display_path` that matched the
+    /// query, for highlighting.
+    pub match_indices: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileSearchResults {
+    pub matches: Vec<FileMatch>,
+    /// True if the result cap or walk deadline was hit.
+    pub truncated: bool,
+}
+
 /// OS/VCS bookkeeping entries hidden from every `Workspace::list_dir`
 /// listing by default, matching VS Code's own default `files.exclude`.
 /// Deliberately narrow: build-artifact directories like `node_modules` or
@@ -120,6 +146,13 @@ pub trait Workspace: Send + Sync {
     /// `local::search_root`'s doc comment); `SearchResults.truncated`
     /// reports whether any of those limits was hit.
     async fn search(&self, query: &str, options: SearchOptions) -> Result<SearchResults, AppError>;
+    /// Fuzzy-matches `query` against every file path under the workspace root
+    /// (gitignore-aware, same traversal defaults as `search`), ranked by
+    /// match quality. An empty `query` lists files unranked, sorted by path,
+    /// up to the same cap — letting Files mode double as a plain file
+    /// browser when opened with nothing typed yet, the way telescope's
+    /// `find_files` does.
+    async fn find_files(&self, query: &str) -> Result<FileSearchResults, AppError>;
     /// The workspace root, used by `fs_resolve_candidates`'s third resolution
     /// step (relative to the workspace root).
     fn root(&self) -> &str;
