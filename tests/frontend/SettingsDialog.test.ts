@@ -8,6 +8,7 @@ import { settingsOverlay } from "../../src/lib/stores/settingsOverlay";
 import { setTheme, themeSelection } from "../../src/lib/stores/theme";
 import { terminalPosition } from "../../src/lib/stores/layout";
 import { zoom, zoomIn, DEFAULT_ZOOM } from "../../src/lib/stores/textSize";
+import { minimapEnabled, DEFAULT_MINIMAP_ENABLED } from "../../src/lib/stores/minimapEnabled";
 import { recents } from "../../src/lib/stores/recents";
 import * as commands from "../../src/lib/ipc/commands";
 
@@ -42,6 +43,7 @@ describe("SettingsDialog", () => {
     setTheme("auto");
     terminalPosition.set("bottom");
     zoom.set(DEFAULT_ZOOM);
+    minimapEnabled.set(DEFAULT_MINIMAP_ENABLED);
     recents.set([{ path: "/projects/foo", name: "foo", lastOpenedAt: 1 }]);
   });
 
@@ -356,6 +358,43 @@ describe("SettingsDialog", () => {
       await fireEvent.click(screen.getByText("Reset"));
 
       expect(get(zoom)).toBe(DEFAULT_ZOOM);
+    });
+  });
+
+  describe("minimap", () => {
+    it("shows the checkbox checked by default (on by default)", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      expect(screen.getByLabelText("Show minimap")).toHaveProperty("checked", true);
+    });
+
+    it("unchecking the toggle turns the setting off, reflected in the shared store", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      await fireEvent.click(screen.getByLabelText("Show minimap"));
+      await flush();
+
+      expect(get(minimapEnabled)).toBe(false);
+      expect(screen.getByLabelText("Show minimap")).toHaveProperty("checked", false);
+    });
+
+    it("re-checking the toggle turns the setting back on", async () => {
+      minimapEnabled.set(false);
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      await fireEvent.click(screen.getByLabelText("Show minimap"));
+      await flush();
+
+      expect(get(minimapEnabled)).toBe(true);
     });
   });
 

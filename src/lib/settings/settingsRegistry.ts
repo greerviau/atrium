@@ -51,6 +51,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ["zoom", "text size", "font size", "editor"],
   },
   {
+    id: "minimap",
+    categoryId: "editor",
+    title: "Minimap",
+    keywords: ["minimap", "map", "overview", "navigation", "editor"],
+  },
+  {
     id: "dock-position",
     categoryId: "terminal",
     title: "Dock Position",

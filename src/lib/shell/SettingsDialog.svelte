@@ -5,6 +5,7 @@
   import { themeSelection, setTheme } from "../stores/theme";
   import { terminalPosition, setTerminalPosition, type TerminalPosition } from "../stores/layout";
   import { zoom, zoomIn, zoomOut, resetZoom, MIN_ZOOM, MAX_ZOOM } from "../stores/textSize";
+  import { minimapEnabled, setMinimapEnabled } from "../stores/minimapEnabled";
   import { clearRecents } from "../stores/recents";
   import { isAppError } from "../ipc/commands";
   import SettingsSidebar from "../settings/SettingsSidebar.svelte";
@@ -242,6 +243,25 @@
             </SettingsSection>
           {/if}
 
+          {#if selectedCategory === "editor" && isSectionVisible("minimap")}
+            <SettingsSection
+              title="Minimap"
+              expanded={isSectionExpanded("minimap")}
+              onToggle={() => toggleSection("minimap")}
+            >
+              <div class="settings-row">
+                <span class="settings-label">Show minimap</span>
+                <input
+                  type="checkbox"
+                  class="settings-checkbox"
+                  checked={$minimapEnabled}
+                  onchange={(e) => setMinimapEnabled(e.currentTarget.checked)}
+                  aria-label="Show minimap"
+                />
+              </div>
+            </SettingsSection>
+          {/if}
+
           {#if selectedCategory === "terminal" && isSectionVisible("dock-position")}
             <SettingsSection
               title="Dock Position"
@@ -371,6 +391,12 @@
     min-width: 3.5em;
     text-align: center;
     font-variant-numeric: tabular-nums;
+  }
+  .settings-checkbox {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--atrium-accent);
+    cursor: pointer;
   }
   .settings-clear-recents {
     display: flex;
