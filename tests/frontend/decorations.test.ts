@@ -12,7 +12,14 @@ import { markdownSourceExtensions } from "../../src/lib/editor/markdown/livePrev
 const markdownCss = readFileSync(resolve(__dirname, "../../src/styles/markdown.css"), "utf-8");
 
 function ruleBodyFor(selector: string): string {
-  const match = markdownCss.match(new RegExp(`${selector.replace(/\./g, "\\.")}\\s*{([^}]*)}`));
+  // Escapes every regex metacharacter the selector could contain, not just
+  // `.` — a compound selector with `:not(...)` groups has unescaped `(`/`)`
+  // that would otherwise be read as regex grouping instead of literal
+  // parentheses, silently failing to match a rule that's actually present.
+  // Whitespace in the selector is matched flexibly (`\s+`) so a descendant
+  // selector wrapped across lines in the source CSS still matches.
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  const match = markdownCss.match(new RegExp(`${escaped}\\s*{([^}]*)}`));
   if (!match) throw new Error(`no rule found for selector ${selector}`);
   return match[1];
 }
@@ -1862,5 +1869,27 @@ describe("markdown.css: code block width cap", () => {
   it(".cm-code-block's padding beats CodeMirror's own .cm-line padding via !important", () => {
     const body = ruleBodyFor(".cm-code-block");
     expect(body).toMatch(/padding:\s*0\s*0\.6em\s*!important/);
+  });
+});
+
+describe("markdown.css: prose line wrap width (issue #147)", () => {
+  // `.cm-content` has to stay exactly as wide as its widest line for
+  // CodeMirror's `inView`/viewport tracking to work (the #146-revert
+  // incident), so a wide code-block line dragging `.cm-content` out to its
+  // own width can't be fixed by constraining `.cm-content` directly. Instead
+  // `.cm-scroller` becomes a size container and prose lines (only) are
+  // capped to its inline size via `cqw`, independent of how wide the
+  // scrollable content grows.
+  it(".cm-scroller establishes an inline-size container", () => {
+    expect(ruleBodyFor(".cm-scroller")).toMatch(/container-type:\s*inline-size/);
+  });
+
+  it("caps wrapping prose lines to the container's width and pins them via sticky positioning", () => {
+    const body = ruleBodyFor(
+      ".cm-content.cm-lineWrapping .cm-line:not(.cm-code-block):not(.cm-table-row):not(.cm-table-header-row):not(.cm-table-delimiter-line)",
+    );
+    expect(body).toMatch(/position:\s*sticky/);
+    expect(body).toMatch(/left:\s*0/);
+    expect(body).toMatch(/width:\s*100cqw/);
   });
 });
