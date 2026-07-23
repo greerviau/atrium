@@ -11,6 +11,8 @@
   } from "../stores/layout";
   import { openSearch } from "../search/searchOverlay";
   import { openSettings } from "../stores/settingsOverlay";
+  import { tooltip } from "../ui/tooltip";
+  import { SHORTCUT_LABELS } from "./shortcutLabels";
 
   const activeTab = $derived($tabsState.tabs.find((t) => t.path === $tabsState.activeTabPath));
 
@@ -71,8 +73,8 @@
         class:active={$explorerVisible}
         onclick={toggleExplorerVisible}
         aria-pressed={$explorerVisible}
-        aria-label="Toggle Explorer (Cmd/Ctrl+B)"
-        title="Toggle Explorer (Cmd/Ctrl+B)"
+        aria-label={`Toggle Explorer (${SHORTCUT_LABELS.toggleExplorer})`}
+        use:tooltip={{ label: "Toggle Explorer", shortcut: SHORTCUT_LABELS.toggleExplorer }}
       >
         {@render explorerIcon()}
       </button>
@@ -81,15 +83,25 @@
         class:active={$terminalVisible}
         onclick={toggleTerminalVisible}
         aria-pressed={$terminalVisible}
-        aria-label="Toggle Terminal (Cmd/Ctrl+R)"
-        title="Toggle Terminal (Cmd/Ctrl+R)"
+        aria-label={`Toggle Terminal (${SHORTCUT_LABELS.toggleTerminal})`}
+        use:tooltip={{ label: "Toggle Terminal", shortcut: SHORTCUT_LABELS.toggleTerminal }}
       >
         {@render terminalIcon()}
       </button>
-      <button class="status-btn" onclick={openSearch} aria-label="Search (Cmd/Ctrl+Shift+F)" title="Search (Cmd/Ctrl+Shift+F)">
+      <button
+        class="status-btn"
+        onclick={openSearch}
+        aria-label={`Search (${SHORTCUT_LABELS.findInFiles})`}
+        use:tooltip={{ label: "Search", shortcut: SHORTCUT_LABELS.findInFiles }}
+      >
         {@render searchIcon()}
       </button>
-      <button class="status-btn" onclick={openSettings} aria-label="Settings (Cmd/Ctrl+,)" title="Settings (Cmd/Ctrl+,)">
+      <button
+        class="status-btn"
+        onclick={openSettings}
+        aria-label={`Settings (${SHORTCUT_LABELS.settings})`}
+        use:tooltip={{ label: "Settings", shortcut: SHORTCUT_LABELS.settings }}
+      >
         {@render settingsIcon()}
       </button>
     </div>

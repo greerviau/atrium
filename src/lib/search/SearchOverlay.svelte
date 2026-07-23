@@ -8,6 +8,7 @@
   } from "../ipc/commands";
   import { openFile } from "../stores/tabs";
   import { workspace } from "../stores/workspace";
+  import { tooltip } from "../ui/tooltip";
 
   const DEBOUNCE_MS = 150;
   // Below this, a query is too low-selectivity to be worth a workspace-wide
@@ -220,7 +221,7 @@
           onclick={() => (caseSensitive = !caseSensitive)}
           aria-label="Match case"
           aria-pressed={caseSensitive}
-          title="Match case"
+          use:tooltip={{ label: "Match case" }}
         >
           Aa
         </button>
@@ -230,7 +231,7 @@
           onclick={() => (regexMode = !regexMode)}
           aria-label="Use regular expression"
           aria-pressed={regexMode}
-          title="Use regular expression"
+          use:tooltip={{ label: "Use regular expression" }}
         >
           .*
         </button>

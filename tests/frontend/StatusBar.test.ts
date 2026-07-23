@@ -55,6 +55,7 @@ describe("StatusBar", () => {
 
   afterEach(() => {
     cleanup();
+    document.querySelectorAll(".atrium-tooltip").forEach((el) => el.remove());
   });
 
   it("does not render at all with no workspace open", () => {
@@ -118,7 +119,7 @@ describe("StatusBar", () => {
     const { openSearch } = await import("../../src/lib/search/searchOverlay");
     render(StatusBar);
 
-    await fireEvent.click(screen.getByLabelText("Search (Cmd/Ctrl+Shift+F)"));
+    await fireEvent.click(screen.getByLabelText("Search (⌘⇧F)"));
 
     expect(openSearch).toHaveBeenCalledOnce();
   });
@@ -127,7 +128,7 @@ describe("StatusBar", () => {
     const { openSettings } = await import("../../src/lib/stores/settingsOverlay");
     render(StatusBar);
 
-    await fireEvent.click(screen.getByLabelText("Settings (Cmd/Ctrl+,)"));
+    await fireEvent.click(screen.getByLabelText("Settings (⌘,)"));
 
     expect(openSettings).toHaveBeenCalledOnce();
   });
@@ -136,7 +137,7 @@ describe("StatusBar", () => {
     const { toggleExplorerVisible } = await import("../../src/lib/stores/layout");
     render(StatusBar);
 
-    const button = screen.getByLabelText("Toggle Explorer (Cmd/Ctrl+B)");
+    const button = screen.getByLabelText("Toggle Explorer (⌘B)");
     expect(button.getAttribute("aria-pressed")).toBe("true");
 
     await fireEvent.click(button);
@@ -149,12 +150,39 @@ describe("StatusBar", () => {
     const { toggleTerminalVisible } = await import("../../src/lib/stores/layout");
     render(StatusBar);
 
-    const button = screen.getByLabelText("Toggle Terminal (Cmd/Ctrl+R)");
+    const button = screen.getByLabelText("Toggle Terminal (⌘R)");
     expect(button.getAttribute("aria-pressed")).toBe("false");
 
     await fireEvent.click(button);
 
     expect(toggleTerminalVisible).toHaveBeenCalledOnce();
+  });
+
+  it("none of the action buttons carry a native title attribute", () => {
+    const { container } = render(StatusBar);
+
+    const buttons = container.querySelectorAll(".status-group.actions .status-btn");
+    expect(buttons).toHaveLength(4);
+    for (const button of buttons) {
+      expect(button.hasAttribute("title")).toBe(false);
+    }
+  });
+
+  it("shows an Atrium-styled tooltip with the Mac glyph, not Cmd/Ctrl text, on hover", async () => {
+    vi.useFakeTimers();
+    render(StatusBar);
+
+    const button = screen.getByLabelText("Toggle Explorer (⌘B)");
+    await fireEvent.mouseEnter(button);
+    vi.advanceTimersByTime(400);
+
+    const tooltipEl = document.querySelector(".atrium-tooltip");
+    expect(tooltipEl).not.toBeNull();
+    expect(tooltipEl!.textContent).toContain("Toggle Explorer");
+    expect(tooltipEl!.textContent).toContain("⌘B");
+    expect(tooltipEl!.textContent).not.toMatch(/Cmd|Ctrl/);
+
+    vi.useRealTimers();
   });
 
   it("renders all four action-button icons as SVGs with matching width/height", () => {

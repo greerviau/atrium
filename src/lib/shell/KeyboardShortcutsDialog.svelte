@@ -1,5 +1,6 @@
 <script lang="ts">
   import { shortcutsOverlay, closeShortcuts } from "../stores/shortcutsOverlay";
+  import { SHORTCUT_LABELS } from "./shortcutLabels";
 
   interface ShortcutRow {
     label: string;
@@ -15,8 +16,10 @@
   // (plus the one shortcut — Shift+Enter in the terminal — that has no menu
   // entry at all). Nothing in the frontend has access to Rust's accelerator
   // strings, so keep this in sync by hand whenever `build_menu` changes one.
+  // The four rows also shown as a `StatusBar.svelte` button tooltip read
+  // their glyph from `shortcutLabels.ts` instead of repeating it here.
   const SHORTCUT_GROUPS: ShortcutGroup[] = [
-    { title: "General", rows: [{ label: "Settings", keys: "⌘," }] },
+    { title: "General", rows: [{ label: "Settings", keys: SHORTCUT_LABELS.settings }] },
     {
       title: "File",
       rows: [
@@ -25,12 +28,12 @@
         { label: "New Terminal Tab", keys: "⌘T" },
       ],
     },
-    { title: "Edit", rows: [{ label: "Find in Files", keys: "⌘⇧F" }] },
+    { title: "Edit", rows: [{ label: "Find in Files", keys: SHORTCUT_LABELS.findInFiles }] },
     {
       title: "View",
       rows: [
-        { label: "Toggle File Explorer", keys: "⌘B" },
-        { label: "Toggle Terminal", keys: "⌘R" },
+        { label: "Toggle File Explorer", keys: SHORTCUT_LABELS.toggleExplorer },
+        { label: "Toggle Terminal", keys: SHORTCUT_LABELS.toggleTerminal },
         { label: "Split Terminal", keys: "⌘\\" },
         { label: "Zoom In", keys: "⌘=" },
         { label: "Zoom Out", keys: "⌘−" },

@@ -1,5 +1,6 @@
 <script lang="ts">
   import ContextMenu from "../ui/ContextMenu.svelte";
+  import { tooltip } from "../ui/tooltip";
   import type { SplitDirection } from "./paneTree";
 
   /**
@@ -44,7 +45,7 @@
     aria-label="Split terminal"
     aria-haspopup="true"
     aria-expanded={open}
-    title="Split terminal"
+    use:tooltip={{ label: "Split terminal" }}
   >
     {@render splitIcon()}
   </button>

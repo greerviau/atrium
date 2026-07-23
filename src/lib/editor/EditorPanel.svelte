@@ -3,6 +3,7 @@
   import { tabsState, reloadFromDisk, dismissConflict, toggleMarkdownViewMode } from "../stores/tabs";
   import EditorPane from "./EditorPane.svelte";
   import EditorSplitMenu from "./EditorSplitMenu.svelte";
+  import { tooltip } from "../ui/tooltip";
 
   /**
    * One leaf's full top bar (tab strip + controls) and its stack of
@@ -57,7 +58,7 @@
                 toggleMarkdownViewMode(path);
               }}
               aria-label={tab.viewMode === "source" ? "Switch to rendered view" : "Switch to source view"}
-              title={tab.viewMode === "source" ? "Switch to rendered view" : "Switch to source view"}
+              use:tooltip={{ label: tab.viewMode === "source" ? "Switch to rendered view" : "Switch to source view" }}
             >
               {tab.viewMode === "source" ? "{}" : "¶"}
             </button>
