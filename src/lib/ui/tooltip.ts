@@ -70,6 +70,11 @@ export const tooltip: Action<HTMLElement, TooltipParams> = (node, params) => {
   let tooltipEl: HTMLDivElement | undefined;
 
   function show(): void {
+    // mouseenter and focus each schedule a show independently, with nothing
+    // firing between them when a button is both hovered and focused (e.g.
+    // tabbed to, then moused over) — without this guard, the second call
+    // creates a new node and orphans the first one in document.body forever.
+    if (tooltipEl) return;
     tooltipEl = createTooltipEl();
     renderTooltipContent(tooltipEl, current.label, current.shortcut);
     document.body.appendChild(tooltipEl);

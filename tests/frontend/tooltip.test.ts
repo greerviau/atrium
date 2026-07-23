@@ -96,6 +96,17 @@ describe("tooltip action", () => {
     expect(document.querySelector(".atrium-tooltip")).toBeNull();
   });
 
+  it("does not stack a second tooltip node when a button is both focused and hovered", () => {
+    tooltip(node, { label: "Toggle Explorer" });
+
+    node.dispatchEvent(new FocusEvent("focus"));
+    vi.advanceTimersByTime(400);
+    node.dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(400);
+
+    expect(document.querySelectorAll(".atrium-tooltip")).toHaveLength(1);
+  });
+
   it("cancels a pending show on mouseleave before the delay elapses", () => {
     tooltip(node, { label: "Toggle Explorer" });
     node.dispatchEvent(new MouseEvent("mouseenter"));
