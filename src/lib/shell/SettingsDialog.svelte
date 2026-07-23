@@ -9,12 +9,18 @@
   import { isAppError } from "../ipc/commands";
   import SettingsSidebar from "../settings/SettingsSidebar.svelte";
   import SettingsSection from "../settings/SettingsSection.svelte";
+  import Dropdown from "../ui/Dropdown.svelte";
   import {
     SETTINGS_CATEGORIES,
     SETTINGS_SECTIONS,
     sectionMatchesQuery,
     type SettingsCategoryId,
   } from "../settings/settingsRegistry";
+
+  const THEME_OPTIONS: { id: string; label: string }[] = [
+    { id: "auto", label: "Auto" },
+    ...themes.map((t) => ({ id: t.id, label: t.name })),
+  ];
 
   const DOCK_POSITIONS: { id: TerminalPosition; label: string }[] = [
     { id: "bottom", label: "Bottom" },
@@ -142,36 +148,6 @@
       closeSettings();
     }
   }
-
-  const ARROW_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
-
-  // Standard `role="radiogroup"` keyboard behavior: arrow keys (and
-  // Home/End) move focus among the `role="radio"` children and select
-  // whichever one focus lands on, matching the roving `tabindex` below (only
-  // the checked option is in the Tab order; arrow keys are how you reach the
-  // rest). Reuses each button's own `onclick` — via a synthetic `.click()` —
-  // rather than duplicating the theme/dock-position selection logic here.
-  function onRadioGroupKeydown(event: KeyboardEvent): void {
-    if (!ARROW_KEYS.has(event.key)) return;
-    const container = event.currentTarget as HTMLElement;
-    const options = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="radio"]'));
-    if (options.length === 0) return;
-    event.preventDefault();
-    const currentIndex = Math.max(0, options.indexOf(document.activeElement as HTMLButtonElement));
-    let nextIndex: number;
-    if (event.key === "Home") {
-      nextIndex = 0;
-    } else if (event.key === "End") {
-      nextIndex = options.length - 1;
-    } else if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-      nextIndex = (currentIndex + 1) % options.length;
-    } else {
-      nextIndex = (currentIndex - 1 + options.length) % options.length;
-    }
-    const next = options[nextIndex];
-    next.focus();
-    next.click();
-  }
 </script>
 
 {#if $settingsOverlay.open}
@@ -238,29 +214,7 @@
             <SettingsSection title="Theme" expanded={isSectionExpanded("theme")} onToggle={() => toggleSection("theme")}>
               <div class="settings-row">
                 <span class="settings-label">Theme</span>
-                <!-- svelte-ignore a11y_interactive_supports_focus -->
-                <div class="settings-options" role="radiogroup" aria-label="Theme" onkeydown={onRadioGroupKeydown}>
-                  <button
-                    class="settings-option"
-                    role="radio"
-                    aria-checked={$themeSelection === "auto"}
-                    tabindex={$themeSelection === "auto" ? 0 : -1}
-                    onclick={() => setTheme("auto")}
-                  >
-                    Auto
-                  </button>
-                  {#each themes as t (t.id)}
-                    <button
-                      class="settings-option"
-                      role="radio"
-                      aria-checked={$themeSelection === t.id}
-                      tabindex={$themeSelection === t.id ? 0 : -1}
-                      onclick={() => setTheme(t.id)}
-                    >
-                      {t.name}
-                    </button>
-                  {/each}
-                </div>
+                <Dropdown options={THEME_OPTIONS} value={$themeSelection} onSelect={setTheme} label="Theme" />
               </div>
             </SettingsSection>
           {/if}
@@ -296,25 +250,12 @@
             >
               <div class="settings-row">
                 <span class="settings-label">Terminal dock position</span>
-                <!-- svelte-ignore a11y_interactive_supports_focus -->
-                <div
-                  class="settings-options"
-                  role="radiogroup"
-                  aria-label="Terminal dock position"
-                  onkeydown={onRadioGroupKeydown}
-                >
-                  {#each DOCK_POSITIONS as dock (dock.id)}
-                    <button
-                      class="settings-option"
-                      role="radio"
-                      aria-checked={$terminalPosition === dock.id}
-                      tabindex={$terminalPosition === dock.id ? 0 : -1}
-                      onclick={() => setTerminalPosition(dock.id)}
-                    >
-                      {dock.label}
-                    </button>
-                  {/each}
-                </div>
+                <Dropdown
+                  options={DOCK_POSITIONS}
+                  value={$terminalPosition}
+                  onSelect={(id) => setTerminalPosition(id as TerminalPosition)}
+                  label="Terminal dock position"
+                />
               </div>
             </SettingsSection>
           {/if}
@@ -402,30 +343,6 @@
   }
   .settings-label {
     flex-shrink: 0;
-  }
-  .settings-options {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    justify-content: flex-end;
-  }
-  .settings-option {
-    background: none;
-    border: 1px solid var(--atrium-border);
-    border-radius: 6px;
-    color: inherit;
-    font: inherit;
-    font-size: 0.9em;
-    cursor: pointer;
-    padding: 5px 10px;
-  }
-  .settings-option:hover {
-    background: var(--atrium-bg-hover);
-  }
-  .settings-option[aria-checked="true"] {
-    background: var(--atrium-bg-active);
-    border-color: var(--atrium-accent);
-    color: var(--atrium-accent);
   }
   .settings-zoom {
     display: flex;
