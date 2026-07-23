@@ -1369,4 +1369,9 @@ describe("markdown.css: code block width cap", () => {
     expect(body).not.toMatch(/overflow-x/);
     expect(body).toMatch(/white-space:\s*pre/);
   });
+
+  it(".cm-code-block's padding beats CodeMirror's own .cm-line padding via !important", () => {
+    const body = ruleBodyFor(".cm-code-block");
+    expect(body).toMatch(/padding:\s*0\s*0\.6em\s*!important/);
+  });
 });
