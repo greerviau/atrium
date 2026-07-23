@@ -445,6 +445,46 @@ describe("SearchOverlay", () => {
     expect(get(searchOverlay).open).toBe(false);
   });
 
+  it("renders a file result's filename and directory in separate elements, with the filename never truncated", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([
+        {
+          path: "/proj/src/lib/search/SearchOverlay.svelte",
+          displayPath: "src/lib/search/SearchOverlay.svelte",
+          score: 100,
+          matchIndices: [],
+        },
+      ]),
+    );
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("SearchOverlay.svelte");
+
+    const filename = container.querySelector(".search-result-filename");
+    const dir = container.querySelector(".search-result-dir");
+    expect(filename?.textContent?.trim()).toBe("SearchOverlay.svelte");
+    expect(dir?.textContent?.trim()).toBe("src/lib/search");
+    // The filename has no `overflow`/`text-overflow` styling of its own, so
+    // it's never the element that gets cut off by an ellipsis — only the
+    // directory span (`.search-result-dir`, styled to truncate) can be.
+  });
+
+  it("renders a root-level file result (no directory) with just the filename", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([{ path: "/proj/README.md", displayPath: "README.md", score: 0, matchIndices: [] }]),
+    );
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("README.md");
+
+    expect(container.querySelector(".search-result-filename")?.textContent?.trim()).toBe("README.md");
+    expect(container.querySelector(".search-result-dir")).toBeNull();
+  });
+
   it("discards a stale Files-mode response that resolves after a newer one", async () => {
     const first = deferred<FileSearchResults>();
     const second = deferred<FileSearchResults>();

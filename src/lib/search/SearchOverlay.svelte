@@ -206,22 +206,16 @@
     matched: boolean;
   }
 
-  // `Array.from(displayPath)`, not `displayPath[i]`/`.slice()`: splits by
-  // Unicode code point so array indices line up with the char (Unicode
-  // scalar) indices the backend's `match_indices` are computed in, which
-  // would otherwise be off for any path containing a non-BMP character (a
-  // raw UTF-16 index into `displayPath` can split a surrogate pair). Walks
-  // the code-point array once, coalescing adjacent matched indices into one
-  // `{ text, matched: true }` segment so a contiguous run renders as a
-  // single <mark>, not one per character.
-  function highlightSegments(displayPath: string, indices: number[]): HighlightSegment[] {
-    const chars = Array.from(displayPath);
-    const matched = new Set(indices);
+  // Walks a slice of `displayPath`'s code points (already split from the
+  // full string by the caller, at `offset` chars in), coalescing adjacent
+  // matched indices into one `{ text, matched: true }` segment so a
+  // contiguous run renders as a single <mark>, not one per character.
+  function toSegments(chars: string[], matched: Set<number>, offset: number): HighlightSegment[] {
     const segments: HighlightSegment[] = [];
     let current = "";
     let currentMatched = false;
     for (let i = 0; i < chars.length; i++) {
-      const isMatched = matched.has(i);
+      const isMatched = matched.has(offset + i);
       if (current !== "" && isMatched !== currentMatched) {
         segments.push({ text: current, matched: currentMatched });
         current = "";
@@ -233,6 +227,41 @@
       segments.push({ text: current, matched: currentMatched });
     }
     return segments;
+  }
+
+  interface SplitPath {
+    dirSegments: HighlightSegment[];
+    nameSegments: HighlightSegment[];
+  }
+
+  // Splits `displayPath` into its directory portion and filename so the
+  // filename can always render in full (never truncated) with the
+  // directory shown after it in smaller, muted text that truncates instead
+  // — a long path used to make the row's single `text-overflow: ellipsis`
+  // string cut off its *end*, which is exactly where the filename lives.
+  //
+  // `Array.from(displayPath)`, not `displayPath[i]`/`.slice()`: splits by
+  // Unicode code point so array indices line up with the char (Unicode
+  // scalar) indices the backend's `match_indices` are computed in, which
+  // would otherwise be off for any path containing a non-BMP character (a
+  // raw UTF-16 index into `displayPath` can split a surrogate pair).
+  function splitHighlightedPath(displayPath: string, indices: number[]): SplitPath {
+    const chars = Array.from(displayPath);
+    const matched = new Set(indices);
+    let splitAt = -1;
+    for (let i = chars.length - 1; i >= 0; i--) {
+      if (chars[i] === "/") {
+        splitAt = i;
+        break;
+      }
+    }
+    if (splitAt === -1) {
+      return { dirSegments: [], nameSegments: toSegments(chars, matched, 0) };
+    }
+    return {
+      dirSegments: toSegments(chars.slice(0, splitAt), matched, 0),
+      nameSegments: toSegments(chars.slice(splitAt + 1), matched, splitAt + 1),
+    };
   }
 
   async function selectResult(index: number): Promise<void> {
@@ -376,6 +405,7 @@
           </div>
           <div class="search-results" role="listbox">
             {#each fileResults as match, index (match.path)}
+              {@const parts = splitHighlightedPath(match.displayPath, match.matchIndices)}
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <div
                 class="search-result-row"
@@ -385,11 +415,18 @@
                 tabindex="-1"
                 aria-selected={index === selectedIndex}
               >
-                <span class="search-result-text">
-                  {#each highlightSegments(match.displayPath, match.matchIndices) as segment}
+                <span class="search-result-filename">
+                  {#each parts.nameSegments as segment}
                     {#if segment.matched}<mark>{segment.text}</mark>{:else}{segment.text}{/if}
                   {/each}
                 </span>
+                {#if parts.dirSegments.length > 0}
+                  <span class="search-result-dir">
+                    {#each parts.dirSegments as segment}
+                      {#if segment.matched}<mark>{segment.text}</mark>{:else}{segment.text}{/if}
+                    {/each}
+                  </span>
+                {/if}
               </div>
             {/each}
           </div>
@@ -528,6 +565,26 @@
     font-size: 0.9em;
   }
   .search-result-text mark {
+    background: var(--atrium-search-match-bg);
+    color: inherit;
+  }
+  .search-result-filename {
+    flex-shrink: 0;
+    font-family: var(--atrium-mono-font);
+    font-size: 0.9em;
+  }
+  .search-result-dir {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--atrium-mono-font);
+    font-size: 0.8em;
+    color: var(--atrium-text-muted);
+  }
+  .search-result-filename mark,
+  .search-result-dir mark {
     background: var(--atrium-search-match-bg);
     color: inherit;
   }
