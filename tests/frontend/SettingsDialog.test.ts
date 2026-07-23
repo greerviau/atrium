@@ -195,11 +195,11 @@ describe("SettingsDialog", () => {
 
     it("auto-expands a matched section that was collapsed", async () => {
       settingsOverlay.set({ open: true });
-      render(SettingsDialog);
+      const { container } = render(SettingsDialog);
       await tick();
 
       await selectCategory("Appearance");
-      const header = screen.getByRole("button", { name: "Theme" });
+      const header = container.querySelector(".settings-section-header") as HTMLElement;
       await fireEvent.click(header);
       await tick();
       expect(header.getAttribute("aria-expanded")).toBe("false");
@@ -207,8 +207,8 @@ describe("SettingsDialog", () => {
       await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "theme" } });
       await tick();
 
-      expect(screen.getByRole("button", { name: "Theme" }).getAttribute("aria-expanded")).toBe("true");
-      expect(screen.getByRole("radiogroup", { name: "Theme" })).toBeTruthy();
+      expect(header.getAttribute("aria-expanded")).toBe("true");
+      expect(container.querySelector(".dropdown-trigger")).not.toBeNull();
     });
 
     it("shows an empty state when nothing matches", async () => {
@@ -245,64 +245,87 @@ describe("SettingsDialog", () => {
     });
   });
 
+  // Both the settings section header and the Dropdown trigger it contains
+  // are `role="button"` elements, and both are labeled after the same
+  // setting name (the section's own title vs. the dropdown's aria-label),
+  // so opening a dropdown queries its trigger via the `.dropdown-trigger`
+  // class rather than an ambiguous `getByRole("button", { name })`.
+  function dropdownTrigger(container: HTMLElement): HTMLButtonElement {
+    return container.querySelector(".dropdown-trigger") as HTMLButtonElement;
+  }
+
   describe("theme", () => {
-    it("marks Auto as checked when the selection is auto", async () => {
+    async function openThemeDropdown(): Promise<HTMLElement> {
       settingsOverlay.set({ open: true });
-      render(SettingsDialog);
+      const { container } = render(SettingsDialog);
       await tick();
       await selectCategory("Appearance");
+      await fireEvent.click(dropdownTrigger(container));
+      await flush();
+      return container;
+    }
 
-      const options = screen.getAllByRole("radio", { name: /Auto|Atrium/ });
-      expect(options[0].getAttribute("aria-checked")).toBe("true"); // Auto
-      expect(options.slice(1).every((o) => o.getAttribute("aria-checked") === "false")).toBe(true);
+    it("marks Auto as selected when the selection is auto", async () => {
+      await openThemeDropdown();
+
+      const options = screen.getAllByRole("option");
+      expect(options.map((o) => o.textContent?.trim())).toEqual([
+        "✓ Auto",
+        "Atrium Dark",
+        "Atrium Light",
+        "Atrium High Contrast",
+      ]);
+      expect(options[0].getAttribute("aria-selected")).toBe("true"); // Auto
+      expect(options.slice(1).every((o) => o.getAttribute("aria-selected") === "false")).toBe(true);
     });
 
-    it("marks the concrete theme as checked, not Auto, once a concrete theme is selected", async () => {
+    it("marks the concrete theme as selected, not Auto, once a concrete theme is selected", async () => {
       setTheme("atrium-light");
-      settingsOverlay.set({ open: true });
-      render(SettingsDialog);
-      await tick();
-      await selectCategory("Appearance");
+      await openThemeDropdown();
 
-      expect(screen.getByRole("radio", { name: "Auto" }).getAttribute("aria-checked")).toBe("false");
-      expect(screen.getByRole("radio", { name: "Atrium Light" }).getAttribute("aria-checked")).toBe("true");
+      expect(screen.getByRole("option", { name: "Auto" }).getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByRole("option", { name: "Atrium Light" }).getAttribute("aria-selected")).toBe("true");
     });
 
-    it("clicking a theme option calls setTheme, reflected in themeSelection", async () => {
-      settingsOverlay.set({ open: true });
-      render(SettingsDialog);
-      await tick();
-      await selectCategory("Appearance");
+    it("clicking a theme option calls setTheme, reflected in themeSelection, and closes the dropdown", async () => {
+      await openThemeDropdown();
 
-      await fireEvent.click(screen.getByRole("radio", { name: "Atrium High Contrast" }));
+      await fireEvent.click(screen.getByRole("option", { name: "Atrium High Contrast" }));
       await flush();
 
       expect(get(themeSelection)).toBe("atrium-high-contrast");
+      expect(screen.queryByRole("listbox")).toBeNull();
     });
   });
 
   describe("terminal dock position", () => {
-    it("marks the current position as checked", async () => {
-      terminalPosition.set("left");
+    async function openDockPositionDropdown(): Promise<HTMLElement> {
       settingsOverlay.set({ open: true });
-      render(SettingsDialog);
+      const { container } = render(SettingsDialog);
       await tick();
       await selectCategory("Terminal");
+      await fireEvent.click(dropdownTrigger(container));
+      await flush();
+      return container;
+    }
 
-      expect(screen.getByRole("radio", { name: "Bottom" }).getAttribute("aria-checked")).toBe("false");
-      expect(screen.getByRole("radio", { name: "Left" }).getAttribute("aria-checked")).toBe("true");
-      expect(screen.getByRole("radio", { name: "Right" }).getAttribute("aria-checked")).toBe("false");
+    it("marks the current position as selected", async () => {
+      terminalPosition.set("left");
+      await openDockPositionDropdown();
+
+      expect(screen.getByRole("option", { name: "Bottom" }).getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByRole("option", { name: "Left" }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("option", { name: "Right" }).getAttribute("aria-selected")).toBe("false");
     });
 
-    it("clicking a position option updates the shared terminalPosition store", async () => {
-      settingsOverlay.set({ open: true });
-      render(SettingsDialog);
-      await tick();
-      await selectCategory("Terminal");
+    it("clicking a position option updates the shared terminalPosition store and closes the dropdown", async () => {
+      await openDockPositionDropdown();
 
-      await fireEvent.click(screen.getByRole("radio", { name: "Right" }));
+      await fireEvent.click(screen.getByRole("option", { name: "Right" }));
+      await flush();
 
       expect(get(terminalPosition)).toBe("right");
+      expect(screen.queryByRole("listbox")).toBeNull();
     });
   });
 
@@ -336,65 +359,92 @@ describe("SettingsDialog", () => {
     });
   });
 
-  describe("keyboard navigation (radiogroup)", () => {
-    it("ArrowRight advances to the next theme option and selects it", async () => {
+  describe("keyboard navigation (dropdown)", () => {
+    it("ArrowDown advances to the next theme option, and Enter selects it", async () => {
       settingsOverlay.set({ open: true });
-      render(SettingsDialog);
+      const { container } = render(SettingsDialog);
       await tick();
       await selectCategory("Appearance");
 
-      const auto = screen.getByRole("radio", { name: "Auto" });
-      auto.focus();
-      await fireEvent.keyDown(auto, { key: "ArrowRight" });
+      await fireEvent.click(dropdownTrigger(container));
+      await flush();
+      const listbox = screen.getByRole("listbox", { name: "Theme" });
+
+      await fireEvent.keyDown(listbox, { key: "ArrowDown" });
+      await fireEvent.keyDown(listbox, { key: "Enter" });
       await flush();
 
-      expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Atrium Dark" }));
       expect(get(themeSelection)).toBe("atrium-dark");
+      expect(screen.queryByRole("listbox")).toBeNull();
     });
 
-    it("ArrowLeft from the first theme option wraps around to the last", async () => {
+    it("ArrowUp from the first theme option wraps around to the last, and Space selects it", async () => {
       settingsOverlay.set({ open: true });
-      render(SettingsDialog);
+      const { container } = render(SettingsDialog);
       await tick();
       await selectCategory("Appearance");
 
-      const auto = screen.getByRole("radio", { name: "Auto" });
-      auto.focus();
-      await fireEvent.keyDown(auto, { key: "ArrowLeft" });
+      await fireEvent.click(dropdownTrigger(container));
+      await flush();
+      const listbox = screen.getByRole("listbox", { name: "Theme" });
+
+      await fireEvent.keyDown(listbox, { key: "ArrowUp" });
+      await fireEvent.keyDown(listbox, { key: " " });
       await flush();
 
-      expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Atrium High Contrast" }));
       expect(get(themeSelection)).toBe("atrium-high-contrast");
     });
 
-    it("End jumps to the last option, selecting it (dock-position radiogroup)", async () => {
+    it("End jumps to the last dock-position option, selecting it on Enter", async () => {
       settingsOverlay.set({ open: true });
-      render(SettingsDialog);
+      const { container } = render(SettingsDialog);
       await tick();
       await selectCategory("Terminal");
 
-      const bottom = screen.getByRole("radio", { name: "Bottom" });
-      bottom.focus();
-      await fireEvent.keyDown(bottom, { key: "End" });
+      await fireEvent.click(dropdownTrigger(container));
+      await flush();
+      const listbox = screen.getByRole("listbox", { name: "Terminal dock position" });
+
+      await fireEvent.keyDown(listbox, { key: "End" });
+      await fireEvent.keyDown(listbox, { key: "Enter" });
       await flush();
 
-      expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Right" }));
       expect(get(terminalPosition)).toBe("right");
     });
 
-    it("ignores a non-navigation key", async () => {
+    it("Escape closes the dropdown without changing the selection", async () => {
       settingsOverlay.set({ open: true });
-      render(SettingsDialog);
+      const { container } = render(SettingsDialog);
       await tick();
       await selectCategory("Appearance");
 
-      const auto = screen.getByRole("radio", { name: "Auto" });
-      auto.focus();
-      await fireEvent.keyDown(auto, { key: "a" });
+      await fireEvent.click(dropdownTrigger(container));
+      await flush();
+      const listbox = screen.getByRole("listbox", { name: "Theme" });
+
+      await fireEvent.keyDown(listbox, { key: "ArrowDown" });
+      await fireEvent.keyDown(listbox, { key: "Escape" });
       await flush();
 
-      expect(document.activeElement).toBe(auto);
       expect(get(themeSelection)).toBe("auto");
+      expect(screen.queryByRole("listbox")).toBeNull();
+    });
+
+    it("ignores a non-navigation key, leaving the dropdown open with the selection unchanged", async () => {
+      settingsOverlay.set({ open: true });
+      const { container } = render(SettingsDialog);
+      await tick();
+      await selectCategory("Appearance");
+
+      await fireEvent.click(dropdownTrigger(container));
+      await flush();
+      const listbox = screen.getByRole("listbox", { name: "Theme" });
+
+      await fireEvent.keyDown(listbox, { key: "a" });
+      await flush();
+
+      expect(get(themeSelection)).toBe("auto");
+      expect(screen.queryByRole("listbox")).not.toBeNull();
     });
   });
 
