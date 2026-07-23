@@ -104,6 +104,16 @@ pub trait Workspace: Send + Sync {
     async fn create_dir(&self, path: &str) -> Result<(), AppError>;
     async fn rename(&self, from: &str, to: &str) -> Result<(), AppError>;
     async fn delete(&self, path: &str, recursive: bool) -> Result<(), AppError>;
+    /// Copies each OS path in `source_paths` (which may lie anywhere on disk,
+    /// not necessarily inside any workspace) into `dest_dir`, which must
+    /// resolve inside this workspace's root. A collision with an existing
+    /// name at the destination is resolved by picking a fresh name rather
+    /// than failing or overwriting (see `local::unique_destination`).
+    async fn import_external(
+        &self,
+        dest_dir: &str,
+        source_paths: &[String],
+    ) -> Result<(), AppError>;
     /// Searches every text file under the workspace root for `query`,
     /// gitignore-aware and binary-safe, honoring `options`. Capped at 500
     /// total matches, 50 per file, and a wall-clock deadline (see

@@ -111,6 +111,14 @@ export function fsDelete(
   return invoke("fs_delete", { workspaceId, path, recursive });
 }
 
+export function fsImportExternalPaths(
+  workspaceId: string,
+  destDir: string,
+  sourcePaths: string[],
+): Promise<void> {
+  return invoke("fs_import_external_paths", { workspaceId, destDir, sourcePaths });
+}
+
 export function fsResolveCandidates(
   workspaceId: string,
   candidates: PathCandidate[],

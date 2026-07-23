@@ -13,6 +13,7 @@
   import FileTreeNode from "./FileTreeNode.svelte";
   import ContextMenu from "../ui/ContextMenu.svelte";
   import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
+  import { dirOf } from "../util/path";
 
   let treeEl: HTMLDivElement;
   let detach: (() => void) | undefined;
@@ -30,11 +31,6 @@
       void loadRoot($workspace.root);
     }
   });
-
-  function dirOf(path: string): string {
-    const idx = path.replace(/\\/g, "/").lastIndexOf("/");
-    return idx <= 0 ? path : path.slice(0, idx);
-  }
 
   async function beginCreate(dir: string, isDir: boolean): Promise<void> {
     closeContextMenu();

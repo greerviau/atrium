@@ -7,6 +7,7 @@ import {
   localWorkspaceId,
 } from "../ipc/commands";
 import { loadChildren } from "../stores/fileTree";
+import { dirOf } from "../util/path";
 
 export interface ContextMenuState {
   x: number;
@@ -24,12 +25,6 @@ export function openContextMenu(event: MouseEvent, path: string, isDir: boolean)
 
 export function closeContextMenu(): void {
   contextMenu.set(null);
-}
-
-function dirOf(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
-  const idx = normalized.lastIndexOf("/");
-  return idx <= 0 ? path : normalized.slice(0, idx);
 }
 
 export async function newFile(dirPath: string, name: string): Promise<void> {

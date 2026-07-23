@@ -27,6 +27,13 @@ function dirname(filePath: string): string {
   return idx <= 0 ? "" : normalized.slice(0, idx);
 }
 
+/** Parent directory of `path`; falls back to `path` itself when there's no `/` to split on (unlike `dirname`, which falls back to `""`). Shared by the explorer's mutation flows (`contextMenu.ts`, `FileTree.svelte`, `explorerDropTargets.ts`), which all need "the directory a bare/root-level path still belongs to" rather than an empty string. */
+export function dirOf(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  const idx = normalized.lastIndexOf("/");
+  return idx <= 0 ? path : normalized.slice(0, idx);
+}
+
 /** Joins `base` and `relative`, resolving `.`/`..` segments lexically. */
 function resolveRelative(base: string, relative: string): string {
   if (relative.startsWith("/")) {

@@ -93,6 +93,18 @@ pub async fn fs_delete(
 }
 
 #[tauri::command]
+pub async fn fs_import_external_paths(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    dest_dir: String,
+    source_paths: Vec<String>,
+) -> Result<(), AppError> {
+    workspace(&state, &workspace_id)?
+        .import_external(&dest_dir, &source_paths)
+        .await
+}
+
+#[tauri::command]
 pub async fn fs_resolve_candidates(
     state: State<'_, AppState>,
     workspace_id: String,

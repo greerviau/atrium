@@ -15,6 +15,8 @@
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
   import { onFsChanged, onDockOpenPath, onCloseRequested, onDragDropEvent } from "./lib/ipc/events";
   import { insertPathsAtScreenPoint } from "./lib/terminal/terminalDropTargets";
+  import { resolveExplorerDropTargetDir } from "./lib/explorer/explorerDropTargets";
+  import { importPathsInto } from "./lib/explorer/importExternalPaths";
   import { workspaceTakePendingOpen, appConfirmClose } from "./lib/ipc/commands";
   import { initMenuBar } from "./lib/shell/MenuBar";
   import {
@@ -453,6 +455,11 @@
     void onDragDropEvent((event) => {
       if (event.type !== "drop") return;
       const logical = event.position.toLogical(window.devicePixelRatio);
+      const dir = resolveExplorerDropTargetDir(logical.x, logical.y);
+      if (dir) {
+        void importPathsInto(dir, event.paths);
+        return;
+      }
       insertPathsAtScreenPoint(event.paths, logical.x, logical.y);
     });
     void onCloseRequested(() => {
