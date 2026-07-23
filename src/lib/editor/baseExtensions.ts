@@ -1,8 +1,9 @@
-import { EditorSelection, findClusterBreak, type EditorState, type Extension } from "@codemirror/state";
+import { EditorSelection, EditorState, findClusterBreak, type Extension } from "@codemirror/state";
 import { EditorView, ViewPlugin, keymap, type MouseSelectionStyle } from "@codemirror/view";
 import { history, defaultKeymap, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { search, searchKeymap } from "@codemirror/search";
+import { searchKeymap } from "@codemirror/search";
 import { autocompletion } from "@codemirror/autocomplete";
+import { inFileSearch } from "./search/atriumSearchPanel";
 
 // --- Part 1: a mouse-selection style that never mistakes scroll-drift for a drag (issue #161) ---
 //
@@ -266,21 +267,26 @@ export const scrollSettleMouseHandler = EditorView.domEventHandlers({
  * code — all via `EditorPane.svelte`'s `viewModeExtensions`): history, the
  * default/history keymaps, tab-to-indent, the find/replace panel, word-based
  * autocompletion, and the scroll-safe mouse-selection handling above.
- * Multi-cursor (Alt-click, Cmd-D select-next) is core `EditorView`/
- * `defaultKeymap` behavior and needs no extra extension. The CM theme and
- * syntax highlight style (theme-driven, not a library default) live in
- * `EditorPane.svelte`'s theme `Compartment` instead, since they need to be
- * reconfigured on a theme change without tearing down everything else in
- * this array. Line wrapping is mode-dependent (prose wraps, code doesn't) so
- * it lives in `EditorPane.svelte` alongside the other mode-dependent
- * extensions instead of here.
+ * `EditorState.allowMultipleSelections` is turned on here since it's a
+ * `static` facet that must be part of the initial configuration: without it,
+ * every multi-cursor gesture (Alt-click, Cmd-D select-next, the search
+ * panel's select-all-matches) silently collapses to a single cursor instead
+ * of erroring, so the gap has no other way to surface than a passing-looking
+ * click that does the wrong thing. The CM theme and syntax highlight style
+ * (theme-driven, not a library default) live in `EditorPane.svelte`'s theme
+ * `Compartment` instead, since they need to be reconfigured on a theme
+ * change without tearing down everything else in this array. Line wrapping
+ * is mode-dependent (prose wraps, code doesn't) so it lives in
+ * `EditorPane.svelte` alongside the other mode-dependent extensions instead
+ * of here.
  */
 export function baseExtensions(): Extension[] {
   return [
     history(),
-    search(),
+    inFileSearch(),
     autocompletion(),
     keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
+    EditorState.allowMultipleSelections.of(true),
     EditorView.mouseSelectionStyle.of(movementAwareMouseSelectionStyle),
     wheelTracker,
     scrollSettleMouseHandler,
