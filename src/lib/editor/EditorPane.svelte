@@ -72,6 +72,8 @@
   const minimapCompartment = new Compartment();
   let lastAppliedViewMode: "rendered" | "source" | undefined;
   let lastAppliedActive: boolean | undefined;
+  let lastAppliedMinimapEnabled: boolean | undefined;
+  let minimapIdleHandle: number | undefined;
 
   interface ContextMenuState {
     x: number;
@@ -92,6 +94,34 @@
 
   function themeExtensions() {
     return [buildCmTheme($themeStore), syntaxHighlighting(buildHighlightStyle($themeStore), { fallback: true })];
+  }
+
+  // `showMinimap`'s own text/highlight state runs a synchronous full-document
+  // `parser.parse()` the moment the facet first becomes active — including on
+  // initial view construction, where there's no previous tree to reuse
+  // incrementally (issue #155 review: this blocks the main thread for over a
+  // second on a ~1MB file). `requestIdleCallback` defers that first build
+  // until after the pane's own initial mount and paint, so opening a large
+  // file shows the file itself immediately; only the minimap's appearance is
+  // delayed. jsdom has no `requestIdleCallback`, hence the `setTimeout`
+  // fallback (same fallback the minimap package itself uses for its
+  // highlight pass).
+  function cancelMinimapIdle(): void {
+    if (minimapIdleHandle === undefined) {
+      return;
+    }
+    if (typeof cancelIdleCallback !== "undefined") {
+      cancelIdleCallback(minimapIdleHandle);
+    } else {
+      clearTimeout(minimapIdleHandle);
+    }
+    minimapIdleHandle = undefined;
+  }
+
+  function applyMinimap(enabled: boolean): void {
+    cancelMinimapIdle();
+    lastAppliedMinimapEnabled = enabled;
+    view.dispatch({ effects: minimapCompartment.reconfigure(minimapExtension(enabled)) });
   }
 
   const tab = $derived($tabsState.tabs.find((t) => t.path === filePath));
@@ -247,7 +277,10 @@
       mode === "markdown" ? EditorView.lineWrapping : [],
       themeCompartment.of(themeExtensions()),
       viewModeCompartment.of(viewModeExtensions(mode, initialTab?.viewMode)),
-      minimapCompartment.of(minimapExtension($minimapEnabled)),
+      // Starts empty regardless of the setting — see `applyMinimap`'s doc
+      // comment. The idle callback scheduled below performs the actual first
+      // application.
+      minimapCompartment.of([]),
       keymap.of(shortcutKeymap),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
@@ -271,9 +304,23 @@
     if (lastAppliedActive) {
       setCursorPosition(computeCursorPosition(view.state));
     }
+
+    // Marking the mount-time value as already "applied" here (even though
+    // the compartment itself is still empty) keeps the minimap `$effect`
+    // below silent for this initial value — the idle callback is solely
+    // responsible for the first real application, so it isn't raced or
+    // duplicated by the effect also firing on mount.
+    lastAppliedMinimapEnabled = $minimapEnabled;
+    const scheduleIdle = typeof requestIdleCallback !== "undefined" ? requestIdleCallback : (cb: () => void) => setTimeout(cb, 1) as unknown as number;
+    minimapIdleHandle = scheduleIdle(() => {
+      minimapIdleHandle = undefined;
+      if (!view) return;
+      applyMinimap($minimapEnabled);
+    });
   });
 
   onDestroy(() => {
+    cancelMinimapIdle();
     detachScrollbarAutoHide?.();
     view?.destroy();
     if ($tabsState.activeTabPath === null) {
@@ -297,18 +344,18 @@
     });
   });
 
-  // Reconfigures the minimap compartment in place when the setting changes,
-  // applying live to every open pane (code and markdown alike) without
-  // losing undo history, selection, or scroll position — same guarantee as
-  // the theme-switch effect above.
+  // Reconfigures the minimap compartment in place when the setting actually
+  // changes after mount, applying live to every open pane (code and
+  // markdown alike) without losing undo history, selection, or scroll
+  // position — same guarantee as the theme-switch effect above. Guarded
+  // against firing on the initial mount value (see `lastAppliedMinimapEnabled`
+  // above): the mount-time idle callback owns that first application.
   $effect(() => {
     const enabled = $minimapEnabled;
-    if (!view) {
+    if (!view || enabled === lastAppliedMinimapEnabled) {
       return;
     }
-    view.dispatch({
-      effects: minimapCompartment.reconfigure(minimapExtension(enabled)),
-    });
+    applyMinimap(enabled);
   });
 
   // Reconfigures the view-mode compartment in place when a markdown tab's

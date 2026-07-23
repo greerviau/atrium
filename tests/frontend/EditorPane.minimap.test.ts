@@ -10,6 +10,16 @@ const PANE_ID = "pane-1";
 const CODE_PATH = "/main.ts";
 const MARKDOWN_PATH = "/notes.md";
 
+// The minimap's first build is deferred to `requestIdleCallback` (falling
+// back to `setTimeout` under jsdom, which has no `requestIdleCallback`) so
+// that opening a large file doesn't block the pane's own initial mount and
+// paint — see `EditorPane.svelte`'s `applyMinimap` doc comment. Tests that
+// assert the minimap's presence after mount need to wait past that deferral.
+async function waitForIdle(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await tick();
+}
+
 function seedTab(path: string, mode: "code" | "markdown"): Tab {
   const tab: Tab = {
     path,
@@ -36,24 +46,35 @@ describe("EditorPane: minimap", () => {
     setMinimapEnabled(DEFAULT_MINIMAP_ENABLED);
   });
 
-  it("shows the minimap gutter in a code pane by default (on by default)", () => {
+  it("does not block initial mount: the editor content is present before the deferred minimap build runs", () => {
     seedTab(CODE_PATH, "code");
     const { container } = render(EditorPane, { filePath: CODE_PATH, paneId: PANE_ID });
 
+    expect(container.querySelector(".cm-content")?.textContent).toContain("line one");
+    expect(container.querySelector(".cm-minimap-gutter")).toBeNull();
+  });
+
+  it("shows the minimap gutter in a code pane by default, once the deferred build runs", async () => {
+    seedTab(CODE_PATH, "code");
+    const { container } = render(EditorPane, { filePath: CODE_PATH, paneId: PANE_ID });
+    await waitForIdle();
+
     expect(container.querySelector(".cm-minimap-gutter")).not.toBeNull();
   });
 
-  it("shows the minimap gutter in a markdown pane by default (on by default)", () => {
+  it("shows the minimap gutter in a markdown pane by default, once the deferred build runs", async () => {
     seedTab(MARKDOWN_PATH, "markdown");
     const { container } = render(EditorPane, { filePath: MARKDOWN_PATH, paneId: PANE_ID });
+    await waitForIdle();
 
     expect(container.querySelector(".cm-minimap-gutter")).not.toBeNull();
   });
 
-  it("omits the minimap gutter when the setting is off before mount", () => {
+  it("never shows the minimap gutter when the setting is off before mount", async () => {
     setMinimapEnabled(false);
     seedTab(CODE_PATH, "code");
     const { container } = render(EditorPane, { filePath: CODE_PATH, paneId: PANE_ID });
+    await waitForIdle();
 
     expect(container.querySelector(".cm-minimap-gutter")).toBeNull();
   });
@@ -61,7 +82,7 @@ describe("EditorPane: minimap", () => {
   it("reconfigures live when the setting is toggled off, without unmounting the pane", async () => {
     seedTab(CODE_PATH, "code");
     const { container } = render(EditorPane, { filePath: CODE_PATH, paneId: PANE_ID });
-    await tick();
+    await waitForIdle();
     expect(container.querySelector(".cm-minimap-gutter")).not.toBeNull();
 
     setMinimapEnabled(false);
@@ -76,12 +97,28 @@ describe("EditorPane: minimap", () => {
     setMinimapEnabled(false);
     seedTab(MARKDOWN_PATH, "markdown");
     const { container } = render(EditorPane, { filePath: MARKDOWN_PATH, paneId: PANE_ID });
-    await tick();
+    await waitForIdle();
     expect(container.querySelector(".cm-minimap-gutter")).toBeNull();
 
     setMinimapEnabled(true);
     await tick();
 
     expect(container.querySelector(".cm-minimap-gutter")).not.toBeNull();
+  });
+
+  it("toggling before the deferred build fires applies immediately, without waiting for idle", async () => {
+    seedTab(CODE_PATH, "code");
+    const { container } = render(EditorPane, { filePath: CODE_PATH, paneId: PANE_ID });
+
+    // No waitForIdle() here — the toggle happens before the mount-time idle
+    // callback has had a chance to fire.
+    setMinimapEnabled(false);
+    await tick();
+    expect(container.querySelector(".cm-minimap-gutter")).toBeNull();
+
+    // Confirms the deferred callback doesn't fire a stale re-apply later
+    // (which would re-show it and desync from the store's current value).
+    await waitForIdle();
+    expect(container.querySelector(".cm-minimap-gutter")).toBeNull();
   });
 });

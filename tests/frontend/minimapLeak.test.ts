@@ -9,6 +9,16 @@ import { setMinimapEnabled, DEFAULT_MINIMAP_ENABLED } from "../../src/lib/stores
 const PANE_ID = "pane-1";
 const PATH = "/main.ts";
 
+// The minimap's first build (and so the overlay's `window` listener attach)
+// is deferred to `requestIdleCallback`/`setTimeout` (see `EditorPane.svelte`'s
+// `applyMinimap`) — this has to be awaited before closing a tab, or the pane
+// unmounts before the overlay ever attaches anything, which would make this
+// regression test pass trivially without exercising the leak at all.
+async function waitForIdle(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await tick();
+}
+
 function seedTab(): Tab {
   const tab: Tab = {
     path: PATH,
@@ -65,7 +75,9 @@ describe("minimap Overlay window-listener leak fix", () => {
     for (let i = 0; i < TAB_CLOSE_REOPEN_CYCLES; i++) {
       seedTab();
       const { unmount } = render(EditorPane, { filePath: PATH, paneId: PANE_ID });
-      await tick();
+      // Lets the deferred minimap build actually run, so the overlay's
+      // `window` listeners get attached before the tab closes below.
+      await waitForIdle();
       // Mirrors App.svelte's `{#each}`-driven teardown: the tab closes and
       // its pane unmounts, which runs EditorPane's `onDestroy` ->
       // `view.destroy()` -> the minimap's `OverlayView.destroy()`.
