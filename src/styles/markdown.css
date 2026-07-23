@@ -1,6 +1,37 @@
 /* Rendered markdown live-preview elements. Class names are the single
    source of truth in lib/editor/markdown/theme.ts; keep both in sync. */
 
+/* A wide `.cm-code-block` line (width pinned in `ch` units, see decorations.ts)
+   forces `.cm-content`'s own box to grow to match it — `.cm-content` is a
+   flex item with no explicit width, and CodeMirror's viewport/`inView`
+   tracking depends on that box staying exactly as wide as its widest line,
+   so it can never be constrained directly (see the #146-revert incident).
+   Without its own width, an ordinary prose `.cm-line` fills 100% of that
+   oversized `.cm-content` box and wraps at the code block's width instead
+   of the pane's. `container-type: inline-size` here lets `100cqw` below
+   resolve to `.cm-scroller`'s own box width — always the pane's visible
+   width, regardless of how wide its scrollable content grows — so prose
+   can be capped to the pane without ever touching `.cm-content` itself. */
+.cm-scroller {
+  container-type: inline-size;
+}
+
+/* Caps a prose line's wrap width to the pane instead of the runaway
+   `.cm-content` box (see the container-query comment above). Scoped to
+   `.cm-lineWrapping` panes only (markdown; code panes never wrap) and
+   excludes code-block and table-row lines, which are meant to stay
+   coherent, scrollable units at their own width, not wrap at the pane's.
+   `position: sticky; left: 0` (no `top`) tracks only the scroller's
+   horizontal scroll position, keeping the line visible at the left edge
+   instead of scrolling out of view when the user scrolls right to see a
+   wide code block elsewhere in the document. */
+.cm-content.cm-lineWrapping
+  .cm-line:not(.cm-code-block):not(.cm-table-row):not(.cm-table-header-row):not(.cm-table-delimiter-line) {
+  position: sticky;
+  left: 0;
+  width: 100cqw;
+}
+
 .cm-heading-1 { font-size: 1.8em; font-weight: 700; }
 .cm-heading-2 { font-size: 1.5em; font-weight: 700; }
 .cm-heading-3 { font-size: 1.3em; font-weight: 600; }
