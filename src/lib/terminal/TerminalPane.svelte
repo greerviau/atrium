@@ -5,6 +5,7 @@
   import { FitAddon } from "@xterm/addon-fit";
   import { SearchAddon } from "@xterm/addon-search";
   import "@xterm/xterm/css/xterm.css";
+  import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
   import { ptySpawn, ptySubscribe, ptyWrite, ptyResize, ptyKill } from "../ipc/commands";
   import { registerLinkProviders } from "./linkProviders";
   import { theme as themeStore } from "../stores/theme";
@@ -15,6 +16,7 @@
   import { shellQuotePaths } from "./shellQuote";
   import { EXPLORER_PATH_DRAG_TYPE } from "../util/dragDropTypes";
   import { registerTerminalDropTarget } from "./terminalDropTargets";
+  import ContextMenu from "../ui/ContextMenu.svelte";
 
   // Tauri's `CmdOrCtrl` accelerator resolves to Cmd-only on macOS and
   // Ctrl-only elsewhere (never both on one platform), so the toggle-panel
@@ -49,6 +51,53 @@
   let lastEmittedTitle: string | undefined;
   let dropTargetActive = $state(false);
   let unregisterDropTarget: (() => void) | undefined;
+
+  interface ContextMenuState {
+    x: number;
+    y: number;
+    hasSelection: boolean;
+  }
+
+  let menu = $state<ContextMenuState | null>(null);
+
+  function closeMenu(): void {
+    menu = null;
+  }
+
+  function onContextMenu(event: MouseEvent): void {
+    if (!terminal) return;
+    event.preventDefault();
+    menu = { x: event.clientX, y: event.clientY, hasSelection: terminal.hasSelection() };
+  }
+
+  async function doCopy(): Promise<void> {
+    closeMenu();
+    const selection = terminal.getSelection();
+    if (!selection) return;
+    await writeText(selection);
+  }
+
+  async function doPaste(): Promise<void> {
+    closeMenu();
+    let text = "";
+    try {
+      text = await readText();
+    } catch {
+      return;
+    }
+    if (!text) return;
+    terminal.paste(text);
+  }
+
+  function doSelectAll(): void {
+    closeMenu();
+    terminal.selectAll();
+  }
+
+  function doClear(): void {
+    closeMenu();
+    terminal.clear();
+  }
 
   function dispatch(event: Parameters<typeof reduceTitleState>[1]): void {
     titleState = reduceTitleState(titleState, event);
@@ -226,6 +275,8 @@
   });
 </script>
 
+<svelte:window onclick={closeMenu} />
+
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="terminal-pane"
@@ -234,7 +285,18 @@
   ondragover={onDragOver}
   ondragleave={onDragLeave}
   ondrop={onDrop}
+  oncontextmenu={onContextMenu}
 ></div>
+
+{#if menu}
+  <ContextMenu x={menu.x} y={menu.y}>
+    <button role="menuitem" disabled={!menu.hasSelection} onclick={() => void doCopy()}>Copy</button>
+    <button role="menuitem" onclick={() => void doPaste()}>Paste</button>
+    <div class="menu-separator" role="separator"></div>
+    <button role="menuitem" onclick={doSelectAll}>Select All</button>
+    <button role="menuitem" onclick={doClear}>Clear</button>
+  </ContextMenu>
+{/if}
 
 <style>
   .terminal-pane {
