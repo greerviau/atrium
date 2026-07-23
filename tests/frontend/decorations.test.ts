@@ -900,6 +900,19 @@ describe("buildDecorations: code blocks", () => {
       expect(style).toBe(expected);
     }
   });
+
+  it("sizes a tab-indented line's width by rendered columns, not raw character count", () => {
+    const tabLine = '\tfmt.Println("padded")';
+    const doc = `\`\`\`go\nfunc main() {\n${tabLine}\n}\n\`\`\``;
+    const state = stateFor(doc, 0); // cursor outside the block
+    const styles = collectCodeBlockStyles(state);
+    // Default tabSize is 4: countColumn(tabLine, 4) is 25, three columns
+    // wider than tabLine.length (22) for the one leading tab at column 0.
+    const expected = `width: ${tabLine.length + 3}ch`;
+    for (const style of styles) {
+      expect(style).toBe(expected);
+    }
+  });
 });
 
 // Regression coverage for issues #140/#137 (duplicates): a blockquote used
