@@ -2,7 +2,7 @@
 
 ![Atrium Logo](assets/atrium.png)
 
-A unified markdown editor, code editor, file explorer, and terminal for macOS, built on Tauri v2.
+A unified markdown editor, and code editor for macOS, built on Tauri v2.
 
 ## Prerequisites
 
