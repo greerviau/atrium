@@ -6,9 +6,11 @@ import { writable } from "svelte/store";
  * index are local state inside `SearchOverlay.svelte` itself, the same
  * reasoning `WelcomeScreen` gives for not lifting its own single-usage-site
  * state into a store. `mode` is the one piece of "which picker is this"
- * state that has to live here rather than in the component, since it's the
- * store-writing path both global shortcuts and the in-panel tab strip share
- * (`SearchOverlay.svelte`'s own doc comment on its mode `$effect`).
+ * state that has to live here rather than in the component, since it's what
+ * both global shortcuts write through `openSearch(mode)`. Content and Files
+ * are two fully separate, exclusive views — there is no in-panel control to
+ * switch between them, only Cmd/Ctrl+Shift+F (always content) and
+ * Cmd/Ctrl+P (always files).
  */
 export type SearchMode = "content" | "files";
 

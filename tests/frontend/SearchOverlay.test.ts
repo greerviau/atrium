@@ -355,28 +355,37 @@ describe("SearchOverlay", () => {
     expect(container.querySelector(".search-empty")).toBeNull();
   });
 
-  it("clicking the Files tab switches mode and calls findFiles with the current query instead of searchWorkspace", async () => {
-    vi.mocked(commands.searchWorkspace).mockResolvedValue(results([]));
-    vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
+  it("has no in-panel control to switch modes — Content and Files are exclusive views", async () => {
     const { container } = render(SearchOverlay);
     searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
-    const input = await screen.findByPlaceholderText(PLACEHOLDER);
-    await fireEvent.input(input, { target: { value: "over" } });
+    expect(container.querySelector(".search-mode-tabs")).toBeNull();
+    expect(screen.queryByText("Files")).toBeNull();
+  });
+
+  it("switching to Files mode via its exclusive shortcut while Content mode is open fully resets state (not an in-place toggle)", async () => {
+    vi.mocked(commands.searchWorkspace).mockResolvedValue(results([]));
+    vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+
+    const contentInput = await screen.findByPlaceholderText(PLACEHOLDER);
+    await fireEvent.input(contentInput, { target: { value: "over" } });
     await vi.advanceTimersByTimeAsync(150);
     expect(commands.searchWorkspace).toHaveBeenCalledTimes(1);
 
-    const filesTab = Array.from(container.querySelectorAll(".search-mode-tabs button")).find(
-      (el) => el.textContent?.trim() === "Files",
-    )!;
-    await fireEvent.click(filesTab);
+    // Cmd/Ctrl+P firing while the content view is open — as if from
+    // `main.rs`'s exclusive Go to File menu item, via `openSearch("files")`.
+    searchOverlay.set({ open: true, mode: "files" });
     await tick();
-    await vi.advanceTimersByTimeAsync(150);
 
-    expect(commands.findFiles).toHaveBeenCalledWith("local", "over");
+    const filesInput = await screen.findByPlaceholderText(FILES_PLACEHOLDER);
+    // The content query is not carried over: each mode is a fully separate,
+    // exclusive view, not a toggle that preserves what was typed.
+    expect((filesInput as HTMLInputElement).value).toBe("");
     expect(get(searchOverlay).mode).toBe("files");
-    expect(await screen.findByPlaceholderText(FILES_PLACEHOLDER)).toBeTruthy();
   });
 
   it("searches in Files mode even with a query shorter than the minimum content-mode length", async () => {

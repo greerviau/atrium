@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { searchOverlay, closeSearch, openSearch, type SearchMode } from "./searchOverlay";
+  import { searchOverlay, closeSearch, type SearchMode } from "./searchOverlay";
   import {
     searchWorkspace,
     findFiles,
@@ -52,34 +52,24 @@
     requestId += 1;
   }
 
-  // One effect owns every transition of the store's `open`/`mode` pair, so
-  // the four cases below are mutually exclusive and evaluated in one
-  // deterministic place — no second effect racing this one over the same
-  // state.
+  // Content and Files are two fully separate, exclusive views — Cmd/Ctrl+Shift+F
+  // always opens grep, Cmd/Ctrl+P always opens the file picker, and there is
+  // no in-panel control to switch between them. So the only two things that
+  // can happen while `open`: a genuinely fresh open, or the *other* mode's
+  // exclusive shortcut/menu item firing while this one is already open —
+  // both are treated identically, as a full reset into the requested mode,
+  // never an in-place "keep what I typed" switch (there is nothing to
+  // preserve across two views that are never meant to be interchangeable).
+  // Re-pressing the *same* mode's shortcut while it's already open just
+  // refocuses/selects, matching VS Code's own Ctrl/Cmd+Shift+F behavior.
   $effect(() => {
     const isOpen = $searchOverlay.open;
     const storeMode = $searchOverlay.mode;
 
-    if (isOpen && !previousOpen) {
-      // Closed -> open: fresh start, adopting whichever mode this
-      // openSearch(mode) call requested. The freshly (re)created
-      // <input autofocus> picks up focus on its own.
+    if (isOpen && (!previousOpen || storeMode !== previousMode)) {
       resetState();
       mode = storeMode;
-    } else if (isOpen && previousOpen && storeMode !== previousMode) {
-      // Already open, openSearch(otherMode) was called — the other mode's
-      // shortcut, menu item, or in-panel tab (the tab strip below calls
-      // openSearch directly, the same path as the shortcuts): switch mode
-      // in place, keep the typed query, refocus/select like a re-press.
-      mode = storeMode;
-      inputEl?.focus();
-      inputEl?.select();
     } else if (isOpen && previousOpen && storeMode === previousMode) {
-      // Already open, openSearch(sameMode) was called again — the same
-      // mode's shortcut, menu item, or already-active tab: refocus and
-      // select the existing query text, matching VS Code's own
-      // Ctrl/Cmd+Shift+F behavior, so a second press doesn't wipe out what
-      // the user already typed.
       inputEl?.focus();
       inputEl?.select();
     } else if (!isOpen && previousOpen && debounceTimer) {
@@ -288,18 +278,9 @@
       class="search-panel"
       onclick={(e) => e.stopPropagation()}
       role="dialog"
-      aria-label="Find in Files"
+      aria-label={mode === "content" ? "Find in Files" : "Go to File"}
       tabindex="-1"
     >
-      <div class="search-mode-tabs">
-        <button class="search-toggle" class:active={mode === "content"} onclick={() => openSearch("content")}>
-          Content
-        </button>
-        <button class="search-toggle" class:active={mode === "files"} onclick={() => openSearch("files")}>
-          Files
-        </button>
-      </div>
-
       <div class="search-input-row">
         <!-- svelte-ignore a11y_autofocus -->
         <input
@@ -440,12 +421,6 @@
     flex-direction: column;
     overflow: hidden;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  }
-  .search-mode-tabs {
-    display: flex;
-    gap: 6px;
-    padding: 10px 10px 0;
-    flex-shrink: 0;
   }
   .search-input-row {
     display: flex;
