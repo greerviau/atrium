@@ -219,4 +219,20 @@ describe("EditorPane: table context menu", () => {
     await fireEvent.click(button);
     expect(view.state.doc.toString()).toBe(before);
   });
+
+  // Regression: the menu's disabled={...} checks call every command function
+  // directly during render, against every row in the table, not just the
+  // one that was clicked — so a table containing a ragged row (GFM allows a
+  // body row with fewer cells than the header) used to throw while just
+  // opening the menu on the fully-populated header, before any item was
+  // ever clicked.
+  it("opens without throwing when the table contains a body row shorter than the header", async () => {
+    const raggedTable = "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n| 4 |\n";
+    seedMarkdownTab(raggedTable);
+    const { container } = render(EditorPane, { filePath: MD_PATH, paneId: "pane-1" });
+    await tick();
+
+    await openMenuAt(container, raggedTable.indexOf("A"));
+    expect(menuItem(container, "Insert Row Below").disabled).toBe(false);
+  });
 });

@@ -343,6 +343,72 @@ describe("moveColumn", () => {
   });
 });
 
+// GFM lets a body row have fewer cells than the header — missing trailing
+// cells are implicitly empty (a common shape: a row mid-typed, or pasted
+// short). Every column command must handle a row this short reaching for a
+// column it doesn't have, across every row in the table, not just the one
+// the context was resolved from — a right-click landing on the fully-populated
+// header of a table containing a short row further down still has to
+// evaluate every command's availability (the context menu's own
+// `disabled={...}` checks call these functions directly during render).
+describe("ragged rows (a body row shorter than the header)", () => {
+  const RAGGED = "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n| 4 |\n";
+
+  it("insertColumn at the leftmost edge still reaches every row, short ones included", () => {
+    expect(apply(RAGGED, RAGGED.indexOf("A"), (s, c) => insertColumn(s, c, "left"))).toBe(
+      "|  | A | B | C |\n| --- | --- | --- | --- |\n|  | 1 | 2 | 3 |\n|  | 4 |\n",
+    );
+  });
+
+  it("insertColumn past a short row's own last cell leaves that row untouched", () => {
+    expect(apply(RAGGED, RAGGED.indexOf("B"), (s, c) => insertColumn(s, c, "right"))).toBe(
+      "| A | B |  | C |\n| --- | --- | --- | --- |\n| 1 | 2 |  | 3 |\n| 4 |\n",
+    );
+  });
+
+  it("deleteColumn(0) on a row with only that one cell empties it in place rather than crashing", () => {
+    expect(apply(RAGGED, RAGGED.indexOf("A"), (s, c) => deleteColumn(s, c))).toBe(
+      "| B | C |\n| --- | --- |\n| 2 | 3 |\n|  |\n",
+    );
+  });
+
+  it("deleteColumn past a short row's own last cell leaves that row untouched", () => {
+    expect(apply(RAGGED, RAGGED.indexOf("C"), (s, c) => deleteColumn(s, c))).toBe(
+      "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 4 |\n",
+    );
+  });
+
+  it("moveColumn relocates a short row's own last real cell instead of leaving it mislabeled", () => {
+    // Swapping A/B: the short row's "4" belongs to column A. Left in place,
+    // it would render under whatever now sits at index 0 (B) after the
+    // swap — silently attributing it to the wrong column. It must move to
+    // index 1 (where A now renders) instead.
+    expect(apply(RAGGED, RAGGED.indexOf("A"), (s, c) => moveColumn(s, c, "right"))).toBe(
+      "| B | A | C |\n| --- | --- | --- |\n| 2 | 1 | 3 |\n|  | 4 |\n",
+    );
+  });
+
+  it("moveColumn between two columns a short row has neither of is a no-op for that row", () => {
+    const fromB = apply(RAGGED, RAGGED.indexOf("B"), (s, c) => moveColumn(s, c, "right"));
+    const fromC = apply(RAGGED, RAGGED.indexOf("C"), (s, c) => moveColumn(s, c, "left"));
+    expect(fromB).toBe(fromC);
+    expect(fromB).toBe("| A | C | B |\n| --- | --- | --- |\n| 1 | 3 | 2 |\n| 4 |\n");
+  });
+
+  it("none of the six commands throw when resolved from the header of a table containing a short row", () => {
+    const ctx = ctxAt(RAGGED, RAGGED.indexOf("A"));
+    const state = stateFor(RAGGED);
+    expect(() => insertRow(state, ctx, "below")).not.toThrow();
+    expect(() => deleteRow(state, ctx)).not.toThrow();
+    expect(() => moveRow(state, ctx, "down")).not.toThrow();
+    expect(() => insertColumn(state, ctx, "left")).not.toThrow();
+    expect(() => insertColumn(state, ctx, "right")).not.toThrow();
+    expect(() => deleteColumn(state, ctx)).not.toThrow();
+    expect(() => moveColumn(state, ctx, "left")).not.toThrow();
+    expect(() => moveColumn(state, ctx, "right")).not.toThrow();
+  });
+});
+
 describe("tableNavigationKeymap", () => {
   // Mounted through the same extension order EditorPane.svelte uses
   // (a generic Tab/Enter-binding keymap before markdownExtensions), the same
@@ -434,6 +500,16 @@ describe("tableNavigationKeymap", () => {
     expect(view.state.doc.toString()).toBe(
       "| Name  | Role     |\n| ----- | -------- |\n| Alice | Engineer |\n|  |  |\n",
     );
+    view.destroy();
+    container.remove();
+  });
+
+  it("Enter into a shorter next row clamps to that row's own last real cell instead of throwing", () => {
+    const doc = "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n| 4 |\n";
+    const { view, container } = makeView(doc, doc.indexOf("2"));
+    fireEnter(view);
+    expect(view.state.doc.toString()).toBe(doc);
+    expect(view.state.selection.main.head).toBe(doc.lastIndexOf("4"));
     view.destroy();
     container.remove();
   });

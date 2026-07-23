@@ -242,25 +242,36 @@ export function moveRow(state: EditorState, ctx: TableEditContext, dir: "up" | "
  * inserted empty cell, `"---"` for the delimiter's freshly inserted
  * (left-aligned, GFM's own default) alignment segment.
  *
- * Every case except the table's own leftmost edge inserts `" | "+content`
- * right after the anchor column's own end, relying on the *existing*
- * pipe/content immediately following it (untouched) to close the new
- * segment off — exactly how `deleteColumn`'s mirror-image removal works.
- * The leftmost edge (`left` at column 0) has no preceding column to anchor
- * after, so it instead inserts `content+" | "` immediately before the first
- * column's own start, letting the *existing* leading pipe (or, if the row
- * omits its outer pipe per GFM, nothing at all) stay untouched on its left.
+ * `null` when the anchor column doesn't exist on this row at all: GFM lets
+ * a body row have fewer cells than the header (missing trailing cells are
+ * implicitly empty — e.g. a row mid-typed or pasted short), and inserting a
+ * column somewhere at or past that row's own already-implicit-empty tail
+ * needs no edit at all — the row stays exactly as legitimately "short"
+ * relative to the table's new, one-larger column count.
+ *
+ * Every other case inserts `" | "+content` right after the anchor column's
+ * own end, relying on the *existing* pipe/content immediately following it
+ * (untouched) to close the new segment off — exactly how `deleteColumn`'s
+ * mirror-image removal works. The leftmost edge (`left` at column 0) has no
+ * preceding column to anchor after, so it instead inserts `content+" | "`
+ * immediately before the first column's own start, letting the *existing*
+ * leading pipe (or, if the row omits its outer pipe per GFM, nothing at
+ * all) stay untouched on its left — column 0 always exists on any row with
+ * real content, so this branch never needs the same short-row guard.
  */
 function columnInsertionChange(
   ranges: CellSlot[],
   column: number,
   where: "left" | "right",
   content: string,
-): { from: number; insert: string } {
+): { from: number; insert: string } | null {
   if (where === "left" && column === 0) {
     return { from: ranges[0].from, insert: `${content} | ` };
   }
   const anchorIndex = where === "right" ? column : column - 1;
+  if (anchorIndex >= ranges.length) {
+    return null;
+  }
   return { from: ranges[anchorIndex].to, insert: ` | ${content}` };
 }
 
@@ -268,7 +279,8 @@ function columnInsertionChange(
  * Splices a new empty column into every row (and the delimiter's own
  * alignment segment) in one transaction, so it's one undo step. `column`
  * counting matches `TableEditContext.column`: `right` at column `c` and
- * `left` at column `c+1` insert at the identical boundary.
+ * `left` at column `c+1` insert at the identical boundary. A row shorter
+ * than the insertion point is left untouched — see `columnInsertionChange`.
  */
 export function insertColumn(state: EditorState, ctx: TableEditContext, where: "left" | "right"): TransactionSpec | null {
   const delimiterNode = ctx.table.getChild("TableDelimiter");
@@ -276,8 +288,13 @@ export function insertColumn(state: EditorState, ctx: TableEditContext, where: "
     return null;
   }
 
-  const changes = ctx.rows.map((row) => columnInsertionChange(collectCellSlots(row), ctx.column, where, ""));
-  changes.push(columnInsertionChange(collectDelimiterSegments(state, delimiterNode), ctx.column, where, "---"));
+  const changes = ctx.rows
+    .map((row) => columnInsertionChange(collectCellSlots(row), ctx.column, where, ""))
+    .filter((change): change is { from: number; insert: string } => change !== null);
+  const delimiterChange = columnInsertionChange(collectDelimiterSegments(state, delimiterNode), ctx.column, where, "---");
+  if (delimiterChange) {
+    changes.push(delimiterChange);
+  }
 
   return { changes };
 }
@@ -287,11 +304,26 @@ export function insertColumn(state: EditorState, ctx: TableEditContext, where: "
  * exactly one adjoining gap, so the row's pipe count drops by exactly one.
  * Column 0 has no gap *before* it to fold in, so it takes its trailing gap
  * (up to the next column's own start) instead — the mirror image of
- * `columnInsertionChange`'s leftmost-edge special case.
+ * `columnInsertionChange`'s leftmost-edge special case, unless this row's
+ * *only* cell is the one being deleted (`ranges.length === 1`), in which
+ * case there's no next column's start to fold into either, so just its own
+ * content is removed, leaving the row's own pipes as one explicit empty
+ * cell.
+ *
+ * `null` when this row doesn't reach column `column` at all — a short row
+ * (see `columnInsertionChange`'s own doc comment) whose own explicit cells
+ * all sit before `column` needs no edit: they keep their exact positions
+ * relative to the table's new, one-smaller column count.
  */
-function columnDeletionRange(ranges: CellSlot[], column: number): { from: number; to: number } {
+function columnDeletionRange(ranges: CellSlot[], column: number): { from: number; to: number } | null {
   if (column === 0) {
-    return { from: ranges[0].from, to: ranges[1].from };
+    if (ranges.length === 0) {
+      return null;
+    }
+    return ranges.length === 1 ? { from: ranges[0].from, to: ranges[0].to } : { from: ranges[0].from, to: ranges[1].from };
+  }
+  if (ranges.length <= column) {
+    return null;
   }
   return { from: ranges[column - 1].to, to: ranges[column].to };
 }
@@ -306,18 +338,55 @@ export function deleteColumn(state: EditorState, ctx: TableEditContext): Transac
     return null;
   }
 
-  const changes = ctx.rows.map((row) => columnDeletionRange(collectCellSlots(row), ctx.column));
-  changes.push(columnDeletionRange(collectDelimiterSegments(state, delimiterNode), ctx.column));
+  const changes = ctx.rows
+    .map((row) => columnDeletionRange(collectCellSlots(row), ctx.column))
+    .filter((range): range is { from: number; to: number } => range !== null);
+  const delimiterRange = columnDeletionRange(collectDelimiterSegments(state, delimiterNode), ctx.column);
+  if (delimiterRange) {
+    changes.push(delimiterRange);
+  }
 
   return { changes };
 }
 
+/**
+ * Swaps columns `a` and `b` (`a < b`) for one row. Three shapes, depending
+ * on how far this row's own real cells actually reach:
+ *
+ * - Both exist (`ranges.length > b`): a plain content swap, same as
+ *   `moveRow`'s own line swap — no positions change, just which text sits
+ *   where.
+ * - Neither exists (`ranges.length <= a`): both sides of the swap are
+ *   already implicitly empty for this short row (see `columnInsertionChange`
+ *   for the same GFM allowance) — swapping two empties is a genuine no-op.
+ * - Only `a` exists (`ranges.length === a + 1`, i.e. `a` is this row's own
+ *   *last* real cell — the only way to land here, since `moveColumn` only
+ *   ever swaps adjacent columns, `b === a + 1`): this is the one shape with
+ *   a real data-integrity hazard. `a`'s real content needs to *relocate* to
+ *   `b`'s position, not just vanish — leaving it in place after the
+ *   column-wide swap would silently attribute it to whatever column now
+ *   renders at index `a` instead of the one it actually belongs to. Column
+ *   `a`'s own span is replaced with `" | "+<a's old text>`: the row grows by
+ *   one explicit (now-empty) cell at `a` and one explicit cell at `b`
+ *   holding the relocated text, using the exact same "insert right after
+ *   the existing content, let it close naturally" shape `columnInsertionChange`
+ *   already relies on for a plain interior insert.
+ */
 function swapRangeChanges(
   state: EditorState,
   ranges: CellSlot[],
   a: number,
   b: number,
 ): { from: number; to: number; insert: string }[] {
+  if (ranges.length <= a) {
+    return [];
+  }
+  if (ranges.length <= b) {
+    const rangeA = ranges[a];
+    const textA = state.doc.sliceString(rangeA.from, rangeA.to);
+    return [{ from: rangeA.from, to: rangeA.to, insert: ` | ${textA}` }];
+  }
+
   const rangeA = ranges[a];
   const rangeB = ranges[b];
   const textA = state.doc.sliceString(rangeA.from, rangeA.to);
@@ -351,14 +420,17 @@ export function moveColumn(state: EditorState, ctx: TableEditContext, dir: "left
     return null;
   }
 
-  const changes = ctx.rows.flatMap((row) => swapRangeChanges(state, collectCellSlots(row), ctx.column, adjacent));
-  changes.push(...swapRangeChanges(state, collectDelimiterSegments(state, delimiterNode), ctx.column, adjacent));
+  const [lower, upper] = ctx.column < adjacent ? [ctx.column, adjacent] : [adjacent, ctx.column];
+  const changes = ctx.rows.flatMap((row) => swapRangeChanges(state, collectCellSlots(row), lower, upper));
+  changes.push(...swapRangeChanges(state, collectDelimiterSegments(state, delimiterNode), lower, upper));
 
   return { changes };
 }
 
+/** Clamped to the row's own last real cell — the target row of an Enter/Tab move may have fewer cells than the one the cursor started in (see `columnInsertionChange`'s own doc comment on short rows). */
 function cellCursor(row: SyntaxNode, column: number): number {
-  return collectCellSlots(row)[column].from;
+  const slots = collectCellSlots(row);
+  return slots[Math.min(column, slots.length - 1)].from;
 }
 
 /**
