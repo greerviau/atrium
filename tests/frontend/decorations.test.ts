@@ -290,6 +290,89 @@ describe("buildDecorations: images", () => {
   });
 });
 
+describe("buildDecorations: reference-style links and images (issue #196)", () => {
+  function linkHrefFor(doc: string): string | undefined {
+    const state = stateFor(doc, doc.length);
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", true);
+    let href: string | undefined;
+    decorations.between(0, state.doc.length, (_f, _t, deco) => {
+      if (deco.spec.class === "cm-link") {
+        href = deco.spec.attributes?.["data-href"];
+      }
+    });
+    return href;
+  }
+
+  function imageWidgetFor(doc: string): ImageWidget | undefined {
+    const state = stateFor(doc, doc.length);
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", true);
+    let widget: ImageWidget | undefined;
+    decorations.between(0, state.doc.length, (_f, _t, deco) => {
+      if (deco.spec.widget instanceof ImageWidget) {
+        widget = deco.spec.widget;
+      }
+    });
+    return widget;
+  }
+
+  it("resolves a full reference link ([text][label]) to its definition's URL", () => {
+    const doc = 'See [my link][ref] for more.\n\n[ref]: https://example.com "Title"';
+    expect(linkHrefFor(doc)).toBe("https://example.com");
+  });
+
+  it("resolves a collapsed reference link ([label][]) to its definition's URL", () => {
+    const doc = 'See [ref][] for more.\n\n[ref]: https://example.com "Title"';
+    expect(linkHrefFor(doc)).toBe("https://example.com");
+  });
+
+  it("resolves a shortcut reference link ([label]) to its definition's URL", () => {
+    const doc = 'See [ref] for more.\n\n[ref]: https://example.com "Title"';
+    expect(linkHrefFor(doc)).toBe("https://example.com");
+  });
+
+  it("resolves a reference link even when its definition appears after the citing paragraph", () => {
+    const doc = "See [my link][ref] for more.\n\nSome other paragraph.\n\n[ref]: https://example.com";
+    expect(linkHrefFor(doc)).toBe("https://example.com");
+  });
+
+  it.each([
+    ["full", "![alt][ref]"],
+    ["collapsed", "![ref][]"],
+    ["shortcut", "![ref]"],
+  ])("renders a %s reference-style image with the resolved URL instead of leaving raw source visible", (_label, syntax) => {
+    const doc = `See ${syntax} for more.\n\n[ref]: https://example.com/img.png`;
+    const widget = imageWidgetFor(doc);
+    expect(widget).toBeTruthy();
+    expect(widget?.url).toBe("https://example.com/img.png");
+  });
+
+  it("keeps today's behavior for a dangling link reference: empty data-href, no crash", () => {
+    const doc = "See [my link][missing] for more.\nsecond line";
+    expect(linkHrefFor(doc)).toBe("");
+  });
+
+  it("keeps today's behavior for a dangling image reference: raw source stays visible", () => {
+    const doc = "See ![alt][missing] for more.\nsecond line";
+    expect(imageWidgetFor(doc)).toBeUndefined();
+    expect(doc).toContain("![alt][missing]");
+  });
+
+  it("resolves duplicate labels to the first definition's URL, per CommonMark's first-wins rule", () => {
+    const doc = "[a][x]\n\n[x]: https://first.com\n[x]: https://second.com";
+    expect(linkHrefFor(doc)).toBe("https://first.com");
+  });
+
+  it("resolves a reference link whose definition sits inside a blockquote", () => {
+    const doc = "See [my link][ref] for more.\n\n> [ref]: https://example.com";
+    expect(linkHrefFor(doc)).toBe("https://example.com");
+  });
+
+  it("resolves a reference link whose definition sits inside a list item", () => {
+    const doc = "See [my link][ref] for more.\n\n- [ref]: https://example.com";
+    expect(linkHrefFor(doc)).toBe("https://example.com");
+  });
+});
+
 describe("buildDecorations: task lists", () => {
   it("replaces unchecked and checked markers with CheckboxWidget regardless of cursor", () => {
     const doc = "- [ ] todo\n- [x] done";

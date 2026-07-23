@@ -153,7 +153,141 @@ function decorateEscape(state: EditorState, node: SyntaxNode, out: Range<Decorat
   out.push(Decoration.replace({}).range(node.from, node.from + 1));
 }
 
-function decorateLink(state: EditorState, node: SyntaxNode, documentPath: string, out: Range<Decoration>[]): void {
+/**
+ * A resolved reference-style definition: `[ref]: <url> "title"`. `title` is
+ * carried for completeness even though nothing currently surfaces it in the
+ * UI (see `resolveReferenceUrl`'s docstring).
+ */
+interface ReferenceDefinition {
+  url: string;
+  title?: string;
+}
+
+/**
+ * Normalizes a reference label per CommonMark's reference-matching rule —
+ * case-fold and collapse runs of internal whitespace to a single space —
+ * so `[My Ref]`, `[my  ref]`, and `[MY REF]` all key the same map entry.
+ */
+function normalizeReferenceLabel(label: string): string {
+  return label.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * Strips a `LinkTitle` node's surrounding delimiters (`"..."`, `'...'`, or
+ * `(...)`) down to the bare title text.
+ */
+function stripTitleDelimiters(raw: string): string {
+  if (raw.length >= 2) {
+    return raw.slice(1, -1);
+  }
+  return raw;
+}
+
+/**
+ * Collects every `[label]: url "title"` reference definition in the
+ * document into a label → definition map, keyed by `normalizeReferenceLabel`.
+ * Reference definitions can appear anywhere in the document, including below
+ * the paragraph that cites them, so this is a single upfront pass over the
+ * whole `syntaxTree` (not scoped to `visibleRanges`) rather than something
+ * folded into the viewport-scoped walk in `buildDecorations`.
+ *
+ * Per CommonMark, when multiple definitions share the same normalized label
+ * the first one in document order wins — so a label already in the map is
+ * never overwritten by a later duplicate.
+ *
+ * `LinkReference` is a block-level construct that can never appear nested
+ * inside inline content (`Paragraph`, `Emphasis`, `Link`, table cells, ...),
+ * only inside other block containers — so descent is pruned to
+ * `BLOCK_CONTAINER_NODES` (shared with `buildMermaidWidgetDecorations`,
+ * which prunes for the same reason), keeping this pass proportional to
+ * block/line count rather than total node count on every keystroke.
+ */
+function collectLinkReferences(state: EditorState): Map<string, ReferenceDefinition> {
+  const refs = new Map<string, ReferenceDefinition>();
+  syntaxTree(state).iterate({
+    enter(ref) {
+      if (ref.name === "LinkReference") {
+        const labelNode = ref.node.getChild("LinkLabel");
+        const urlNode = ref.node.getChild("URL");
+        if (labelNode && urlNode) {
+          const rawLabel = state.doc.sliceString(labelNode.from, labelNode.to);
+          const key = normalizeReferenceLabel(stripTitleDelimiters(rawLabel));
+          if (!refs.has(key)) {
+            const titleNode = ref.node.getChild("LinkTitle");
+            const url = state.doc.sliceString(urlNode.from, urlNode.to);
+            const title = titleNode ? stripTitleDelimiters(state.doc.sliceString(titleNode.from, titleNode.to)) : undefined;
+            refs.set(key, { url, title });
+          }
+        }
+        return false;
+      }
+      if (ref.name !== "Document" && !BLOCK_CONTAINER_NODES.has(ref.name)) {
+        return false;
+      }
+    },
+  });
+  return refs;
+}
+
+/**
+ * Extracts a `Link`/`Image` node's own reference label — the raw text used
+ * to look it up in the map `collectLinkReferences` built — covering all
+ * three CommonMark reference forms:
+ * - Full: `[text][label]` — label is the `LinkLabel` child's text.
+ * - Collapsed: `[label][]` — `LinkLabel` child is present but empty, so the
+ *   label is the link's own text instead.
+ * - Shortcut: `[label]` — no second bracket group at all, so the label is
+ *   the link's own text.
+ *
+ * Returns `null` when `node` doesn't have the two `LinkMark` children every
+ * form requires (shouldn't happen for a real `Link`/`Image` node, but keeps
+ * this total).
+ */
+function referenceLabelFor(state: EditorState, node: SyntaxNode): string | null {
+  const marks = node.getChildren("LinkMark");
+  if (marks.length < 2) {
+    return null;
+  }
+  const linkLabelNode = node.getChild("LinkLabel");
+  if (linkLabelNode) {
+    const inner = stripTitleDelimiters(state.doc.sliceString(linkLabelNode.from, linkLabelNode.to));
+    if (inner.length > 0) {
+      return inner;
+    }
+  }
+  return state.doc.sliceString(marks[0].to, marks[1].from);
+}
+
+/**
+ * Resolves a reference-style `Link`/`Image` node (one with no `URL` child of
+ * its own) against the definitions `collectLinkReferences` gathered.
+ * Returns `undefined` for a dangling reference — a label with no matching
+ * definition anywhere in the document, which is a real authoring error left
+ * unchanged by this resolver (see `decorateLink`/`decorateImage`).
+ *
+ * `title` is returned for completeness but not currently wired into the UI
+ * anywhere (nothing surfaces a link/image title today), so callers are free
+ * to ignore it.
+ */
+function resolveReferenceUrl(
+  state: EditorState,
+  node: SyntaxNode,
+  refs: Map<string, ReferenceDefinition>,
+): ReferenceDefinition | undefined {
+  const label = referenceLabelFor(state, node);
+  if (label === null) {
+    return undefined;
+  }
+  return refs.get(normalizeReferenceLabel(label));
+}
+
+function decorateLink(
+  state: EditorState,
+  node: SyntaxNode,
+  documentPath: string,
+  refs: Map<string, ReferenceDefinition>,
+  out: Range<Decoration>[],
+): void {
   const marks = node.getChildren("LinkMark");
   if (marks.length < 2) {
     return;
@@ -161,7 +295,7 @@ function decorateLink(state: EditorState, node: SyntaxNode, documentPath: string
   const openMark = marks[0];
   const closeTextMark = marks[1];
   const urlNode = node.getChild("URL");
-  const url = urlNode ? state.doc.sliceString(urlNode.from, urlNode.to) : "";
+  const url = urlNode ? state.doc.sliceString(urlNode.from, urlNode.to) : (resolveReferenceUrl(state, node, refs)?.url ?? "");
 
   out.push(Decoration.replace({}).range(openMark.from, openMark.to));
   out.push(Decoration.replace({}).range(closeTextMark.from, node.to));
@@ -173,14 +307,23 @@ function decorateLink(state: EditorState, node: SyntaxNode, documentPath: string
   );
 }
 
-function decorateImage(state: EditorState, node: SyntaxNode, documentPath: string, out: Range<Decoration>[]): void {
+function decorateImage(
+  state: EditorState,
+  node: SyntaxNode,
+  documentPath: string,
+  refs: Map<string, ReferenceDefinition>,
+  out: Range<Decoration>[],
+): void {
   const marks = node.getChildren("LinkMark");
+  if (marks.length < 2) {
+    return;
+  }
   const urlNode = node.getChild("URL");
-  if (marks.length < 2 || !urlNode) {
+  const url = urlNode ? state.doc.sliceString(urlNode.from, urlNode.to) : resolveReferenceUrl(state, node, refs)?.url;
+  if (url === undefined) {
     return;
   }
   const alt = state.doc.sliceString(marks[0].to, marks[1].from);
-  const url = state.doc.sliceString(urlNode.from, urlNode.to);
   out.push(
     Decoration.replace({ widget: new ImageWidget(url, alt, documentPath, node.from) }).range(node.from, node.to),
   );
@@ -344,14 +487,17 @@ function mermaidWidgetSource(state: EditorState, node: SyntaxNode, hasFocus: boo
 }
 
 /**
- * Node names a ` ```mermaid ` block can be nested under (besides the
+ * Node names a block-level construct can be nested under (besides the
  * document root) — every markdown block container that can hold a fenced
- * code block as a descendant. Pruning descent to just these keeps
- * `buildMermaidWidgetDecorations`'s whole-document walk proportional to
+ * code block or a `LinkReference` definition as a descendant. Pruning
+ * descent to just these keeps a whole-document walk proportional to
  * block/line count rather than total node count, since it never descends
- * into inline content (`Paragraph`, `Emphasis`, ...) at all.
+ * into inline content (`Paragraph`, `Emphasis`, ...) at all. Shared by
+ * `buildMermaidWidgetDecorations` (pruning its ` ```mermaid ` search) and
+ * `collectLinkReferences` (pruning its `LinkReference` search), since both
+ * walks have the same shape of problem.
  */
-const MERMAID_CONTAINER_NODES = new Set(["Blockquote", "BulletList", "OrderedList", "ListItem"]);
+const BLOCK_CONTAINER_NODES = new Set(["Blockquote", "BulletList", "OrderedList", "ListItem"]);
 
 /**
  * Builds block-replace `MermaidWidget` decorations for every ` ```mermaid `
@@ -359,7 +505,7 @@ const MERMAID_CONTAINER_NODES = new Set(["Blockquote", "BulletList", "OrderedLis
  * document (not viewport-limited like `buildDecorations`) because a
  * `StateField`, which is what this feeds, has no notion of the current
  * viewport — but descent is pruned to markdown block containers
- * (`MERMAID_CONTAINER_NODES`) plus `FencedCode` itself, so realistic
+ * (`BLOCK_CONTAINER_NODES`) plus `FencedCode` itself, so realistic
  * documents (far more inline content than fenced blocks) stay cheap.
  */
 export function buildMermaidWidgetDecorations(state: EditorState, hasFocus: boolean): DecorationSet {
@@ -375,7 +521,7 @@ export function buildMermaidWidgetDecorations(state: EditorState, hasFocus: bool
         }
         return false;
       }
-      if (ref.name !== "Document" && !MERMAID_CONTAINER_NODES.has(ref.name)) {
+      if (ref.name !== "Document" && !BLOCK_CONTAINER_NODES.has(ref.name)) {
         return false;
       }
     },
@@ -578,6 +724,7 @@ export function buildDecorations(
 ): DecorationSet {
   const decorations: Range<Decoration>[] = [];
   const tree = syntaxTree(state);
+  const refs = collectLinkReferences(state);
 
   for (const { from, to } of visibleRanges) {
     tree.iterate({
@@ -660,13 +807,13 @@ export function buildDecorations(
             if (isRevealTarget(state, ref.node, hasFocus)) {
               break;
             }
-            decorateLink(state, ref.node, documentPath, decorations);
+            decorateLink(state, ref.node, documentPath, refs, decorations);
             break;
           case "Image":
             if (isRevealTarget(state, ref.node, hasFocus)) {
               break;
             }
-            decorateImage(state, ref.node, documentPath, decorations);
+            decorateImage(state, ref.node, documentPath, refs, decorations);
             break;
         }
       },
