@@ -7,8 +7,8 @@
     closeContextMenu,
     openContextMenu,
     deletePath,
-    revealInFinder,
   } from "./contextMenu";
+  import { revealInFinder } from "../ipc/reveal";
   import { editingPath, pendingCreate, settleActiveEdit } from "./inlineEdit";
   import FileTreeNode from "./FileTreeNode.svelte";
   import ContextMenu from "../ui/ContextMenu.svelte";
