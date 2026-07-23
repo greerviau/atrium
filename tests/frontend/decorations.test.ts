@@ -142,6 +142,69 @@ describe("buildDecorations: inline code", () => {
   });
 });
 
+describe("buildDecorations: escapes", () => {
+  it("hides the backslash of an escaped pipe in a table cell, leaving the literal pipe visible", () => {
+    const doc = "| a\\|b | normal |\n| --- | --- |\n| x | y |\n";
+    const state = stateFor(doc, doc.length); // cursor elsewhere
+    const decos = collect(state);
+    const backslashPos = doc.indexOf("\\");
+    const hidesBackslash = decos.some(
+      (d) => d.isReplace && !d.class && d.from === backslashPos && d.to === backslashPos + 1,
+    );
+    expect(hidesBackslash).toBe(true);
+    // Sanity: the cell's raw source still contains the pipe right after the backslash.
+    expect(state.doc.sliceString(backslashPos, backslashPos + 2)).toBe("\\|");
+  });
+
+  it("reveals the raw backslash while the cursor is in the cell containing the escape", () => {
+    const doc = "| a\\|b | normal |\n| --- | --- |\n| x | y |\n";
+    const backslashPos = doc.indexOf("\\");
+    const state = stateFor(doc, backslashPos + 1); // cursor inside the cell, right after the backslash
+    const decos = collect(state);
+    const hidesBackslash = decos.some(
+      (d) => d.isReplace && !d.class && d.from === backslashPos && d.to === backslashPos + 1,
+    );
+    expect(hidesBackslash).toBe(false);
+    expect(state.doc.sliceString(backslashPos, backslashPos + 2)).toBe("\\|");
+  });
+
+  it("keeps a sibling cell's escape hidden when the cursor is elsewhere in the same row", () => {
+    const doc = "| a\\|b | normal |\n| --- | --- |\n| x | y |\n";
+    const backslashPos = doc.indexOf("\\");
+    const state = stateFor(doc, doc.indexOf("normal") + 1); // cursor in the other cell on the same row
+    const decos = collect(state);
+    const hidesBackslash = decos.some(
+      (d) => d.isReplace && !d.class && d.from === backslashPos && d.to === backslashPos + 1,
+    );
+    expect(hidesBackslash).toBe(true);
+  });
+
+  it("hides an escaped character's backslash outside of a table too", () => {
+    const doc = "plain \\*text\\* here\nsecond line";
+    const state = stateFor(doc, doc.length); // cursor elsewhere
+    const decos = collect(state);
+    const firstBackslash = doc.indexOf("\\");
+    const secondBackslash = doc.indexOf("\\", firstBackslash + 1);
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === firstBackslash && d.to === firstBackslash + 1)).toBe(
+      true,
+    );
+    expect(
+      decos.some((d) => d.isReplace && !d.class && d.from === secondBackslash && d.to === secondBackslash + 1),
+    ).toBe(true);
+  });
+
+  it("leaves a backslash followed by a non-punctuation character untouched (no Escape node, parser behavior)", () => {
+    const doc = "plain \\A text\nsecond line";
+    const state = stateFor(doc, doc.length);
+    const decos = collect(state);
+    const backslashPos = doc.indexOf("\\");
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === backslashPos && d.to === backslashPos + 1)).toBe(
+      false,
+    );
+    expect(state.doc.sliceString(backslashPos, backslashPos + 2)).toBe("\\A");
+  });
+});
+
 describe("buildDecorations: nested/composited inline constructs under the cursor", () => {
   it("decorates a heading and its nested bold text together when the cursor is on that line", () => {
     const doc = "# Heading with **bold** text\nsecond line";

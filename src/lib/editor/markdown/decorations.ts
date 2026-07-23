@@ -136,6 +136,23 @@ function decorateWrapped(
   }
 }
 
+/**
+ * An `Escape` node always spans exactly 2 characters: the backslash at
+ * `node.from` and the escaped punctuation character at `node.from + 1`
+ * (`@lezer/markdown`'s inline parser emits this for any backslash followed
+ * by CommonMark-escapable punctuation, table cells included, since GFM
+ * table cells get full standard inline parsing). Hiding just the backslash
+ * leaves the escaped character to render as plain text, matching GFM's
+ * escaping rule. Gated through `isRevealTarget` for the same table-cell-scoped
+ * reveal behavior as `decorateWrapped`.
+ */
+function decorateEscape(state: EditorState, node: SyntaxNode, out: Range<Decoration>[], hasFocus: boolean): void {
+  if (isRevealTarget(state, node, hasFocus)) {
+    return;
+  }
+  out.push(Decoration.replace({}).range(node.from, node.from + 1));
+}
+
 function decorateLink(state: EditorState, node: SyntaxNode, documentPath: string, out: Range<Decoration>[]): void {
   const marks = node.getChildren("LinkMark");
   if (marks.length < 2) {
@@ -632,6 +649,9 @@ export function buildDecorations(
             break;
           case "InlineCode":
             decorateWrapped(state, ref.node, "CodeMark", CLASS.inlineCode, decorations, hasFocus);
+            break;
+          case "Escape":
+            decorateEscape(state, ref.node, decorations, hasFocus);
             break;
           case "QuoteMark":
             decorateQuoteMark(state, ref.node, decorations, hasFocus);
