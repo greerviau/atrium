@@ -6,6 +6,9 @@ import { EditorView } from "@codemirror/view";
 import { forceParsing } from "@codemirror/language";
 import EditorPane from "../../src/lib/editor/EditorPane.svelte";
 import { tabsState, toggleMarkdownViewMode, markDirty, type Tab } from "../../src/lib/stores/tabs";
+import { focusedEditorPaneId } from "../../src/lib/stores/editorPanes";
+
+const PANE_ID = "pane-1";
 
 // `StateEffect.type` is a real runtime field (used internally by `.is()`)
 // but isn't part of `@codemirror/state`'s public `.d.ts`, hence the cast.
@@ -37,6 +40,7 @@ function seedMarkdownTab(): Tab {
     viewMode: "rendered",
   };
   tabsState.set({ tabs: [tab], activeTabPath: FILE_PATH });
+  focusedEditorPaneId.set(PANE_ID);
   return tab;
 }
 
@@ -48,11 +52,12 @@ describe("EditorPane: markdown view-mode toggle", () => {
   afterEach(() => {
     cleanup();
     tabsState.set({ tabs: [], activeTabPath: null });
+    focusedEditorPaneId.set(null);
     vi.restoreAllMocks();
   });
 
   it("renders live-preview decorations by default, with no line-number gutter", () => {
-    const { container } = render(EditorPane, { filePath: FILE_PATH });
+    const { container } = render(EditorPane, { filePath: FILE_PATH, paneId: PANE_ID });
 
     // Live-preview decorations only cover however far the background parser
     // has gotten so far (issue #85) — drive it to completion the same way
@@ -66,7 +71,7 @@ describe("EditorPane: markdown view-mode toggle", () => {
   });
 
   it("toggling to source view swaps in the raw view without losing document content", async () => {
-    const { container } = render(EditorPane, { filePath: FILE_PATH });
+    const { container } = render(EditorPane, { filePath: FILE_PATH, paneId: PANE_ID });
 
     toggleMarkdownViewMode(FILE_PATH);
     await tick();
@@ -79,7 +84,7 @@ describe("EditorPane: markdown view-mode toggle", () => {
   });
 
   it("toggling back to rendered view restores decorations and removes the gutter", async () => {
-    const { container } = render(EditorPane, { filePath: FILE_PATH });
+    const { container } = render(EditorPane, { filePath: FILE_PATH, paneId: PANE_ID });
 
     toggleMarkdownViewMode(FILE_PATH);
     await tick();
@@ -93,7 +98,7 @@ describe("EditorPane: markdown view-mode toggle", () => {
 
   it("reconfigures the view-mode compartment only when viewMode actually changes", async () => {
     const reconfigureSpy = vi.spyOn(Compartment.prototype, "reconfigure");
-    render(EditorPane, { filePath: FILE_PATH });
+    render(EditorPane, { filePath: FILE_PATH, paneId: PANE_ID });
     await tick();
     // One call on mount, from the (unguarded) theme-compartment effect.
     const callsAfterMount = reconfigureSpy.mock.calls.length;
@@ -147,7 +152,7 @@ describe("EditorPane: markdown view-mode toggle", () => {
     // own `@codemirror/view` module instance makes (a Vite module-resolution
     // quirk this file already works around for the reconfigure spy).
     const dispatchSpy = vi.spyOn(EditorView.prototype, "dispatch");
-    render(EditorPane, { filePath: FILE_PATH });
+    render(EditorPane, { filePath: FILE_PATH, paneId: PANE_ID });
     await tick();
     const callsAfterMount = dispatchSpy.mock.calls.length;
 

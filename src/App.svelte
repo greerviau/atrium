@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import FileTree from "./lib/explorer/FileTree.svelte";
-  import EditorPane from "./lib/editor/EditorPane.svelte";
+  import EditorPaneSplit from "./lib/editor/EditorPaneSplit.svelte";
   import PaneSplit from "./lib/terminal/PaneSplit.svelte";
   import WelcomeScreen from "./lib/welcome/WelcomeScreen.svelte";
   import SearchOverlay from "./lib/search/SearchOverlay.svelte";
@@ -10,15 +10,7 @@
   import KeyboardShortcutsDialog from "./lib/shell/KeyboardShortcutsDialog.svelte";
   import StatusBar from "./lib/shell/StatusBar.svelte";
   import { workspace, openWorkspacePath } from "./lib/stores/workspace";
-  import {
-    tabsState,
-    setActiveTab,
-    requestCloseTab,
-    reconcileExternalChange,
-    reloadFromDisk,
-    dismissConflict,
-    toggleMarkdownViewMode,
-  } from "./lib/stores/tabs";
+  import { tabsState, setActiveTab, requestCloseTab, reconcileExternalChange } from "./lib/stores/tabs";
   import { closePrompt } from "./lib/stores/closePrompt";
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
   import { onFsChanged, onDockOpenPath, onCloseRequested, onDragDropEvent } from "./lib/ipc/events";
@@ -52,7 +44,20 @@
     type TerminalSession,
     type SplitDirection,
   } from "./lib/terminal/paneTree";
-  import { zoom } from "./lib/stores/textSize";
+  import {
+    splitPane as splitEditorPane,
+    resizeSplit as resizeEditorSplit,
+    findLeaf as findEditorLeaf,
+    listLeaves as listEditorLeaves,
+    nextActivePane as nextActiveEditorPane,
+    addTabToLeaf as addEditorTabToLeaf,
+    closeTabInLeaf as closeEditorTabInLeaf,
+    setActiveTabInLeaf as setActiveTabInEditorLeaf,
+    pruneMissingTabs,
+    type EditorPaneNode,
+    type EditorLeafPane,
+  } from "./lib/editor/editorPaneTree";
+  import { focusedEditorPaneId, editorPaneTree } from "./lib/stores/editorPanes";
 
   const initialLayout = loadTerminalLayout();
 
@@ -197,6 +202,160 @@
     terminalPaneTree = resizeSplit(terminalPaneTree, splitId, index, delta, minRatio);
   }
 
+  // A single pane tree for the editor, parallel to `terminalPaneTree` above
+  // — a split adds a sibling panel to this same tree, each leaf owning its
+  // own tab strip of open paths (see editorPaneTree.ts). Unlike the
+  // terminal, split panes over the same path don't yet share live content:
+  // each pane's `EditorPane` mounts its own `EditorView` from the file's
+  // current `savedDoc` at split time (issue #158's PR 1) — cross-view
+  // content sync is a follow-up.
+  //
+  // Both `editorPaneTree` and `focusedEditorPaneId` (unlike `terminalPaneTree`/
+  // `focusedPaneId` above) live in stores (`src/lib/stores/editorPanes.ts`),
+  // not local state: `EditorPane.svelte`, several components below this one,
+  // needs to read the whole tree directly — not just its own pane — to
+  // decide whether it's the one pane, among possibly several showing the
+  // same path, that owns driving the global cursor-position store or
+  // responding to a save request for that path.
+
+  // `tabsState.activeTabPath` is kept as a mirror of "the focused editor
+  // pane's own active tab" — `MenuBar.ts`'s save handler and `StatusBar.svelte`
+  // both just read it, unaware panes exist at all. Every pane-focus or
+  // per-leaf active-tab change below calls this afterward to keep it in sync.
+  function syncActiveTabToFocusedPane(): void {
+    if (!$editorPaneTree || !$focusedEditorPaneId) return;
+    const leaf = findEditorLeaf($editorPaneTree, $focusedEditorPaneId);
+    if (leaf?.activeTabPath) setActiveTab(leaf.activeTabPath);
+  }
+
+  function setFocusedEditorPane(paneId: string): void {
+    $focusedEditorPaneId = paneId;
+    syncActiveTabToFocusedPane();
+  }
+
+  function setActiveTabInEditorPane(paneId: string, path: string): void {
+    if (!$editorPaneTree) return;
+    $editorPaneTree = setActiveTabInEditorLeaf($editorPaneTree, paneId, path);
+    $focusedEditorPaneId = paneId;
+    syncActiveTabToFocusedPane();
+  }
+
+  // Splits `paneId`, duplicating its own currently-active tab into the new
+  // pane and focusing that new pane — this one primitive covers both of
+  // issue #158's scenarios: a single-file pane's only tab is its active tab
+  // (scenario 1, "duplicate the file"), and a multi-tab pane's active tab is
+  // whichever one the user had selected (scenario 2, "split just the active
+  // tab") — the original pane's own tab strip is never touched either way.
+  function splitEditorPaneAt(paneId: string, direction: SplitDirection): void {
+    if (!$editorPaneTree) return;
+    const activePath = findEditorLeaf($editorPaneTree, paneId)?.activeTabPath;
+    if (!activePath) return;
+    const newLeaf: EditorLeafPane = { type: "leaf", id: genId("epane"), tabs: [activePath], activeTabPath: activePath };
+    $editorPaneTree = splitEditorPane($editorPaneTree, paneId, direction, newLeaf);
+    $focusedEditorPaneId = newLeaf.id;
+    syncActiveTabToFocusedPane();
+  }
+
+  function pathOpenInOtherEditorLeaf(tree: EditorPaneNode, path: string, excludeLeafId: string): boolean {
+    return listEditorLeaves(tree).some((leaf) => leaf.id !== excludeLeafId && leaf.tabs.includes(path));
+  }
+
+  // The tab's × button inside one leaf's own tab strip. If `path` is also
+  // open in another pane, this only closes *this* pane's view of it — the
+  // file itself, and the other pane's view, are untouched, and (per the
+  // plan) this must never raise the unsaved-changes prompt in that case,
+  // since the file isn't actually being closed. Only when this was the last
+  // pane showing `path` does it defer to the ordinary file-close flow
+  // (`requestCloseTab`, with its dirty check) — the reconciliation `$effect`
+  // below removes `path` from `editorPaneTree` once `tabsState` actually
+  // drops it, whether that happens immediately (a clean tab) or later,
+  // asynchronously, via the unsaved-changes dialog.
+  function closeTabInEditorPane(paneId: string, path: string): void {
+    if (!$editorPaneTree) return;
+    if (pathOpenInOtherEditorLeaf($editorPaneTree, path, paneId)) {
+      const leaf = findEditorLeaf($editorPaneTree, paneId);
+      const isPanesLastTab = leaf?.tabs.length === 1;
+      const currentFocus = $focusedEditorPaneId;
+      const nextFocus =
+        isPanesLastTab && currentFocus === paneId ? nextActiveEditorPane($editorPaneTree, paneId) : currentFocus;
+      $editorPaneTree = closeEditorTabInLeaf($editorPaneTree, paneId, path);
+      $focusedEditorPaneId = $editorPaneTree ? (nextFocus ?? currentFocus) : null;
+      syncActiveTabToFocusedPane();
+    } else {
+      requestCloseTab(path);
+    }
+  }
+
+  function resizeEditorPaneSplit(splitId: string, index: number, delta: number, containerSizePx: number): void {
+    if (!$editorPaneTree) return;
+    const minRatio = containerSizePx > 0 ? PANE_MIN_PX / containerSizePx : 0;
+    $editorPaneTree = resizeEditorSplit($editorPaneTree, splitId, index, delta, minRatio);
+  }
+
+  // Ensures whatever `tabsState.activeTabPath` currently points at (set by
+  // `openFile()` from the explorer/search/links, or by this file's own
+  // pane-focus sync above) is open *and selected* in the editor — creating
+  // the first pane on the very first file open (mirroring the terminal's own
+  // lazy-init), revealing-and-focusing whichever pane already has it open
+  // rather than duplicating it, or adding a genuinely new path into the
+  // focused pane. Every branch below leaves the focused leaf's own
+  // `activeTabPath` equal to `path` by construction, which is what keeps the
+  // "`tabsState.activeTabPath` mirrors the focused pane" invariant above from
+  // drifting — without this, a `openFile()` targeting a path already open in
+  // an *unfocused* pane would leave `tabsState.activeTabPath` (and thus
+  // `StatusBar`/`MenuBar`'s save target) pointing at a file no visibly-focused
+  // pane is actually showing.
+  $effect(() => {
+    const path = $tabsState.activeTabPath;
+    if (!path) return;
+    if (!$editorPaneTree) {
+      const paneId = genId("epane");
+      $editorPaneTree = { type: "leaf", id: paneId, tabs: [path], activeTabPath: path };
+      $focusedEditorPaneId = paneId;
+      return;
+    }
+
+    const focusedLeaf = $focusedEditorPaneId ? findEditorLeaf($editorPaneTree, $focusedEditorPaneId) : null;
+    if (focusedLeaf?.activeTabPath === path) return;
+
+    const owningLeaf =
+      (focusedLeaf?.tabs.includes(path) ? focusedLeaf : null) ??
+      listEditorLeaves($editorPaneTree).find((leaf) => leaf.tabs.includes(path));
+    if (owningLeaf) {
+      if (owningLeaf.activeTabPath !== path) {
+        $editorPaneTree = setActiveTabInEditorLeaf($editorPaneTree, owningLeaf.id, path);
+      }
+      $focusedEditorPaneId = owningLeaf.id;
+      return;
+    }
+
+    const targetLeafId = focusedLeaf ? focusedLeaf.id : listEditorLeaves($editorPaneTree)[0].id;
+    $editorPaneTree = addEditorTabToLeaf($editorPaneTree, targetLeafId, path);
+    $focusedEditorPaneId = targetLeafId;
+  });
+
+  // The other direction: a path can be closed at the `tabsState` level with
+  // no notion of which pane(s) were showing it — the unsaved-changes
+  // dialog's "Don't Save"/"Save" actions call `closeTab` directly. Whenever
+  // that happens, prune the now-stale path out of every leaf that had it,
+  // dropping any leaf left with no tabs, and refocus off a leaf that
+  // disappeared out from under the current focus.
+  $effect(() => {
+    if (!$editorPaneTree) return;
+    const openPaths = new Set($tabsState.tabs.map((t) => t.path));
+    const isStale = listEditorLeaves($editorPaneTree).some((leaf) => leaf.tabs.some((p) => !openPaths.has(p)));
+    if (!isStale) return;
+
+    const currentFocus = $focusedEditorPaneId;
+    const focusedLeafFullyStale =
+      currentFocus !== null && (findEditorLeaf($editorPaneTree, currentFocus)?.tabs.every((p) => !openPaths.has(p)) ?? false);
+    const fallbackFocus = focusedLeafFullyStale ? nextActiveEditorPane($editorPaneTree, currentFocus) : currentFocus;
+
+    $editorPaneTree = pruneMissingTabs($editorPaneTree, openPaths);
+    $focusedEditorPaneId = $editorPaneTree ? (fallbackFocus ?? listEditorLeaves($editorPaneTree)[0]?.id ?? null) : null;
+    syncActiveTabToFocusedPane();
+  });
+
   function startDragExplorer(event: PointerEvent): void {
     event.preventDefault();
     const startX = event.clientX;
@@ -332,60 +491,18 @@
     {#each mainSlotOrder as slot (slot)}
       {#if slot === "editor"}
         <div class="editor-area">
-          <div class="tab-strip">
-            {#each $tabsState.tabs as tab (tab.path)}
-              <div
-                class="tab"
-                class:active={tab.path === $tabsState.activeTabPath}
-                onclick={() => setActiveTab(tab.path)}
-                onkeydown={(e) => e.key === "Enter" && setActiveTab(tab.path)}
-                role="tab"
-                tabindex="0"
-                aria-selected={tab.path === $tabsState.activeTabPath}
-              >
-                <span class="tab-name">
-                  {tab.path.split("/").pop()}{tab.isDirty ? " •" : ""}
-                </span>
-                {#if tab.mode === "markdown"}
-                  <button
-                    class="tab-view-mode"
-                    onclick={(e) => {
-                      e.stopPropagation();
-                      toggleMarkdownViewMode(tab.path);
-                    }}
-                    aria-label={tab.viewMode === "source" ? "Switch to rendered view" : "Switch to source view"}
-                    title={tab.viewMode === "source" ? "Switch to rendered view" : "Switch to source view"}
-                  >
-                    {tab.viewMode === "source" ? "{}" : "¶"}
-                  </button>
-                {/if}
-                <button
-                  class="tab-close"
-                  onclick={(e) => {
-                    e.stopPropagation();
-                    requestCloseTab(tab.path);
-                  }}
-                  aria-label={`Close ${tab.path}`}
-                >
-                  ×
-                </button>
-              </div>
-            {/each}
-          </div>
-          <div class="editor-panes" style={`font-size: ${$zoom * 100}%`}>
-            {#each $tabsState.tabs as tab (tab.path)}
-              <div class="editor-pane-slot" class:hidden={tab.path !== $tabsState.activeTabPath}>
-                {#if tab.hasExternalConflict}
-                  <div class="conflict-banner">
-                    File changed on disk.
-                    <button onclick={() => reloadFromDisk(tab.path)}>Reload</button>
-                    <button onclick={() => dismissConflict(tab.path)}>Keep mine</button>
-                  </div>
-                {/if}
-                <EditorPane filePath={tab.path} />
-              </div>
-            {/each}
-          </div>
+          {#if $editorPaneTree}
+            <EditorPaneSplit
+              tree={$editorPaneTree}
+              activePaneId={$focusedEditorPaneId ?? ""}
+              onFocus={setFocusedEditorPane}
+              onSplit={(paneId, direction) => splitEditorPaneAt(paneId, direction)}
+              onSetActiveTab={(paneId, path) => setActiveTabInEditorPane(paneId, path)}
+              onCloseTab={(paneId, path) => closeTabInEditorPane(paneId, path)}
+              onResizeSplit={(splitId, index, delta, containerSizePx) =>
+                resizeEditorPaneSplit(splitId, index, delta, containerSizePx)}
+            />
+          {/if}
         </div>
       {:else if slot === "resizer"}
         <div
@@ -510,61 +627,16 @@
     min-height: 0;
     min-width: 0;
   }
-  .tab-strip {
-    display: flex;
-    border-bottom: 1px solid var(--atrium-border);
-    flex-shrink: 0;
-  }
-  .tab {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    background: none;
-    border: none;
-    border-right: 1px solid var(--atrium-border);
-    color: inherit;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .tab.active {
-    background: var(--atrium-bg-active);
-  }
-  .tab-name {
-    max-width: 160px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .tab-view-mode,
-  .tab-close {
-    background: none;
-    border: none;
-    color: inherit;
-    font: inherit;
-    cursor: pointer;
-    opacity: 0.6;
-    padding: 0 2px;
-  }
-  .tab-view-mode:hover,
-  .tab-close:hover {
-    opacity: 1;
-  }
-  .editor-panes,
   .terminal-panes {
     flex: 1;
     min-height: 0;
     position: relative;
   }
-  .editor-pane-slot,
   .terminal-pane-slot {
     position: absolute;
     inset: 0;
     display: flex;
     flex-direction: column;
-  }
-  .editor-pane-slot.hidden {
-    display: none;
   }
   .terminal-empty {
     position: absolute;
@@ -585,15 +657,6 @@
   }
   .terminal-empty .new-tab:hover {
     opacity: 1;
-  }
-  .conflict-banner {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 6px 10px;
-    background: var(--atrium-warning-bg);
-    color: var(--atrium-text-primary);
-    flex-shrink: 0;
   }
   .terminal-area {
     flex-shrink: 0;

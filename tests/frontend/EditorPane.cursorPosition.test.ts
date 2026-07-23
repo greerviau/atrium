@@ -6,10 +6,12 @@ import { EditorView } from "@codemirror/view";
 import EditorPane from "../../src/lib/editor/EditorPane.svelte";
 import { tabsState, closeTab, type Tab } from "../../src/lib/stores/tabs";
 import { cursorPosition } from "../../src/lib/stores/editorStatus";
+import { focusedEditorPaneId } from "../../src/lib/stores/editorPanes";
 
 const ACTIVE_PATH = "/active.md";
 const BACKGROUND_PATH = "/background.md";
 const DOC = "one two\nthree four\nfive six\n";
+const PANE_ID = "pane-1";
 
 function seedTabs(activeTabPath: string): void {
   const tabs: Tab[] = [
@@ -17,6 +19,7 @@ function seedTabs(activeTabPath: string): void {
     { path: BACKGROUND_PATH, mode: "markdown", savedDoc: DOC, isDirty: false, hasExternalConflict: false, viewMode: "source" },
   ];
   tabsState.set({ tabs, activeTabPath });
+  focusedEditorPaneId.set(PANE_ID);
 }
 
 function findView(container: HTMLElement): EditorView {
@@ -30,13 +33,14 @@ describe("EditorPane: cursor position tracking", () => {
   afterEach(() => {
     cleanup();
     tabsState.set({ tabs: [], activeTabPath: null });
+    focusedEditorPaneId.set(null);
     cursorPosition.set(null);
     vi.restoreAllMocks();
   });
 
   it("pushes the active pane's cursor position on caret move", async () => {
     seedTabs(ACTIVE_PATH);
-    const { container } = render(EditorPane, { filePath: ACTIVE_PATH });
+    const { container } = render(EditorPane, { filePath: ACTIVE_PATH, paneId: PANE_ID });
     await tick();
 
     const view = findView(container);
@@ -50,7 +54,7 @@ describe("EditorPane: cursor position tracking", () => {
 
   it("does not update from a hidden/inactive tab's own selection or doc changes", async () => {
     seedTabs(ACTIVE_PATH);
-    const { container } = render(EditorPane, { filePath: BACKGROUND_PATH });
+    const { container } = render(EditorPane, { filePath: BACKGROUND_PATH, paneId: PANE_ID });
     await tick();
     cursorPosition.set({ line: 1, col: 1, selection: null });
 
@@ -64,7 +68,7 @@ describe("EditorPane: cursor position tracking", () => {
 
   it("pushes this pane's position when it becomes the active tab without a keystroke", async () => {
     seedTabs(ACTIVE_PATH);
-    const { container } = render(EditorPane, { filePath: BACKGROUND_PATH });
+    const { container } = render(EditorPane, { filePath: BACKGROUND_PATH, paneId: PANE_ID });
     await tick();
     const view = findView(container);
     view.dispatch({ selection: { anchor: 14 } });
@@ -83,7 +87,8 @@ describe("EditorPane: cursor position tracking", () => {
       tabs: [{ path: ACTIVE_PATH, mode: "markdown", savedDoc: DOC, isDirty: false, hasExternalConflict: false, viewMode: "source" }],
       activeTabPath: ACTIVE_PATH,
     });
-    const { unmount } = render(EditorPane, { filePath: ACTIVE_PATH });
+    focusedEditorPaneId.set(PANE_ID);
+    const { unmount } = render(EditorPane, { filePath: ACTIVE_PATH, paneId: PANE_ID });
     await tick();
     expect(get(cursorPosition)).not.toBeNull();
 
@@ -100,7 +105,7 @@ describe("EditorPane: cursor position tracking", () => {
 
   it("reports a single-line selection's extent", async () => {
     seedTabs(ACTIVE_PATH);
-    const { container } = render(EditorPane, { filePath: ACTIVE_PATH });
+    const { container } = render(EditorPane, { filePath: ACTIVE_PATH, paneId: PANE_ID });
     await tick();
 
     const view = findView(container);
@@ -113,7 +118,7 @@ describe("EditorPane: cursor position tracking", () => {
 
   it("reports a multi-line selection's extent", async () => {
     seedTabs(ACTIVE_PATH);
-    const { container } = render(EditorPane, { filePath: ACTIVE_PATH });
+    const { container } = render(EditorPane, { filePath: ACTIVE_PATH, paneId: PANE_ID });
     await tick();
 
     const view = findView(container);
@@ -127,7 +132,7 @@ describe("EditorPane: cursor position tracking", () => {
 
   it("reverts to a null selection once the selection collapses back to a caret", async () => {
     seedTabs(ACTIVE_PATH);
-    const { container } = render(EditorPane, { filePath: ACTIVE_PATH });
+    const { container } = render(EditorPane, { filePath: ACTIVE_PATH, paneId: PANE_ID });
     await tick();
 
     const view = findView(container);
