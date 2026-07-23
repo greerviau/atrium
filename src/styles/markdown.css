@@ -78,10 +78,14 @@
   text-align: right;
 }
 
+/* Same specificity problem as `.cm-table-row`/`.cm-table-delimiter-line`
+   above: `!important` is required to beat CodeMirror's own `.cm-line {
+   padding: 0 2px 0 6px }`, which — as a two-class selector — outranks a
+   bare `.cm-code-block` regardless of stylesheet load order. */
 .cm-code-block {
   background: var(--atrium-code-bg);
   border-left: 3px solid var(--atrium-border);
-  padding: 0 0.6em;
+  padding: 0 0.6em !important;
   white-space: pre;
   box-sizing: content-box;
 }
