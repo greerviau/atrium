@@ -105,7 +105,7 @@ describe("EditorPane theming (regression guard against section 2.4 recurring)", 
     const themeModule = await import("../../src/lib/stores/theme");
     themeModule.theme.set(theme);
 
-    const { container } = render(EditorPane, { props: { filePath: "sample.ts" } });
+    const { container } = render(EditorPane, { props: { filePath: "sample.ts", paneId: "pane-1" } });
     const gutters = container.querySelector(".cm-gutters");
     expect(gutters).toBeTruthy();
 

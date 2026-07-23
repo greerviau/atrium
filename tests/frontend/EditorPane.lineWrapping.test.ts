@@ -21,7 +21,7 @@ describe("EditorPane: line wrapping by file type", () => {
       isDirty: false,
       hasExternalConflict: false,
     });
-    const { container } = render(EditorPane, { filePath: "/example.py" });
+    const { container } = render(EditorPane, { filePath: "/example.py", paneId: "pane-1" });
 
     expect(container.querySelector(".cm-content")?.classList.contains("cm-lineWrapping")).toBe(false);
   });
@@ -35,7 +35,7 @@ describe("EditorPane: line wrapping by file type", () => {
       hasExternalConflict: false,
       viewMode: "rendered",
     });
-    const rendered = render(EditorPane, { filePath: "/notes.md" });
+    const rendered = render(EditorPane, { filePath: "/notes.md", paneId: "pane-1" });
     expect(rendered.container.querySelector(".cm-content")?.classList.contains("cm-lineWrapping")).toBe(true);
     cleanup();
 
@@ -47,7 +47,7 @@ describe("EditorPane: line wrapping by file type", () => {
       hasExternalConflict: false,
       viewMode: "source",
     });
-    const source = render(EditorPane, { filePath: "/notes.md" });
+    const source = render(EditorPane, { filePath: "/notes.md", paneId: "pane-1" });
     expect(source.container.querySelector(".cm-content")?.classList.contains("cm-lineWrapping")).toBe(true);
   });
 });
@@ -66,7 +66,7 @@ describe("EditorPane: scrollbar auto-hide", () => {
       isDirty: false,
       hasExternalConflict: false,
     });
-    const { container } = render(EditorPane, { filePath: "/example.py" });
+    const { container } = render(EditorPane, { filePath: "/example.py", paneId: "pane-1" });
 
     expect(container.querySelector(".cm-scroller")?.classList.contains("scrollbar-autohide")).toBe(true);
   });

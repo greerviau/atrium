@@ -83,7 +83,7 @@ describe("EditorPane: context menu", () => {
 
   it("opens the four groups, in order, for a markdown tab", async () => {
     seedMarkdownTab();
-    const { container } = render(EditorPane, { filePath: MD_PATH });
+    const { container } = render(EditorPane, { filePath: MD_PATH, paneId: "pane-1" });
     await tick();
 
     await openMenu(container);
@@ -107,7 +107,7 @@ describe("EditorPane: context menu", () => {
 
   it("omits the View group for a non-markdown tab", async () => {
     seedCodeTab();
-    const { container } = render(EditorPane, { filePath: CODE_PATH });
+    const { container } = render(EditorPane, { filePath: CODE_PATH, paneId: "pane-1" });
     await tick();
 
     await openMenu(container);
@@ -118,7 +118,7 @@ describe("EditorPane: context menu", () => {
 
   it("labels the View item by the tab's current view mode", async () => {
     seedMarkdownTab("source");
-    const { container, findByText } = render(EditorPane, { filePath: MD_PATH });
+    const { container, findByText } = render(EditorPane, { filePath: MD_PATH, paneId: "pane-1" });
     await tick();
 
     await openMenu(container);
@@ -128,7 +128,7 @@ describe("EditorPane: context menu", () => {
 
   it("disables Cut/Copy with no selection and enables them once there is one", async () => {
     seedCodeTab();
-    const { container, findByText } = render(EditorPane, { filePath: CODE_PATH });
+    const { container, findByText } = render(EditorPane, { filePath: CODE_PATH, paneId: "pane-1" });
     await tick();
 
     await openMenu(container);
@@ -147,7 +147,7 @@ describe("EditorPane: context menu", () => {
 
   it("runs execCommand('cut'/'copy') against the focused editor and closes the menu", async () => {
     seedCodeTab();
-    const { container, findByText } = render(EditorPane, { filePath: CODE_PATH });
+    const { container, findByText } = render(EditorPane, { filePath: CODE_PATH, paneId: "pane-1" });
     await tick();
 
     await openMenu(container);
@@ -165,7 +165,7 @@ describe("EditorPane: context menu", () => {
   it("disables Paste while the clipboard has no text", async () => {
     seedCodeTab();
     vi.mocked(clipboardManager.readText).mockResolvedValue("");
-    const { container, findByText } = render(EditorPane, { filePath: CODE_PATH });
+    const { container, findByText } = render(EditorPane, { filePath: CODE_PATH, paneId: "pane-1" });
     await tick();
 
     await openMenu(container);
@@ -177,7 +177,7 @@ describe("EditorPane: context menu", () => {
   it("enables Paste once the async clipboard read resolves with text", async () => {
     seedCodeTab();
     vi.mocked(clipboardManager.readText).mockResolvedValue("clipboard contents");
-    const { container, findByText } = render(EditorPane, { filePath: CODE_PATH });
+    const { container, findByText } = render(EditorPane, { filePath: CODE_PATH, paneId: "pane-1" });
     await tick();
 
     await openMenu(container);
@@ -190,7 +190,7 @@ describe("EditorPane: context menu", () => {
   it("pastes clipboard text into the document at the current selection", async () => {
     seedCodeTab();
     vi.mocked(clipboardManager.readText).mockResolvedValue("PASTED");
-    const { container, findByText } = render(EditorPane, { filePath: CODE_PATH });
+    const { container, findByText } = render(EditorPane, { filePath: CODE_PATH, paneId: "pane-1" });
     await tick();
 
     const view = findView(container);
@@ -209,7 +209,7 @@ describe("EditorPane: context menu", () => {
 
   it("calls toggleMarkdownViewMode and closes the menu when the View item is clicked", async () => {
     seedMarkdownTab("rendered");
-    const { container, findByText } = render(EditorPane, { filePath: MD_PATH });
+    const { container, findByText } = render(EditorPane, { filePath: MD_PATH, paneId: "pane-1" });
     await tick();
 
     await openMenu(container);
@@ -224,7 +224,7 @@ describe("EditorPane: context menu", () => {
 
   it("saves via the existing save path and closes the menu", async () => {
     seedCodeTab();
-    const { container, findByText } = render(EditorPane, { filePath: CODE_PATH });
+    const { container, findByText } = render(EditorPane, { filePath: CODE_PATH, paneId: "pane-1" });
     await tick();
 
     await openMenu(container);
@@ -238,7 +238,7 @@ describe("EditorPane: context menu", () => {
 
   it("reveals the open file and closes the menu", async () => {
     seedCodeTab();
-    const { container, findByText } = render(EditorPane, { filePath: CODE_PATH });
+    const { container, findByText } = render(EditorPane, { filePath: CODE_PATH, paneId: "pane-1" });
     await tick();
 
     await openMenu(container);
@@ -252,7 +252,7 @@ describe("EditorPane: context menu", () => {
 
   it("closes the menu on an outside click", async () => {
     seedCodeTab();
-    const { container } = render(EditorPane, { filePath: CODE_PATH });
+    const { container } = render(EditorPane, { filePath: CODE_PATH, paneId: "pane-1" });
     await tick();
 
     await openMenu(container);

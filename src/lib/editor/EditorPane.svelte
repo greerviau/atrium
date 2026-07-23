@@ -15,6 +15,7 @@
     notifySaveComplete,
     notifySaveFailed,
   } from "../stores/tabs";
+  import { focusedEditorPaneId } from "../stores/editorPanes";
   import { theme as themeStore } from "../stores/theme";
   import { buildCmTheme, buildHighlightStyle } from "../theme/cmTheme";
   import { baseExtensions } from "./baseExtensions";
@@ -25,7 +26,21 @@
   import { revealInFinder } from "../ipc/reveal";
   import ContextMenu from "../ui/ContextMenu.svelte";
 
-  let { filePath }: { filePath: string } = $props();
+  // `paneId` identifies which split pane this instance belongs to — combined
+  // with `filePath` (via the caller's `${paneId}:${path}` keying, see
+  // EditorPanel.svelte) it makes this pane-and-tab occurrence unique even
+  // when the same path is open in more than one split.
+  let { filePath, paneId }: { filePath: string; paneId: string } = $props();
+
+  // True only for the single EditorView, among possibly several showing
+  // `filePath`, that should drive app-global "current cursor" concerns: the
+  // currently-focused pane, showing `filePath` as its own active tab.
+  // `tabsState.activeTabPath` is kept as a mirror of "the focused pane's own
+  // active tab" (see App.svelte), so the two checks together are exactly
+  // "this pane is focused, and this is the file it's showing" — without the
+  // `paneId` half, two panes both showing the same path as their active tab
+  // (e.g. right after a single-file split) would both think they're active.
+  const active = $derived($focusedEditorPaneId === paneId && $tabsState.activeTabPath === filePath);
 
   let container: HTMLDivElement;
   let view: EditorView;
@@ -160,7 +175,7 @@
     const initialTab = $tabsState.tabs.find((t) => t.path === filePath);
     const mode = initialTab?.mode ?? "code";
     lastAppliedViewMode = initialTab?.viewMode;
-    lastAppliedActive = $tabsState.activeTabPath === filePath;
+    lastAppliedActive = active;
 
     const shortcutKeymap = [
       {
@@ -191,7 +206,7 @@
         if (update.docChanged) {
           markDirty(filePath);
         }
-        if ((update.docChanged || update.selectionSet) && $tabsState.activeTabPath === filePath) {
+        if ((update.docChanged || update.selectionSet) && active) {
           setCursorPosition(computeCursorPosition(update.state));
         }
       }),
@@ -300,7 +315,7 @@
   // above so it only fires on an actual activation, not on every unrelated
   // tab-store update.
   $effect(() => {
-    const isActive = $tabsState.activeTabPath === filePath;
+    const isActive = active;
     if (!view || isActive === lastAppliedActive) {
       return;
     }
@@ -332,10 +347,15 @@
   });
 
   // Scrolls to a pending selection (from a markdown/terminal/explorer "open
-  // to line" request) once the view exists, then clears it.
+  // to line" request) once the view exists, then clears it. Guarded on
+  // `active` so that if `filePath` is open in more than one split pane, only
+  // the pane the "open" action actually targeted (the focused one) jumps its
+  // cursor/scroll — the other view(s) leave the pending request alone rather
+  // than consuming it without acting on it, since `clearPendingSelection` is
+  // shared, single-shot state on the underlying `Tab`, not per-pane.
   $effect(() => {
     const current = tab;
-    if (!view || !current?.pendingSelection) {
+    if (!view || !current?.pendingSelection || !active) {
       return;
     }
     const { line, col } = current.pendingSelection;
