@@ -19,7 +19,9 @@
   import { saveOwnerLeafId } from "./editorPaneTree";
   import { theme as themeStore } from "../stores/theme";
   import { buildCmTheme, buildHighlightStyle } from "../theme/cmTheme";
+  import { minimapEnabled } from "../stores/minimapEnabled";
   import { baseExtensions } from "./baseExtensions";
+  import { minimapExtension } from "./minimap";
   import { markdownExtensions, markdownSourceExtensions } from "./markdown/livePreviewPlugin";
   import {
     findTableContext,
@@ -67,6 +69,7 @@
   let detachScrollbarAutoHide: (() => void) | undefined;
   const themeCompartment = new Compartment();
   const viewModeCompartment = new Compartment();
+  const minimapCompartment = new Compartment();
   let lastAppliedViewMode: "rendered" | "source" | undefined;
   let lastAppliedActive: boolean | undefined;
 
@@ -244,6 +247,7 @@
       mode === "markdown" ? EditorView.lineWrapping : [],
       themeCompartment.of(themeExtensions()),
       viewModeCompartment.of(viewModeExtensions(mode, initialTab?.viewMode)),
+      minimapCompartment.of(minimapExtension($minimapEnabled)),
       keymap.of(shortcutKeymap),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
@@ -290,6 +294,20 @@
         buildCmTheme(current),
         syntaxHighlighting(buildHighlightStyle(current), { fallback: true }),
       ]),
+    });
+  });
+
+  // Reconfigures the minimap compartment in place when the setting changes,
+  // applying live to every open pane (code and markdown alike) without
+  // losing undo history, selection, or scroll position — same guarantee as
+  // the theme-switch effect above.
+  $effect(() => {
+    const enabled = $minimapEnabled;
+    if (!view) {
+      return;
+    }
+    view.dispatch({
+      effects: minimapCompartment.reconfigure(minimapExtension(enabled)),
     });
   });
 
