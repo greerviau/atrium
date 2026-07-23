@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, cleanup } from "@testing-library/svelte";
 import ContextMenuHost from "./ContextMenuHost.svelte";
 import AnchorContextMenuHost from "./AnchorContextMenuHost.svelte";
+import SeparatorDisabledContextMenuHost from "./SeparatorDisabledContextMenuHost.svelte";
 
 /**
  * jsdom has no real layout engine, so `getBoundingClientRect()` normally
@@ -183,5 +184,43 @@ describe("ContextMenu: text size and single-line items", () => {
 
     const item = container.querySelector("button[role='menuitem']") as HTMLElement;
     expect(window.getComputedStyle(item).whiteSpace).toBe("nowrap");
+  });
+});
+
+describe("ContextMenu: separator and disabled buttons", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders a separator between groups", () => {
+    const { container } = render(SeparatorDisabledContextMenuHost, { onClick: () => {} });
+
+    const separator = container.querySelector(".menu-separator");
+    expect(separator).not.toBeNull();
+    expect(separator?.getAttribute("role")).toBe("separator");
+  });
+
+  it("visually dims a disabled button and gives it a default cursor", () => {
+    const { getByText } = render(SeparatorDisabledContextMenuHost, { onClick: () => {} });
+
+    const enabled = getByText("Item 1") as HTMLButtonElement;
+    const disabled = getByText("Item 2") as HTMLButtonElement;
+    expect(disabled.disabled).toBe(true);
+    expect(window.getComputedStyle(disabled).opacity).toBe("0.4");
+    expect(window.getComputedStyle(disabled).cursor).toBe("default");
+    expect(window.getComputedStyle(enabled).opacity).not.toBe("0.4");
+  });
+
+  it("never fires a disabled button's click handler", () => {
+    const onClick = vi.fn();
+    const { getByText } = render(SeparatorDisabledContextMenuHost, { onClick });
+
+    // `.click()` (not `fireEvent.click`'s raw `dispatchEvent`) is what
+    // exercises the browser's native "disabled controls don't activate"
+    // behavior in jsdom, matching how a real mouse click on a disabled
+    // button behaves.
+    (getByText("Item 2") as HTMLButtonElement).click();
+
+    expect(onClick).not.toHaveBeenCalled();
   });
 });

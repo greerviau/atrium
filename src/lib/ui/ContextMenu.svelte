@@ -87,4 +87,15 @@
   .context-menu :global(button:hover) {
     background: var(--atrium-bg-hover);
   }
+  .context-menu :global(button:disabled) {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .context-menu :global(button:disabled:hover) {
+    background: none;
+  }
+  .context-menu :global(.menu-separator) {
+    border-top: 1px solid var(--atrium-border);
+    margin: 4px 0;
+  }
 </style>

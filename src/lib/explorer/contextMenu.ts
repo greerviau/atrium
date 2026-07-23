@@ -1,5 +1,4 @@
 import { writable } from "svelte/store";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   fsCreateFile,
   fsCreateDir,
@@ -61,8 +60,4 @@ export async function deletePath(path: string, isDir: boolean): Promise<void> {
   const workspaceId = localWorkspaceId();
   await fsDelete(workspaceId, path, isDir);
   await loadChildren(dirOf(path));
-}
-
-export async function revealInFinder(path: string): Promise<void> {
-  await revealItemInDir(path);
 }
