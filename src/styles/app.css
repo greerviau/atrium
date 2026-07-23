@@ -108,3 +108,27 @@ button {
 .scrollbar-autohide::-webkit-scrollbar-thumb:hover {
   background-color: var(--atrium-text-muted);
 }
+
+.atrium-tooltip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 4000;
+  background: var(--atrium-bg-elevated);
+  border: 1px solid var(--atrium-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--atrium-text-primary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.atrium-tooltip-kbd {
+  background: var(--atrium-bg-hover);
+  border: 1px solid var(--atrium-border);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 0.9em;
+}
