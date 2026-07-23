@@ -28,6 +28,7 @@
     explorerVisible,
     terminalVisible,
     terminalPosition,
+    setTerminalVisible,
   } from "./lib/stores/layout";
   import { folderName } from "./lib/terminal/tabTitle";
   import {
@@ -159,12 +160,18 @@
     focusedPaneId = terminalPaneTree ? (nextFocus ?? focusedPaneId) : null;
   }
 
-  // The tab's × button — a deliberate close — always clears the auto-spawn
-  // guard, so if this empties the dock the invariant below gets a fresh
-  // spawn attempt (matching the "closing the last tab" case it exists for).
+  // The tab's × button — a deliberate close. If this empties the whole dock,
+  // hide it rather than let the auto-spawn effect below silently refill it;
+  // the user asked to close the last tab, not to get a fresh one in its
+  // place. A pane split with tabs remaining elsewhere is unaffected, since
+  // removeTabFromPane only leaves terminalPaneTree null when the closed leaf
+  // was the tree's sole leaf.
   function closeTabInPane(paneId: string, sessionId: string): void {
     suppressAutoSpawn = false;
     removeTabFromPane(paneId, sessionId);
+    if (!terminalPaneTree) {
+      setTerminalVisible(false);
+    }
   }
 
   // A shell that exits within this window of being spawned is treated as
@@ -396,9 +403,11 @@
 
   // The terminal dock never sits open with no active session: whenever it's
   // visible and the pane tree is empty — on first mount, after toggling it
-  // open, or because the user closed the last remaining tab/panel while it
-  // was already open — this spawns one, matching the VS Code/JetBrains
-  // convention that the terminal panel never shows a blank panel. Guarded by
+  // open, or because a shell exited on its own — this spawns one, matching
+  // the VS Code/JetBrains convention that the terminal panel never shows a
+  // blank panel. Closing the dock's last tab via its × button instead hides
+  // the dock (see closeTabInPane), so this effect never observes
+  // $terminalVisible true with an empty tree for that case. Guarded by
   // suppressAutoSpawn so a session that exits immediately after spawning
   // can't respawn itself forever.
   $effect(() => {

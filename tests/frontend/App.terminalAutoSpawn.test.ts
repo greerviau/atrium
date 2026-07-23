@@ -72,7 +72,7 @@ describe("App terminal auto-spawn", () => {
     expect(container.querySelectorAll(".terminal-pane-stub")).toHaveLength(1);
   });
 
-  it("closing the dock's last remaining tab respawns a session instead of leaving the empty placeholder", async () => {
+  it("closing the dock's last remaining tab hides the dock instead of respawning a session", async () => {
     workspace.set({ id: "local", root: "/projects/demo" });
     terminalVisible.set(false);
 
@@ -81,9 +81,8 @@ describe("App terminal auto-spawn", () => {
     expect(container.querySelectorAll(".terminal-pane-stub")).toHaveLength(0);
 
     // Seed the first session via the hidden→visible toggle (the one
-    // transition the old effect already handled), so the assertions below
-    // prove gap 2 — closing the last tab — on their own, independent of
-    // gap 1.
+    // transition the auto-spawn effect already handles), so the assertions
+    // below prove the close-button case on its own, independent of that one.
     terminalVisible.set(true);
     await tick();
     await tick();
@@ -95,8 +94,8 @@ describe("App terminal auto-spawn", () => {
     await tick();
     await tick();
 
-    expect(container.querySelector(".terminal-empty")).toBeNull();
-    expect(container.querySelectorAll(".terminal-pane-stub")).toHaveLength(1);
+    expect(container.querySelector(".terminal-area")?.classList.contains("hidden")).toBe(true);
+    expect(container.querySelectorAll(".terminal-pane-stub")).toHaveLength(0);
   });
 
   it("toggling the dock hidden then visible still auto-spawns a session (control case)", async () => {
