@@ -293,6 +293,7 @@ fn main() {
             commands::fs::fs_create_dir,
             commands::fs::fs_rename,
             commands::fs::fs_delete,
+            commands::fs::fs_import_external_paths,
             commands::fs::fs_resolve_candidates,
             commands::search::search_workspace,
             commands::pty::pty_spawn,

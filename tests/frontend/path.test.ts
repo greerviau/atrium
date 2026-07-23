@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { basename } from "../../src/lib/util/path";
+import { basename, dirOf } from "../../src/lib/util/path";
 
 describe("basename", () => {
   it("returns the last segment of a plain path", () => {
@@ -24,5 +24,23 @@ describe("basename", () => {
 
   it("falls back to the input for an empty string", () => {
     expect(basename("")).toBe("");
+  });
+});
+
+describe("dirOf", () => {
+  it("returns the parent directory of a nested path", () => {
+    expect(dirOf("/a/b/notes.txt")).toBe("/a/b");
+  });
+
+  it("normalizes backslashes before splitting", () => {
+    expect(dirOf("C:\\a\\b\\notes.txt")).toBe("C:/a/b");
+  });
+
+  it("falls back to the input for a root-level path", () => {
+    expect(dirOf("/notes.txt")).toBe("/notes.txt");
+  });
+
+  it("falls back to the input for a single-segment path", () => {
+    expect(dirOf("notes.txt")).toBe("notes.txt");
   });
 });

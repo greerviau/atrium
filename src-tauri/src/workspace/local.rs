@@ -11,8 +11,10 @@ use grep_searcher::sinks::UTF8;
 use grep_searcher::{BinaryDetection, SearcherBuilder, SinkError};
 use ignore::WalkState;
 use notify_debouncer_full::{Debouncer, FileIdMap};
+use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -31,6 +33,11 @@ const SEARCH_PER_FILE_MATCH_CAP: usize = 50;
 /// matches already exist) against a large, non-gitignored tree such as an
 /// un-excluded `node_modules`.
 const SEARCH_DEADLINE: Duration = Duration::from_secs(2);
+
+/// Cap on how many `" copy N"` suffixes `unique_destination` will probe
+/// before giving up, so a pathological run of pre-existing collisions can't
+/// loop forever.
+const MAX_COLLISION_ATTEMPTS: usize = 999;
 
 /// Builds the `grep-regex` matcher for a query: a real regex when
 /// `options.regex` is set, otherwise `fixed_strings` tells `grep-regex` to
@@ -393,6 +400,85 @@ fn normalize(path: &Path) -> PathBuf {
     out
 }
 
+/// Picks a collision-free path for `name` inside `dest_dir`: `dest_dir/name`
+/// itself if nothing is there yet, otherwise `"{stem} copy{.ext}"`, then
+/// `"{stem} copy 2{.ext}"`, `"{stem} copy 3{.ext}"`, ... — mirroring macOS
+/// Finder's own copy-into-same-directory naming convention. `symlink_metadata`
+/// (not `exists`, which follows symlinks and would misreport a broken symlink
+/// as "free") is what decides whether a candidate name is taken.
+///
+/// `is_dir` suppresses extension-splitting for a directory name (a
+/// `.git`-style dotted directory shouldn't be treated as having an
+/// "extension"); a file's stem/extension are split on its last `.`, except a
+/// leading dot (a dotfile like `.gitignore`), which is treated as part of the
+/// stem rather than an empty name with an extension.
+fn unique_destination(dest_dir: &Path, name: &str, is_dir: bool) -> Result<PathBuf, AppError> {
+    let candidate = dest_dir.join(name);
+    if candidate.symlink_metadata().is_err() {
+        return Ok(candidate);
+    }
+
+    let (stem, ext) = if is_dir {
+        (name, "")
+    } else {
+        match name.rfind('.') {
+            Some(idx) if idx > 0 => (&name[..idx], &name[idx..]),
+            _ => (name, ""),
+        }
+    };
+
+    for n in 1..=MAX_COLLISION_ATTEMPTS {
+        let candidate_name = if n == 1 {
+            format!("{stem} copy{ext}")
+        } else {
+            format!("{stem} copy {n}{ext}")
+        };
+        let candidate = dest_dir.join(&candidate_name);
+        if candidate.symlink_metadata().is_err() {
+            return Ok(candidate);
+        }
+    }
+
+    Err(AppError::Other(format!(
+        "could not find a free name for '{name}' in the destination directory"
+    )))
+}
+
+/// Recursively copies `source` (anywhere on disk) to `dest` (inside a
+/// workspace), preserving symlinks rather than following them: each entry is
+/// inspected with `symlink_metadata` so a symlink is recreated as a symlink
+/// pointing at the same target instead of being dereferenced. This also
+/// keeps the walk from infinitely recursing through a self-referential
+/// directory symlink, since a symlink is never treated as a directory to
+/// descend into.
+///
+/// Boxed and manually recursive (async fns can't call themselves directly)
+/// with an explicit `'a` lifetime tying the returned future to both borrowed
+/// path arguments.
+fn copy_recursive<'a>(
+    source: &'a Path,
+    dest: &'a Path,
+) -> Pin<Box<dyn Future<Output = Result<(), AppError>> + Send + 'a>> {
+    Box::pin(async move {
+        let metadata = tokio::fs::symlink_metadata(source).await?;
+        let file_type = metadata.file_type();
+        if file_type.is_symlink() {
+            let target = tokio::fs::read_link(source).await?;
+            std::os::unix::fs::symlink(&target, dest)?;
+        } else if file_type.is_dir() {
+            tokio::fs::create_dir_all(dest).await?;
+            let mut read_dir = tokio::fs::read_dir(source).await?;
+            while let Some(entry) = read_dir.next_entry().await? {
+                let child_dest = dest.join(entry.file_name());
+                copy_recursive(&entry.path(), &child_dest).await?;
+            }
+        } else {
+            tokio::fs::copy(source, dest).await?;
+        }
+        Ok(())
+    })
+}
+
 #[async_trait]
 impl Workspace for LocalWorkspace {
     async fn list_dir(&self, path: &str) -> Result<Vec<DirEntry>, AppError> {
@@ -505,6 +591,37 @@ impl Workspace for LocalWorkspace {
             }
         } else {
             tokio::fs::remove_file(&target).await?;
+        }
+        Ok(())
+    }
+
+    async fn import_external(
+        &self,
+        dest_dir: &str,
+        source_paths: &[String],
+    ) -> Result<(), AppError> {
+        let dest = self.resolve_within_root(dest_dir)?;
+        let dest_metadata = tokio::fs::metadata(&dest).await.map_err(|_| {
+            AppError::InvalidPath(format!("destination '{dest_dir}' does not exist"))
+        })?;
+        if !dest_metadata.is_dir() {
+            return Err(AppError::InvalidPath(format!(
+                "destination '{dest_dir}' is not a directory"
+            )));
+        }
+
+        for source in source_paths {
+            let source_path = Path::new(source);
+            let name = source_path
+                .file_name()
+                .ok_or_else(|| {
+                    AppError::InvalidPath(format!("source path '{source}' has no file name"))
+                })?
+                .to_string_lossy()
+                .to_string();
+            let source_metadata = tokio::fs::symlink_metadata(source_path).await?;
+            let target = unique_destination(&dest, &name, source_metadata.is_dir())?;
+            copy_recursive(source_path, &target).await?;
         }
         Ok(())
     }
@@ -1040,5 +1157,184 @@ mod tests {
         let second = ws.search_generation.load(Ordering::SeqCst);
 
         assert!(second > first);
+    }
+
+    #[tokio::test]
+    async fn import_external_copies_a_single_file_into_an_empty_destination() {
+        let source_dir = tempfile::tempdir().unwrap();
+        std::fs::write(source_dir.path().join("photo.png"), b"pixels").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_dir("dest").await.unwrap();
+
+        ws.import_external(
+            "dest",
+            &[source_dir
+                .path()
+                .join("photo.png")
+                .to_string_lossy()
+                .to_string()],
+        )
+        .await
+        .unwrap();
+
+        let copied = dir.path().join("dest").join("photo.png");
+        assert_eq!(std::fs::read(copied).unwrap(), b"pixels");
+    }
+
+    #[tokio::test]
+    async fn import_external_copies_a_directory_recursively() {
+        let source_dir = tempfile::tempdir().unwrap();
+        let project = source_dir.path().join("project");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::write(project.join("README.md"), "hello").unwrap();
+        std::fs::write(project.join("src/main.rs"), "fn main() {}").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_dir("dest").await.unwrap();
+
+        ws.import_external("dest", &[project.to_string_lossy().to_string()])
+            .await
+            .unwrap();
+
+        let copied = dir.path().join("dest").join("project");
+        assert_eq!(
+            std::fs::read_to_string(copied.join("README.md")).unwrap(),
+            "hello"
+        );
+        assert_eq!(
+            std::fs::read_to_string(copied.join("src/main.rs")).unwrap(),
+            "fn main() {}"
+        );
+    }
+
+    #[tokio::test]
+    async fn import_external_dedupes_a_file_name_collision_preserving_the_extension() {
+        let source_dir = tempfile::tempdir().unwrap();
+        std::fs::write(source_dir.path().join("notes.txt"), "from finder").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("notes.txt").await.unwrap();
+        ws.write_file("notes.txt", "already here").await.unwrap();
+
+        let source = source_dir
+            .path()
+            .join("notes.txt")
+            .to_string_lossy()
+            .to_string();
+        ws.import_external(".", std::slice::from_ref(&source))
+            .await
+            .unwrap();
+        ws.import_external(".", &[source]).await.unwrap();
+
+        assert_eq!(ws.read_file("notes.txt").await.unwrap(), "already here");
+        assert_eq!(ws.read_file("notes copy.txt").await.unwrap(), "from finder");
+        assert_eq!(
+            ws.read_file("notes copy 2.txt").await.unwrap(),
+            "from finder"
+        );
+    }
+
+    #[tokio::test]
+    async fn import_external_dedupes_a_directory_name_collision_without_extension_splitting() {
+        let source_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(source_dir.path().join("assets")).unwrap();
+        std::fs::write(source_dir.path().join("assets/file.txt"), "one").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_dir("assets").await.unwrap();
+
+        let source = source_dir
+            .path()
+            .join("assets")
+            .to_string_lossy()
+            .to_string();
+        ws.import_external(".", &[source]).await.unwrap();
+
+        // A directory name has no extension to preserve, so the collision
+        // suffix goes straight on the end rather than splitting at a `.`
+        // that might appear inside the name (e.g. a dotted directory name).
+        let copied = dir.path().join("assets copy").join("file.txt");
+        assert_eq!(std::fs::read_to_string(copied).unwrap(), "one");
+    }
+
+    #[tokio::test]
+    async fn import_external_preserves_a_symlink_inside_a_copied_directory() {
+        let source_dir = tempfile::tempdir().unwrap();
+        let project = source_dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(source_dir.path().join("target.txt"), "real file").unwrap();
+        std::os::unix::fs::symlink(
+            source_dir.path().join("target.txt"),
+            project.join("link.txt"),
+        )
+        .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_dir("dest").await.unwrap();
+
+        ws.import_external("dest", &[project.to_string_lossy().to_string()])
+            .await
+            .unwrap();
+
+        let copied_link = dir.path().join("dest").join("project").join("link.txt");
+        let link_metadata = std::fs::symlink_metadata(&copied_link).unwrap();
+        assert!(link_metadata.file_type().is_symlink());
+        assert_eq!(
+            std::fs::read_link(&copied_link).unwrap(),
+            source_dir.path().join("target.txt")
+        );
+    }
+
+    #[tokio::test]
+    async fn import_external_rejects_a_dest_dir_that_escapes_the_workspace_root() {
+        let source_dir = tempfile::tempdir().unwrap();
+        std::fs::write(source_dir.path().join("a.txt"), "hi").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+
+        let err = ws
+            .import_external(
+                "../outside",
+                &[source_dir
+                    .path()
+                    .join("a.txt")
+                    .to_string_lossy()
+                    .to_string()],
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, AppError::InvalidPath(_)));
+    }
+
+    #[tokio::test]
+    async fn import_external_rejects_a_dest_dir_that_is_not_a_directory() {
+        let source_dir = tempfile::tempdir().unwrap();
+        std::fs::write(source_dir.path().join("a.txt"), "hi").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("not_a_dir.txt").await.unwrap();
+
+        let err = ws
+            .import_external(
+                "not_a_dir.txt",
+                &[source_dir
+                    .path()
+                    .join("a.txt")
+                    .to_string_lossy()
+                    .to_string()],
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, AppError::InvalidPath(_)));
     }
 }

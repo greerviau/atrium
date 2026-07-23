@@ -46,6 +46,8 @@
   <div
     class="row"
     style={`padding-left: ${depth * 14 + 6}px`}
+    data-path={node.entry.path}
+    data-is-dir={node.entry.isDir}
     onclick={isEditing ? undefined : onClick}
     onkeydown={isEditing ? undefined : onKeydown}
     oncontextmenu={isEditing ? undefined : onContextMenu}

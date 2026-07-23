@@ -6,6 +6,8 @@ import App from "../../src/App.svelte";
 import { workspace } from "../../src/lib/stores/workspace";
 import { terminalVisible } from "../../src/lib/stores/layout";
 import * as terminalDropTargets from "../../src/lib/terminal/terminalDropTargets";
+import * as explorerDropTargets from "../../src/lib/explorer/explorerDropTargets";
+import * as importExternalPaths from "../../src/lib/explorer/importExternalPaths";
 import type { DragDropEvent } from "@tauri-apps/api/webview";
 
 // App's two heaviest leaf components, stubbed the same way
@@ -47,6 +49,14 @@ vi.mock("../../src/lib/terminal/terminalDropTargets", () => ({
   insertPathsAtScreenPoint: vi.fn(),
 }));
 
+vi.mock("../../src/lib/explorer/explorerDropTargets", () => ({
+  resolveExplorerDropTargetDir: vi.fn().mockReturnValue(null),
+}));
+
+vi.mock("../../src/lib/explorer/importExternalPaths", () => ({
+  importPathsInto: vi.fn(),
+}));
+
 // A non-null workspace root keeps App rendering the terminal/editor shell
 // instead of WelcomeScreen, which calls workspaceGetRecents() (real IPC,
 // unmocked here) on mount.
@@ -60,6 +70,7 @@ describe("App OS-level file drop wiring", () => {
   beforeEach(() => {
     resetStores();
     capturedDragDropHandler = undefined;
+    vi.mocked(explorerDropTargets.resolveExplorerDropTargetDir).mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -101,5 +112,29 @@ describe("App OS-level file drop wiring", () => {
     capturedDragDropHandler?.({ type: "leave" });
 
     expect(terminalDropTargets.insertPathsAtScreenPoint).not.toHaveBeenCalled();
+  });
+
+  it("imports into the explorer's resolved directory instead of falling back to the terminal path when a drop lands on the explorer", async () => {
+    vi.mocked(explorerDropTargets.resolveExplorerDropTargetDir).mockReturnValue("/projects/demo/src");
+    render(App);
+    await tick();
+
+    const position = new PhysicalPosition(100, 100);
+    capturedDragDropHandler?.({ type: "drop", paths: ["/a/b"], position });
+
+    expect(importExternalPaths.importPathsInto).toHaveBeenCalledWith("/projects/demo/src", ["/a/b"]);
+    expect(terminalDropTargets.insertPathsAtScreenPoint).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the terminal hit test unchanged when a drop resolves to no explorer directory", async () => {
+    vi.mocked(explorerDropTargets.resolveExplorerDropTargetDir).mockReturnValue(null);
+    render(App);
+    await tick();
+
+    const position = new PhysicalPosition(100, 100);
+    capturedDragDropHandler?.({ type: "drop", paths: ["/a/b"], position });
+
+    expect(terminalDropTargets.insertPathsAtScreenPoint).toHaveBeenCalled();
+    expect(importExternalPaths.importPathsInto).not.toHaveBeenCalled();
   });
 });
