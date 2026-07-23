@@ -1,9 +1,11 @@
 <script lang="ts">
+  import { get } from "svelte/store";
   import type { TreeNode } from "../stores/fileTree";
   import { toggleExpanded } from "../stores/fileTree";
   import { openFile } from "../stores/tabs";
-  import { openContextMenu } from "./contextMenu";
+  import { openContextMenu, movePath } from "./contextMenu";
   import { editingPath, pendingCreate, commitRename, commitCreate } from "./inlineEdit";
+  import { draggingPath, isValidMoveTarget } from "./explorerDrag";
   import ExplorerIcon from "./icons/ExplorerIcon.svelte";
   import InlineNameInput from "./InlineNameInput.svelte";
   import NewEntryRow from "./NewEntryRow.svelte";
@@ -13,6 +15,8 @@
   let { node, depth = 0 }: { node: TreeNode; depth?: number } = $props();
 
   let isEditing = $derived($editingPath === node.entry.path);
+  let dropTargetActive = $state(false);
+  let rowEl: HTMLDivElement;
 
   function onClick(): void {
     if (node.entry.isDir) {
@@ -37,22 +41,59 @@
   function onDragStart(event: DragEvent): void {
     event.dataTransfer?.setData(EXPLORER_PATH_DRAG_TYPE, node.entry.path);
     if (event.dataTransfer) {
-      event.dataTransfer.effectAllowed = "copy";
+      event.dataTransfer.effectAllowed = "copyMove";
     }
+    draggingPath.set(node.entry.path);
+  }
+
+  function onDragEnd(): void {
+    draggingPath.set(null);
+  }
+
+  function onRowDragOver(event: DragEvent): void {
+    if (!node.entry.isDir) return;
+    if (!event.dataTransfer?.types.includes(EXPLORER_PATH_DRAG_TYPE)) return;
+    const source = get(draggingPath);
+    if (!source || !isValidMoveTarget(source, node.entry.path)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    dropTargetActive = true;
+  }
+
+  function onRowDragLeave(event: DragEvent): void {
+    if (event.relatedTarget instanceof Node && rowEl.contains(event.relatedTarget)) return;
+    dropTargetActive = false;
+  }
+
+  function onRowDrop(event: DragEvent): void {
+    if (!node.entry.isDir) return;
+    dropTargetActive = false;
+    const source = event.dataTransfer?.getData(EXPLORER_PATH_DRAG_TYPE);
+    if (!source || !isValidMoveTarget(source, node.entry.path)) return;
+    event.preventDefault();
+    void movePath(source, node.entry.path).catch((err) => {
+      console.error("atrium: failed to move", source, "into", node.entry.path, err);
+    });
   }
 </script>
 
 <div class="node">
   <div
     class="row"
+    class:drop-target-active={dropTargetActive}
     style={`padding-left: ${depth * 14 + 6}px`}
     data-path={node.entry.path}
     data-is-dir={node.entry.isDir}
+    bind:this={rowEl}
     onclick={isEditing ? undefined : onClick}
     onkeydown={isEditing ? undefined : onKeydown}
     oncontextmenu={isEditing ? undefined : onContextMenu}
     draggable={!isEditing}
     ondragstart={isEditing ? undefined : onDragStart}
+    ondragend={onDragEnd}
+    ondragover={onRowDragOver}
+    ondragleave={onRowDragLeave}
+    ondrop={onRowDrop}
     role="treeitem"
     aria-selected="false"
     aria-expanded={node.entry.isDir ? node.expanded : undefined}
@@ -111,6 +152,10 @@
   }
   .row:hover {
     background: var(--atrium-bg-hover);
+  }
+  .row.drop-target-active {
+    outline: 2px solid var(--atrium-accent);
+    outline-offset: -2px;
   }
   .name.symlink {
     font-style: italic;

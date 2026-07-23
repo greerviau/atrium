@@ -7,7 +7,7 @@ import {
   localWorkspaceId,
 } from "../ipc/commands";
 import { loadChildren } from "../stores/fileTree";
-import { dirOf } from "../util/path";
+import { basename, dirOf } from "../util/path";
 
 export interface ContextMenuState {
   x: number;
@@ -44,6 +44,15 @@ export async function rename(path: string, newName: string): Promise<void> {
   const dir = dirOf(path);
   await fsRename(workspaceId, path, `${dir}/${newName}`);
   await loadChildren(dir);
+}
+
+/** Moves `sourcePath` into `destDir` — a rename to a new parent directory. Reloads both the source's old parent and the destination so both listings reflect the move; a destination collision surfaces as `fsRename`'s `AlreadyExists` rejection, same as the same-directory rename above. */
+export async function movePath(sourcePath: string, destDir: string): Promise<void> {
+  const workspaceId = localWorkspaceId();
+  const sourceDir = dirOf(sourcePath);
+  const newPath = `${destDir}/${basename(sourcePath)}`;
+  await fsRename(workspaceId, sourcePath, newPath);
+  await Promise.all([loadChildren(sourceDir), loadChildren(destDir)]);
 }
 
 /**
