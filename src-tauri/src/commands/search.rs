@@ -1,6 +1,6 @@
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::workspace::{SearchOptions, SearchResults, Workspace};
+use crate::workspace::{FileSearchResults, SearchOptions, SearchResults, Workspace};
 use std::sync::Arc;
 use tauri::State;
 
@@ -31,4 +31,13 @@ pub async fn search_workspace(
     workspace(&state, &workspace_id)?
         .search(&query, options)
         .await
+}
+
+#[tauri::command]
+pub async fn find_files(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    query: String,
+) -> Result<FileSearchResults, AppError> {
+    workspace(&state, &workspace_id)?.find_files(&query).await
 }

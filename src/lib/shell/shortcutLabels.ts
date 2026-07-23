@@ -11,5 +11,6 @@ export const SHORTCUT_LABELS = {
   toggleExplorer: "⌘B",
   toggleTerminal: "⌘R",
   findInFiles: "⌘⇧F",
+  goToFile: "⌘P",
   settings: "⌘,",
 } as const;

@@ -5,12 +5,14 @@ import { render, fireEvent, cleanup, screen } from "@testing-library/svelte";
 import SearchOverlay from "../../src/lib/search/SearchOverlay.svelte";
 import { searchOverlay } from "../../src/lib/search/searchOverlay";
 import { workspace } from "../../src/lib/stores/workspace";
+import { recordFileOpened } from "../../src/lib/stores/recentFiles";
 import * as commands from "../../src/lib/ipc/commands";
 import * as tabsStore from "../../src/lib/stores/tabs";
-import type { SearchResults } from "../../src/lib/ipc/commands";
+import type { SearchResults, FileSearchResults } from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
   searchWorkspace: vi.fn(),
+  findFiles: vi.fn(),
   isAppError: (value: unknown): value is { code: string; message: string } =>
     typeof value === "object" &&
     value !== null &&
@@ -40,8 +42,16 @@ function deferred<T>(): {
 }
 
 const PLACEHOLDER = "Search across the project…";
+const FILES_PLACEHOLDER = "Go to file…";
 
 function results(matches: SearchResults["matches"], truncated = false): SearchResults {
+  return { matches, truncated };
+}
+
+function fileResults(
+  matches: FileSearchResults["matches"],
+  truncated = false,
+): FileSearchResults {
   return { matches, truncated };
 }
 
@@ -49,7 +59,8 @@ describe("SearchOverlay", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
-    searchOverlay.set({ open: false });
+    localStorage.clear();
+    searchOverlay.set({ open: false, mode: "content" });
     workspace.set({ id: "local", root: "/proj" });
   });
 
@@ -60,7 +71,7 @@ describe("SearchOverlay", () => {
 
   it("disables native browser autocomplete/spellcheck suggestions on the query input", async () => {
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -74,7 +85,7 @@ describe("SearchOverlay", () => {
     const { container } = render(SearchOverlay);
     expect(container.querySelector(".search-panel")).toBeNull();
 
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     expect(container.querySelector(".search-panel")).not.toBeNull();
@@ -83,7 +94,7 @@ describe("SearchOverlay", () => {
   it("debounces typing before calling searchWorkspace", async () => {
     vi.mocked(commands.searchWorkspace).mockResolvedValue(results([]));
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -105,30 +116,33 @@ describe("SearchOverlay", () => {
     vi.mocked(commands.searchWorkspace).mockReturnValueOnce(first.promise);
 
     const { container } = render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
     await fireEvent.input(input, { target: { value: "foo" } });
     await tick();
 
-    // Visible immediately, before the debounce timer has even fired.
-    expect(container.querySelector(".search-spinner")).not.toBeNull();
+    // Visible immediately, before the debounce timer has even fired. The
+    // spinner element is always in the DOM (a fixed slot on the far right
+    // of the search bar, so its appearing/disappearing never resizes the
+    // rest of the bar) — visibility is a CSS class, not DOM presence.
+    expect(container.querySelector(".search-spinner.visible")).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(150);
     // Still visible while the backend call is in flight.
-    expect(container.querySelector(".search-spinner")).not.toBeNull();
+    expect(container.querySelector(".search-spinner.visible")).not.toBeNull();
 
     first.resolve(results([]));
     await tick();
     await tick();
 
-    expect(container.querySelector(".search-spinner")).toBeNull();
+    expect(container.querySelector(".search-spinner.visible")).toBeNull();
   });
 
   it("does not show a loading spinner for a query below the minimum length", async () => {
     const { container } = render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -136,12 +150,12 @@ describe("SearchOverlay", () => {
     await tick();
     await vi.advanceTimersByTimeAsync(150);
 
-    expect(container.querySelector(".search-spinner")).toBeNull();
+    expect(container.querySelector(".search-spinner.visible")).toBeNull();
   });
 
   it("does not search below the minimum query length, and shows a hint instead", async () => {
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -162,7 +176,7 @@ describe("SearchOverlay", () => {
     vi.mocked(commands.searchWorkspace).mockReturnValueOnce(first.promise);
 
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -190,7 +204,7 @@ describe("SearchOverlay", () => {
   it("re-fires a query with updated options when a toggle changes", async () => {
     vi.mocked(commands.searchWorkspace).mockResolvedValue(results([]));
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -216,7 +230,7 @@ describe("SearchOverlay", () => {
       .mockReturnValueOnce(second.promise);
 
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -250,7 +264,7 @@ describe("SearchOverlay", () => {
       ]),
     );
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -272,7 +286,7 @@ describe("SearchOverlay", () => {
       ]),
     );
     const { container } = render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -296,7 +310,7 @@ describe("SearchOverlay", () => {
       ]),
     );
     render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -313,7 +327,7 @@ describe("SearchOverlay", () => {
 
   it("clicking the backdrop closes the overlay; clicking inside the panel does not", async () => {
     const { container } = render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const panel = container.querySelector(".search-panel")!;
@@ -333,7 +347,7 @@ describe("SearchOverlay", () => {
       message: "invalid regex: unterminated",
     });
     const { container } = render(SearchOverlay);
-    searchOverlay.set({ open: true });
+    searchOverlay.set({ open: true, mode: "content" });
     await tick();
 
     const input = await screen.findByPlaceholderText(PLACEHOLDER);
@@ -344,5 +358,225 @@ describe("SearchOverlay", () => {
 
     expect(await screen.findByText("invalid regex: unterminated")).toBeTruthy();
     expect(container.querySelector(".search-empty")).toBeNull();
+  });
+
+  it("has no in-panel control to switch modes — Content and Files are exclusive views", async () => {
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+
+    expect(container.querySelector(".search-mode-tabs")).toBeNull();
+    expect(screen.queryByText("Files")).toBeNull();
+  });
+
+  it("switching to Files mode via its exclusive shortcut while Content mode is open fully resets state (not an in-place toggle)", async () => {
+    vi.mocked(commands.searchWorkspace).mockResolvedValue(results([]));
+    vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+
+    const contentInput = await screen.findByPlaceholderText(PLACEHOLDER);
+    await fireEvent.input(contentInput, { target: { value: "over" } });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(commands.searchWorkspace).toHaveBeenCalledTimes(1);
+
+    // Cmd/Ctrl+P firing while the content view is open — as if from
+    // `main.rs`'s exclusive Go to File menu item, via `openSearch("files")`.
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+
+    const filesInput = await screen.findByPlaceholderText(FILES_PLACEHOLDER);
+    // The content query is not carried over: each mode is a fully separate,
+    // exclusive view, not a toggle that preserves what was typed.
+    expect((filesInput as HTMLInputElement).value).toBe("");
+    expect(get(searchOverlay).mode).toBe("files");
+  });
+
+  it("searches in Files mode even with a query shorter than the minimum content-mode length", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+
+    const input = await screen.findByPlaceholderText(FILES_PLACEHOLDER);
+    await fireEvent.input(input, { target: { value: "ab" } });
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(commands.findFiles).toHaveBeenCalledWith("local", "ab");
+  });
+
+  it("fires a findFiles request for an empty query in Files mode (browsing behavior)", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([{ path: "/proj/a.txt", displayPath: "a.txt", score: 0, matchIndices: [] }]),
+    );
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(commands.findFiles).toHaveBeenCalledWith("local", "");
+    expect(await screen.findByText("a.txt")).toBeTruthy();
+  });
+
+  it("shows recently-opened files first in the empty-query Files-mode browse list", async () => {
+    recordFileOpened("/proj", "/proj/c.txt");
+    recordFileOpened("/proj", "/proj/a.txt");
+    // Most recent first: a.txt was opened after c.txt.
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([
+        { path: "/proj/a.txt", displayPath: "a.txt", score: 0, matchIndices: [] },
+        { path: "/proj/b.txt", displayPath: "b.txt", score: 0, matchIndices: [] },
+        { path: "/proj/c.txt", displayPath: "c.txt", score: 0, matchIndices: [] },
+      ]),
+    );
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("a.txt");
+
+    const names = Array.from(container.querySelectorAll(".search-result-filename")).map((el) =>
+      el.textContent?.trim(),
+    );
+    // a.txt (most recent) and c.txt (less recent) come first, in recency
+    // order; b.txt (never opened) falls back after them in its original
+    // (alphabetical) position.
+    expect(names).toEqual(["a.txt", "c.txt", "b.txt"]);
+  });
+
+  it("does not reorder Files-mode results by recency once a query is typed", async () => {
+    recordFileOpened("/proj", "/proj/b.txt");
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([
+        { path: "/proj/a.txt", displayPath: "a.txt", score: 20, matchIndices: [] },
+        { path: "/proj/b.txt", displayPath: "b.txt", score: 10, matchIndices: [] },
+      ]),
+    );
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+
+    const input = await screen.findByPlaceholderText(FILES_PLACEHOLDER);
+    await fireEvent.input(input, { target: { value: "txt" } });
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("a.txt");
+
+    const names = Array.from(document.querySelectorAll(".search-result-filename")).map((el) =>
+      el.textContent?.trim(),
+    );
+    // The backend's relevance ranking (a.txt first) is left untouched, even
+    // though b.txt is the more-recently-opened file.
+    expect(names).toEqual(["a.txt", "b.txt"]);
+  });
+
+  it("hides the case-sensitivity/regex toggles in Files mode", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+
+    expect(screen.queryByLabelText("Match case")).toBeNull();
+    expect(screen.queryByLabelText("Use regular expression")).toBeNull();
+  });
+
+  it("selecting a file result calls openFile with no selection argument and closes the overlay", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([
+        { path: "/proj/SearchOverlay.svelte", displayPath: "src/lib/search/SearchOverlay.svelte", score: 100, matchIndices: [0, 1] },
+      ]),
+    );
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("SearchOverlay.svelte", { exact: false });
+
+    const row = container.querySelector(".search-result-row");
+    expect(row).not.toBeNull();
+    await fireEvent.click(row!);
+    await tick();
+
+    expect(tabsStore.openFile).toHaveBeenCalledWith("/proj/SearchOverlay.svelte");
+    expect(get(searchOverlay).open).toBe(false);
+  });
+
+  it("renders a file result's filename and directory in separate elements, with the filename never truncated", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([
+        {
+          path: "/proj/src/lib/search/SearchOverlay.svelte",
+          displayPath: "src/lib/search/SearchOverlay.svelte",
+          score: 100,
+          matchIndices: [],
+        },
+      ]),
+    );
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("SearchOverlay.svelte");
+
+    const filename = container.querySelector(".search-result-filename");
+    const dir = container.querySelector(".search-result-dir");
+    expect(filename?.textContent?.trim()).toBe("SearchOverlay.svelte");
+    expect(dir?.textContent?.trim()).toBe("src/lib/search");
+    // The filename has no `overflow`/`text-overflow` styling of its own, so
+    // it's never the element that gets cut off by an ellipsis — only the
+    // directory span (`.search-result-dir`, styled to truncate) can be.
+  });
+
+  it("renders a root-level file result (no directory) with just the filename", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([{ path: "/proj/README.md", displayPath: "README.md", score: 0, matchIndices: [] }]),
+    );
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("README.md");
+
+    expect(container.querySelector(".search-result-filename")?.textContent?.trim()).toBe("README.md");
+    expect(container.querySelector(".search-result-dir")).toBeNull();
+  });
+
+  it("discards a stale Files-mode response that resolves after a newer one", async () => {
+    const first = deferred<FileSearchResults>();
+    const second = deferred<FileSearchResults>();
+    vi.mocked(commands.findFiles).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+
+    const input = await screen.findByPlaceholderText(FILES_PLACEHOLDER);
+    await fireEvent.input(input, { target: { value: "foo" } });
+    await vi.advanceTimersByTimeAsync(150);
+    await fireEvent.input(input, { target: { value: "foobar" } });
+    await vi.advanceTimersByTimeAsync(150);
+
+    second.resolve(
+      fileResults([{ path: "/proj/foobar.txt", displayPath: "foobar.txt", score: 10, matchIndices: [] }]),
+    );
+    await tick();
+    first.resolve(
+      fileResults([{ path: "/proj/foo.txt", displayPath: "foo.txt", score: 10, matchIndices: [] }]),
+    );
+    await tick();
+
+    expect(await screen.findByText("foobar.txt")).toBeTruthy();
+    expect(screen.queryByText("foo.txt")).toBeNull();
+  });
+
+  it("openSearch(\"files\") sets the store's mode to files, and the component picks it up on open", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
+    render(SearchOverlay);
+
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+
+    expect(get(searchOverlay).mode).toBe("files");
+    expect(await screen.findByPlaceholderText(FILES_PLACEHOLDER)).toBeTruthy();
   });
 });

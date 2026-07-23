@@ -15,6 +15,8 @@ import {
   type Tab,
 } from "../../src/lib/stores/tabs";
 import { closePrompt } from "../../src/lib/stores/closePrompt";
+import { workspace } from "../../src/lib/stores/workspace";
+import { getRecentFiles } from "../../src/lib/stores/recentFiles";
 import * as commands from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
@@ -111,6 +113,41 @@ describe("openFile", () => {
     const tab = get(tabsState).tabs.find((t) => t.path === "/main.rs");
     expect(tab?.mode).toBe("code");
     expect(tab?.viewMode).toBeUndefined();
+  });
+
+  it("records the opened path in the workspace's recent-files list when a workspace root is set", async () => {
+    localStorage.clear();
+    workspace.set({ id: "local", root: "/proj" });
+
+    await openFile("/proj/notes.md");
+
+    expect(getRecentFiles("/proj")).toEqual(["/proj/notes.md"]);
+
+    workspace.set({ id: "local", root: null });
+  });
+
+  it("does not record recency when no workspace root is set", async () => {
+    localStorage.clear();
+    workspace.set({ id: "local", root: null });
+
+    await openFile("/notes.md");
+
+    expect(getRecentFiles("/notes.md")).toEqual([]);
+  });
+
+  it("records recency for a tab that is already open (focused, not re-fetched), not just a fresh one", async () => {
+    localStorage.clear();
+    workspace.set({ id: "local", root: "/proj" });
+    tabsState.set({
+      tabs: [codeTab("/proj/existing.md")],
+      activeTabPath: "/proj/existing.md",
+    });
+
+    await openFile("/proj/existing.md");
+
+    expect(getRecentFiles("/proj")).toEqual(["/proj/existing.md"]);
+
+    workspace.set({ id: "local", root: null });
   });
 });
 

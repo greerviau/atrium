@@ -185,6 +185,39 @@ describe("project-wide search", () => {
   });
 });
 
+describe("go to file", () => {
+  it("opens via Cmd/Ctrl+P in Files mode, finds a file by name, and jumps to it", async () => {
+    // Same reachability path as the content-search accelerator above: send
+    // the raw key combo and let the native menu event drive the frontend.
+    await browser.keys(["Meta", "p"]);
+
+    const panel = await $(".search-panel");
+    await panel.waitForExist({ timeout: 5000 });
+
+    // Files mode has no case-sensitivity/regex toggles.
+    const toggles = await $$(".search-input-row .search-toggle");
+    expect(toggles).toHaveLength(0);
+
+    const searchInput = await $(".search-panel input");
+    await searchInput.click();
+    await browser.keys("note");
+
+    const resultRow = await $(".search-result-row");
+    await resultRow.waitForExist({ timeout: 5000 });
+    await resultRow.click();
+
+    // Selecting a file result closes the overlay and jumps straight to the
+    // file via the same `openFile` mechanism content search uses, minus any
+    // line/col selection since a filename match has none.
+    await $(".search-panel").waitForExist({ timeout: 5000, reverse: true });
+
+    await browser.waitUntil(
+      async () => (await $(".tab.active .tab-name").getText()).includes("note.md"),
+      { timeout: 5000, timeoutMsg: "expected note.md's tab to be active after jumping to the file result" },
+    );
+  });
+});
+
 describe("status bar", () => {
   it("shows the active file's path and cursor position, and updates as the caret moves", async () => {
     const statusBar = await $(".status-bar");

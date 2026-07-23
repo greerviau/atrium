@@ -2,6 +2,8 @@ import { get, writable } from "svelte/store";
 import { fsReadFile, fsWriteFile, localWorkspaceId } from "../ipc/commands";
 import { modeForPath, type PaneMode } from "../editor/codeExtensions";
 import { closePrompt } from "./closePrompt";
+import { workspace } from "./workspace";
+import { recordFileOpened } from "./recentFiles";
 
 export interface PendingSelection {
   line: number;
@@ -89,6 +91,12 @@ export function notifySaveFailed(path: string, error: unknown): void {
  * file-path link provider so "open a file" behaves identically everywhere.
  */
 export async function openFile(path: string, selection?: PendingSelection): Promise<void> {
+  const root = get(workspace).root;
+  if (root) {
+    // Best-effort, never blocks the actual open — see `recentFiles.ts`.
+    recordFileOpened(root, path);
+  }
+
   const state = get(tabsState);
   const existing = state.tabs.find((t) => t.path === path);
   if (existing) {

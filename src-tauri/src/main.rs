@@ -86,6 +86,13 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         Some("CmdOrCtrl+Shift+F"),
     )?;
+    let go_to_file = MenuItem::with_id(
+        app,
+        "menu:go-to-file",
+        "Go to File…",
+        true,
+        Some("CmdOrCtrl+P"),
+    )?;
     let edit_menu = Submenu::with_items(
         app,
         "Edit",
@@ -100,6 +107,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &PredefinedMenuItem::select_all(app, None)?,
             &PredefinedMenuItem::separator(app)?,
             &find_in_files,
+            &go_to_file,
         ],
     )?;
 
@@ -261,6 +269,7 @@ fn main() {
             commands::fs::fs_import_external_paths,
             commands::fs::fs_resolve_candidates,
             commands::search::search_workspace,
+            commands::search::find_files,
             commands::pty::pty_spawn,
             commands::pty::pty_subscribe,
             commands::pty::pty_write,

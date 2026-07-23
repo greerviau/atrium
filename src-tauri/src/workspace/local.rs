@@ -1,6 +1,6 @@
 use super::{
-    is_default_ignored, DirEntry, FsChangeEvent, SearchMatch, SearchOptions, SearchResults,
-    Workspace,
+    is_default_ignored, DirEntry, FileMatch, FileSearchResults, FsChangeEvent, SearchMatch,
+    SearchOptions, SearchResults, Workspace,
 };
 use crate::error::AppError;
 use crate::fs_watch;
@@ -11,6 +11,8 @@ use grep_searcher::sinks::UTF8;
 use grep_searcher::{BinaryDetection, SearcherBuilder, SinkError};
 use ignore::WalkState;
 use notify_debouncer_full::{Debouncer, FileIdMap};
+use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
+use nucleo_matcher::{Config, Matcher as FuzzyMatcher, Utf32Str};
 use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -33,6 +35,11 @@ const SEARCH_PER_FILE_MATCH_CAP: usize = 50;
 /// matches already exist) against a large, non-gitignored tree such as an
 /// un-excluded `node_modules`.
 const SEARCH_DEADLINE: Duration = Duration::from_secs(2);
+
+/// Cap on `LocalWorkspace::find_files`'s result set: a file-picker
+/// conventionally shows fewer, more immediately scannable rows than a
+/// grep-results list, hence the shorter cap than `SEARCH_TOTAL_MATCH_CAP`.
+const FIND_FILES_RESULT_CAP: usize = 200;
 
 /// Cap on how many `" copy N"` suffixes `unique_destination` will probe
 /// before giving up, so a pathological run of pre-existing collisions can't
@@ -333,6 +340,98 @@ fn search_root<M: Matcher + Sync>(
     }
 }
 
+/// Flushes one worker thread's locally-accumulated paths into `shared` when
+/// the thread's walk visitor is dropped — the `find_files` counterpart of
+/// `ThreadLocalMatches`, buffering per-thread for the same lock-contention
+/// reason.
+struct ThreadLocalPaths<'a> {
+    local: Vec<String>,
+    shared: &'a Mutex<Vec<String>>,
+}
+
+impl Drop for ThreadLocalPaths<'_> {
+    fn drop(&mut self) {
+        if !self.local.is_empty() {
+            self.shared.lock().unwrap().append(&mut self.local);
+        }
+    }
+}
+
+/// Walks `root` with the identical gitignore-aware, parallel, generation-
+/// cancelable traversal `search_root` uses, but only collects each plain
+/// file's absolute path — it never opens a file, since a filename search
+/// only ever needs the path string. Fuzzy scoring happens afterward, in
+/// `LocalWorkspace::find_files`, not in this closure, since scoring is cheap
+/// relative to directory traversal and keeps the walk closure simple.
+///
+/// Returns the collected paths plus whether the wall-clock `deadline` cut
+/// the walk short before it finished (distinct from the walk being
+/// superseded mid-flight by a newer call, which returns whatever partial set
+/// was collected but is always discarded by the caller regardless).
+fn find_files_root(
+    root: &Path,
+    current_generation: &AtomicU64,
+    generation: u64,
+    deadline: Duration,
+) -> (Vec<String>, bool) {
+    let deadline = Instant::now() + deadline;
+    let truncated = AtomicBool::new(false);
+    let all_paths: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    ignore::WalkBuilder::new(root)
+        .require_git(false)
+        .build_parallel()
+        .run(|| {
+            let mut buffer = ThreadLocalPaths {
+                local: Vec::new(),
+                shared: &all_paths,
+            };
+            let truncated = &truncated;
+
+            Box::new(move |entry| {
+                if current_generation.load(Ordering::SeqCst) != generation {
+                    return WalkState::Quit;
+                }
+                if Instant::now() >= deadline {
+                    truncated.store(true, Ordering::SeqCst);
+                    return WalkState::Quit;
+                }
+
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(err) => {
+                        eprintln!("atrium: find_files walk error: {err}");
+                        return WalkState::Continue;
+                    }
+                };
+                if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                    return WalkState::Continue;
+                }
+
+                buffer
+                    .local
+                    .push(entry.into_path().to_string_lossy().to_string());
+                WalkState::Continue
+            })
+        });
+
+    (
+        all_paths.into_inner().unwrap(),
+        truncated.load(Ordering::SeqCst),
+    )
+}
+
+/// Strips `root` off `path` to get the workspace-root-relative string that
+/// `find_files` both fuzzy-matches against and reports as `display_path` —
+/// done once here so a match's indices and the frontend's rendered string
+/// are always computed against the identical characters.
+fn display_path(root: &Path, path: &str) -> String {
+    Path::new(path)
+        .strip_prefix(root)
+        .map(|relative| relative.to_string_lossy().to_string())
+        .unwrap_or_else(|_| path.to_string())
+}
+
 /// The only `Workspace` implementation in the MVP: a directory on the local
 /// filesystem. Every method resolves its `path` argument against `root` and
 /// rejects any path that would escape it (`..` components) — this is the
@@ -349,6 +448,11 @@ pub struct LocalWorkspace {
     /// comment) and stop early instead of finishing a search whose result
     /// will only be thrown away.
     search_generation: Arc<AtomicU64>,
+    /// The `find_files` counterpart of `search_generation`, bumped
+    /// independently: mode-switching mid-query means a content search and a
+    /// filename search can legitimately be in flight close together, and
+    /// they must not cancel each other.
+    find_files_generation: Arc<AtomicU64>,
 }
 
 impl LocalWorkspace {
@@ -358,6 +462,7 @@ impl LocalWorkspace {
             workspace_id,
             watcher: Mutex::new(None),
             search_generation: Arc::new(AtomicU64::new(0)),
+            find_files_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -657,6 +762,105 @@ impl Workspace for LocalWorkspace {
             .await
             .map_err(|err| AppError::Other(format!("search task panicked: {err}")))
         }
+    }
+
+    async fn find_files(&self, query: &str) -> Result<FileSearchResults, AppError> {
+        let root = self.root.clone();
+        let generation = self.find_files_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let current_generation = self.find_files_generation.clone();
+        let query = query.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let (paths, deadline_hit) =
+                find_files_root(&root, &current_generation, generation, SEARCH_DEADLINE);
+
+            if query.is_empty() {
+                let mut entries: Vec<(String, String)> = paths
+                    .into_iter()
+                    .map(|path| {
+                        let display = display_path(&root, &path);
+                        (path, display)
+                    })
+                    .collect();
+                entries.sort_by(|a, b| a.1.cmp(&b.1));
+                let truncated = deadline_hit || entries.len() > FIND_FILES_RESULT_CAP;
+                entries.truncate(FIND_FILES_RESULT_CAP);
+                FileSearchResults {
+                    matches: entries
+                        .into_iter()
+                        .map(|(path, display_path)| FileMatch {
+                            path,
+                            display_path,
+                            score: 0,
+                            match_indices: Vec::new(),
+                        })
+                        .collect(),
+                    truncated,
+                }
+            } else {
+                let mut matcher = FuzzyMatcher::new(Config::DEFAULT.match_paths());
+                // `Pattern`, not a single `Matcher::fuzzy_indices` call:
+                // splits the query on whitespace into independent atoms
+                // (`Pattern::indices` requires every atom to match, summing
+                // their scores) so a multi-word query like "readme devloop"
+                // matches `dev-loop/README.md` by fuzzy-matching "readme"
+                // and "devloop" separately against the full path, rather
+                // than requiring the literal (space-containing) query to
+                // appear as one ordered subsequence.
+                let pattern = Pattern::new(
+                    &query,
+                    CaseMatching::Ignore,
+                    Normalization::Smart,
+                    AtomKind::Fuzzy,
+                );
+
+                let mut scored: Vec<FileMatch> = Vec::new();
+                for path in paths {
+                    let display = display_path(&root, &path);
+                    let mut haystack_buf = Vec::new();
+                    let haystack = Utf32Str::new(&display, &mut haystack_buf);
+                    let mut match_indices = Vec::new();
+                    if let Some(score) = pattern.indices(haystack, &mut matcher, &mut match_indices)
+                    {
+                        // Each atom's indices are appended independently and
+                        // not deduplicated against each other (`Pattern::indices`'s
+                        // own doc), so sorting/deduping here is what
+                        // guarantees a strictly ascending, gap-free sequence
+                        // overall — exactly what the frontend's
+                        // `highlightSegments` coalescing walk assumes.
+                        match_indices.sort_unstable();
+                        match_indices.dedup();
+                        scored.push(FileMatch {
+                            path,
+                            display_path: display,
+                            score: score as i64,
+                            match_indices,
+                        });
+                    }
+                }
+
+                // Score descending; ties broken by shorter path (the
+                // standard fzf/telescope tie-break, favoring the more
+                // specific/closer match), then alphabetically for a
+                // deterministic order.
+                scored.sort_by(|a, b| {
+                    b.score
+                        .cmp(&a.score)
+                        .then_with(|| a.display_path.len().cmp(&b.display_path.len()))
+                        .then_with(|| a.display_path.cmp(&b.display_path))
+                });
+
+                let truncated = deadline_hit || scored.len() > FIND_FILES_RESULT_CAP;
+                scored.truncate(FIND_FILES_RESULT_CAP);
+
+                FileSearchResults {
+                    matches: scored,
+                    truncated,
+                }
+            }
+        })
+        .await
+        .map_err(|err| AppError::Other(format!("find_files task panicked: {err}")))
     }
 
     fn root(&self) -> &str {
@@ -1312,6 +1516,191 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, AppError::InvalidPath(_)));
+    }
+
+    #[tokio::test]
+    async fn find_files_ranks_a_contiguous_match_above_a_scattered_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("readme.txt").await.unwrap();
+        ws.create_file("resume.txt").await.unwrap();
+
+        let results = ws.find_files("re").await.unwrap();
+
+        let names: Vec<_> = results
+            .matches
+            .iter()
+            .map(|m| m.display_path.as_str())
+            .collect();
+        // "re" is a contiguous prefix of both, but "resume.txt" is shorter,
+        // so nucleo's prefix/contiguity bonus should still favor it over
+        // "readme.txt" once other things are equal-ish; assert both are
+        // found and ranked (score descending) rather than pin an exact
+        // ordering the crate's own tuning could shift.
+        assert_eq!(names.len(), 2);
+        assert!(results.matches[0].score >= results.matches[1].score);
+    }
+
+    #[tokio::test]
+    async fn find_files_empty_query_lists_all_files_sorted_unranked() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("zeta.txt").await.unwrap();
+        ws.create_file("alpha.txt").await.unwrap();
+        ws.create_file("mid.txt").await.unwrap();
+
+        let results = ws.find_files("").await.unwrap();
+
+        let names: Vec<_> = results
+            .matches
+            .iter()
+            .map(|m| m.display_path.as_str())
+            .collect();
+        assert_eq!(names, vec!["alpha.txt", "mid.txt", "zeta.txt"]);
+        assert!(results.matches.iter().all(|m| m.score == 0));
+        assert!(results.matches.iter().all(|m| m.match_indices.is_empty()));
+        assert!(!results.truncated);
+    }
+
+    #[tokio::test]
+    async fn find_files_respects_gitignore() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file(".gitignore").await.unwrap();
+        ws.write_file(".gitignore", "ignored.txt\n").await.unwrap();
+        ws.create_file("ignored.txt").await.unwrap();
+        ws.create_file("kept.txt").await.unwrap();
+
+        let results = ws.find_files("").await.unwrap();
+
+        let names: Vec<_> = results
+            .matches
+            .iter()
+            .map(|m| m.display_path.as_str())
+            .collect();
+        assert_eq!(names, vec!["kept.txt"]);
+    }
+
+    #[tokio::test]
+    async fn find_files_excludes_default_ignored_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("note.md").await.unwrap();
+        ws.create_dir(".git").await.unwrap();
+        ws.create_file(".git/HEAD").await.unwrap();
+        ws.create_file(".DS_Store").await.unwrap();
+
+        let results = ws.find_files("").await.unwrap();
+
+        let names: Vec<_> = results
+            .matches
+            .iter()
+            .map(|m| m.display_path.as_str())
+            .collect();
+        assert_eq!(names, vec!["note.md"]);
+    }
+
+    #[tokio::test]
+    async fn find_files_result_cap_truncates_and_sets_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        let files = FIND_FILES_RESULT_CAP + 20;
+        for i in 0..files {
+            ws.create_file(&format!("file{i:04}.txt")).await.unwrap();
+        }
+
+        let results = ws.find_files("").await.unwrap();
+
+        assert_eq!(results.matches.len(), FIND_FILES_RESULT_CAP);
+        assert!(results.truncated);
+    }
+
+    #[tokio::test]
+    async fn find_files_query_matching_nothing_returns_empty_non_truncated() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("note.md").await.unwrap();
+
+        let results = ws.find_files("zzzzznomatch").await.unwrap();
+
+        assert!(results.matches.is_empty());
+        assert!(!results.truncated);
+    }
+
+    #[tokio::test]
+    async fn find_files_generation_cancels_a_superseded_walk() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("note.md").await.unwrap();
+
+        // Simulate a newer find_files call having already started by the
+        // time this (stale) generation gets to check: `current_generation`
+        // no longer reads back the `generation` this call was given, so it
+        // should bail out before collecting anything.
+        let current_generation = AtomicU64::new(2);
+        let (paths, truncated) =
+            find_files_root(dir.path(), &current_generation, 1, SEARCH_DEADLINE);
+
+        assert!(paths.is_empty());
+        assert!(!truncated);
+    }
+
+    #[tokio::test]
+    async fn find_files_matches_against_the_full_relative_path_not_just_basename() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_dir("src/lib/search").await.unwrap();
+        ws.create_file("src/lib/search/SearchOverlay.svelte")
+            .await
+            .unwrap();
+        ws.create_file("unrelated.txt").await.unwrap();
+
+        let results = ws.find_files("libsearch").await.unwrap();
+
+        let names: Vec<_> = results
+            .matches
+            .iter()
+            .map(|m| m.display_path.as_str())
+            .collect();
+        assert_eq!(names, vec!["src/lib/search/SearchOverlay.svelte"]);
+    }
+
+    #[tokio::test]
+    async fn find_files_multi_word_query_matches_each_word_independently() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_dir("github/dev-loop").await.unwrap();
+        ws.create_file("github/dev-loop/README.md").await.unwrap();
+        ws.create_file("unrelated.md").await.unwrap();
+
+        // Each space-separated word is fuzzy-matched independently against
+        // the full path, so "readme" and "devloop" both have to be found as
+        // (possibly gappy) subsequences somewhere in it — neither word
+        // alone needs to be contiguous with the other, unlike the literal
+        // (space-containing) string "readme devloop" which appears nowhere
+        // in the path.
+        let results = ws.find_files("readme devloop").await.unwrap();
+
+        let names: Vec<_> = results
+            .matches
+            .iter()
+            .map(|m| m.display_path.as_str())
+            .collect();
+        assert_eq!(names, vec!["github/dev-loop/README.md"]);
+    }
+
+    #[tokio::test]
+    async fn find_files_multi_word_query_requires_every_word_to_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("README.md").await.unwrap();
+
+        // "readme" matches, but "zzznomatch" doesn't appear anywhere in the
+        // path — a multi-word query is an AND across its words, so the file
+        // must not be returned just because one word matched.
+        let results = ws.find_files("readme zzznomatch").await.unwrap();
+
+        assert!(results.matches.is_empty());
     }
 
     #[tokio::test]

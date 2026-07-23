@@ -24,6 +24,7 @@ export type MenuEventId =
   | "menu:new-terminal-tab"
   | "menu:split-terminal"
   | "menu:find-in-files"
+  | "menu:go-to-file"
   | "menu:toggle-explorer"
   | "menu:toggle-terminal"
   | "menu:zoom-in"
