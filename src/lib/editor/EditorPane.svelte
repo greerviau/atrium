@@ -2,7 +2,9 @@
   import { onMount, onDestroy } from "svelte";
   import { Compartment, EditorState, type Extension } from "@codemirror/state";
   import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+  import { selectAll as cmSelectAll } from "@codemirror/commands";
   import { syntaxHighlighting } from "@codemirror/language";
+  import { readText } from "@tauri-apps/plugin-clipboard-manager";
   import {
     tabsState,
     saveRequest,
@@ -20,6 +22,8 @@
   import { codeExtensions } from "./codeExtensions";
   import { setCursorPosition, clearCursorPosition, type CursorPosition } from "../stores/editorStatus";
   import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
+  import { revealInFinder } from "../ipc/reveal";
+  import ContextMenu from "../ui/ContextMenu.svelte";
 
   let { filePath }: { filePath: string } = $props();
 
@@ -30,6 +34,15 @@
   const viewModeCompartment = new Compartment();
   let lastAppliedViewMode: "rendered" | "source" | undefined;
   let lastAppliedActive: boolean | undefined;
+
+  interface ContextMenuState {
+    x: number;
+    y: number;
+    hasSelection: boolean;
+    pasteDisabled: boolean;
+  }
+
+  let menu = $state<ContextMenuState | null>(null);
 
   function viewModeExtensions(mode: "code" | "markdown", viewMode: "rendered" | "source" | undefined): Extension[] {
     if (mode !== "markdown") {
@@ -65,6 +78,82 @@
 
   async function save(): Promise<void> {
     await saveTab(filePath, currentDoc());
+  }
+
+  function closeMenu(): void {
+    menu = null;
+  }
+
+  // Checked async, after the menu is already open with a conservative
+  // (disabled) default, since reading the OS clipboard is never instant.
+  async function refreshPasteAvailability(): Promise<void> {
+    let text = "";
+    try {
+      text = await readText();
+    } catch {
+      text = "";
+    }
+    if (menu) {
+      menu = { ...menu, pasteDisabled: text.length === 0 };
+    }
+  }
+
+  function onContextMenu(event: MouseEvent): void {
+    if (!view) return;
+    event.preventDefault();
+    menu = {
+      x: event.clientX,
+      y: event.clientY,
+      hasSelection: !view.state.selection.main.empty,
+      pasteDisabled: true,
+    };
+    void refreshPasteAvailability();
+  }
+
+  function doCut(): void {
+    closeMenu();
+    view.focus();
+    document.execCommand("cut");
+  }
+
+  function doCopy(): void {
+    closeMenu();
+    view.focus();
+    document.execCommand("copy");
+  }
+
+  async function doPaste(): Promise<void> {
+    closeMenu();
+    let text = "";
+    try {
+      text = await readText();
+    } catch {
+      return;
+    }
+    if (!text) return;
+    view.focus();
+    view.dispatch(view.state.replaceSelection(text));
+  }
+
+  function doSelectAll(): void {
+    closeMenu();
+    view.focus();
+    cmSelectAll(view);
+  }
+
+  function doToggleViewMode(): void {
+    closeMenu();
+    toggleMarkdownViewMode(filePath);
+  }
+
+  function doSave(): void {
+    closeMenu();
+    void save();
+  }
+
+  async function doReveal(): Promise<void> {
+    closeMenu();
+    await revealInFinder(filePath);
   }
 
   onMount(() => {
@@ -278,7 +367,29 @@
   });
 </script>
 
-<div class="editor-pane" bind:this={container}></div>
+<svelte:window onclick={closeMenu} />
+
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="editor-pane" bind:this={container} oncontextmenu={onContextMenu}></div>
+
+{#if menu}
+  <ContextMenu x={menu.x} y={menu.y}>
+    <button role="menuitem" disabled={!menu.hasSelection} onclick={doCut}>Cut</button>
+    <button role="menuitem" disabled={!menu.hasSelection} onclick={doCopy}>Copy</button>
+    <button role="menuitem" disabled={menu.pasteDisabled} onclick={() => void doPaste()}>Paste</button>
+    <div class="menu-separator" role="separator"></div>
+    <button role="menuitem" onclick={doSelectAll}>Select All</button>
+    {#if tab?.mode === "markdown"}
+      <div class="menu-separator" role="separator"></div>
+      <button role="menuitem" onclick={doToggleViewMode}>
+        {tab.viewMode === "source" ? "Switch to Rendered View" : "Switch to Source View"}
+      </button>
+    {/if}
+    <div class="menu-separator" role="separator"></div>
+    <button role="menuitem" onclick={doSave}>Save</button>
+    <button role="menuitem" onclick={() => void doReveal()}>Reveal in Finder</button>
+  </ContextMenu>
+{/if}
 
 <style>
   .editor-pane {
