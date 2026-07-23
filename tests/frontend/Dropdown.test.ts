@@ -116,10 +116,10 @@ describe("Dropdown", () => {
     expect(options(container)[1].classList.contains("highlighted")).toBe(true);
   });
 
-  it("Enter or Space on the closed trigger also opens the dropdown", async () => {
+  it.each(["Enter", " "])("%s on the closed trigger also opens the dropdown", async (key) => {
     const { container } = render(Dropdown, { options: OPTIONS, value: "a", onSelect: vi.fn(), label: "Example" });
 
-    await fireEvent.keyDown(trigger(container), { key: "Enter" });
+    await fireEvent.keyDown(trigger(container), { key });
 
     expect(container.querySelector('[role="listbox"]')).not.toBeNull();
   });
