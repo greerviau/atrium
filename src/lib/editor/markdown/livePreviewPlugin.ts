@@ -1,11 +1,12 @@
 import type { Extension, Transaction } from "@codemirror/state";
-import { StateEffect, StateField } from "@codemirror/state";
-import { Decoration, EditorView, ViewPlugin, ViewUpdate, lineNumbers, type DecorationSet } from "@codemirror/view";
+import { Prec, StateEffect, StateField } from "@codemirror/state";
+import { Decoration, EditorView, ViewPlugin, ViewUpdate, keymap, lineNumbers, type DecorationSet } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { syntaxTree } from "@codemirror/language";
 import { buildDecorations, buildMermaidWidgetDecorations, buildTableGapAtomicRanges } from "./decorations";
 import { handleLinkClick } from "./widgets";
+import { tableNavigationKeymap } from "./tableEdit";
 
 /**
  * Tracks whether the editor's `contentDOM` currently has DOM focus, driven
@@ -181,6 +182,19 @@ const linkClickHandler = EditorView.domEventHandlers({
  * a fully-resolved `EditorState`, not a `StateField` computing its own
  * value), but keeping `editorFocusField` first for both is simplest to
  * reason about.
+ *
+ * `tableNavigationKeymap` is wrapped in `Prec.highest`, not a plain
+ * `keymap.of(...)`: `EditorPane.svelte` puts `baseExtensions()` — whose own
+ * keymap already binds `Tab` (`indentWithTab`) and `Enter`
+ * (`insertNewlineAndIndent`, via `defaultKeymap`) — *before* this extension
+ * set in its top-level `extensions` array. Two `keymap.of(...)` calls at the
+ * same precedence are tried in the order they appear in the flattened
+ * extension tree, so without `Prec.highest` here, `baseExtensions()`'s
+ * bindings would always win and `tableNavigationKeymap` would never run.
+ * `Prec.highest` is safe (not just convenient) precisely because every
+ * binding in `tableNavigationKeymap` already self-gates on the cursor being
+ * inside a table and falls through (returns `false`) everywhere else, so
+ * outranking the generic keymap never changes behavior outside a table.
  */
 export function markdownExtensions(documentPath: string): Extension[] {
   return [
@@ -190,6 +204,7 @@ export function markdownExtensions(documentPath: string): Extension[] {
     livePreviewPlugin(documentPath),
     mermaidWidgetField,
     linkClickHandler,
+    Prec.highest(keymap.of(tableNavigationKeymap)),
   ];
 }
 
