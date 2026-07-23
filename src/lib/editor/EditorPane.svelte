@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { Compartment, EditorState, type Extension } from "@codemirror/state";
+  import { Compartment, EditorState, type Extension, type TransactionSpec } from "@codemirror/state";
   import { EditorView, keymap, lineNumbers } from "@codemirror/view";
   import { selectAll as cmSelectAll } from "@codemirror/commands";
   import { syntaxHighlighting } from "@codemirror/language";
@@ -21,6 +21,16 @@
   import { buildCmTheme, buildHighlightStyle } from "../theme/cmTheme";
   import { baseExtensions } from "./baseExtensions";
   import { markdownExtensions, markdownSourceExtensions } from "./markdown/livePreviewPlugin";
+  import {
+    findTableContext,
+    insertRow,
+    deleteRow,
+    moveRow,
+    insertColumn,
+    deleteColumn,
+    moveColumn,
+    type TableEditContext,
+  } from "./markdown/tableEdit";
   import { codeExtensions } from "./codeExtensions";
   import { setCursorPosition, clearCursorPosition, type CursorPosition } from "../stores/editorStatus";
   import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
@@ -65,6 +75,7 @@
     y: number;
     hasSelection: boolean;
     pasteDisabled: boolean;
+    tableContext: TableEditContext | null;
   }
 
   let menu = $state<ContextMenuState | null>(null);
@@ -123,16 +134,38 @@
     }
   }
 
+  // `posAtCoords` resolves a screen coordinate to a document position, or
+  // `null` when it can't (per its own public contract) — wrapped here so a
+  // right-click never fails to open the menu at all over that; it just
+  // shows no table section, the same outcome as a `null` result.
+  function safePosAtCoords(v: EditorView, coords: { x: number; y: number }): number | null {
+    try {
+      return v.posAtCoords(coords);
+    } catch {
+      return null;
+    }
+  }
+
   function onContextMenu(event: MouseEvent): void {
     if (!view) return;
     event.preventDefault();
+    const pos = safePosAtCoords(view, { x: event.clientX, y: event.clientY });
     menu = {
       x: event.clientX,
       y: event.clientY,
       hasSelection: !view.state.selection.main.empty,
       pasteDisabled: true,
+      tableContext: pos !== null ? findTableContext(view.state, pos) : null,
     };
     void refreshPasteAvailability();
+  }
+
+  function doTableEdit(spec: TransactionSpec | null): void {
+    closeMenu();
+    view.focus();
+    if (spec) {
+      view.dispatch(spec);
+    }
   }
 
   function doCut(): void {
@@ -417,6 +450,21 @@
       <button role="menuitem" onclick={doToggleViewMode}>
         {tab.viewMode === "source" ? "Switch to Rendered View" : "Switch to Source View"}
       </button>
+    {/if}
+    {#if menu.tableContext}
+      {@const ctx = menu.tableContext}
+      <div class="menu-separator" role="separator"></div>
+      <button role="menuitem" disabled={!insertRow(view.state, ctx, "above")} onclick={() => doTableEdit(insertRow(view.state, ctx, "above"))}>Insert Row Above</button>
+      <button role="menuitem" disabled={!insertRow(view.state, ctx, "below")} onclick={() => doTableEdit(insertRow(view.state, ctx, "below"))}>Insert Row Below</button>
+      <button role="menuitem" disabled={!deleteRow(view.state, ctx)} onclick={() => doTableEdit(deleteRow(view.state, ctx))}>Delete Row</button>
+      <button role="menuitem" disabled={!moveRow(view.state, ctx, "up")} onclick={() => doTableEdit(moveRow(view.state, ctx, "up"))}>Move Row Up</button>
+      <button role="menuitem" disabled={!moveRow(view.state, ctx, "down")} onclick={() => doTableEdit(moveRow(view.state, ctx, "down"))}>Move Row Down</button>
+      <div class="menu-separator" role="separator"></div>
+      <button role="menuitem" disabled={!insertColumn(view.state, ctx, "left")} onclick={() => doTableEdit(insertColumn(view.state, ctx, "left"))}>Insert Column Left</button>
+      <button role="menuitem" disabled={!insertColumn(view.state, ctx, "right")} onclick={() => doTableEdit(insertColumn(view.state, ctx, "right"))}>Insert Column Right</button>
+      <button role="menuitem" disabled={!deleteColumn(view.state, ctx)} onclick={() => doTableEdit(deleteColumn(view.state, ctx))}>Delete Column</button>
+      <button role="menuitem" disabled={!moveColumn(view.state, ctx, "left")} onclick={() => doTableEdit(moveColumn(view.state, ctx, "left"))}>Move Column Left</button>
+      <button role="menuitem" disabled={!moveColumn(view.state, ctx, "right")} onclick={() => doTableEdit(moveColumn(view.state, ctx, "right"))}>Move Column Right</button>
     {/if}
     <div class="menu-separator" role="separator"></div>
     <button role="menuitem" onclick={doSave}>Save</button>

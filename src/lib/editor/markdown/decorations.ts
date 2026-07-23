@@ -667,14 +667,14 @@ export function buildMermaidWidgetDecorations(state: EditorState, hasFocus: bool
   return Decoration.set(decorations, true);
 }
 
-type ColumnAlignment = "left" | "center" | "right";
+export type ColumnAlignment = "left" | "center" | "right";
 
 /**
  * Parses a GFM alignment-delimiter row's raw text (e.g. `"| :--- | :---: | ---: |"`)
  * into one alignment per column, by GFM's own rule: `:` on both ends is
  * `center`, on the trailing end only is `right`, otherwise `left`.
  */
-function parseColumnAlignment(text: string): ColumnAlignment[] {
+export function parseColumnAlignment(text: string): ColumnAlignment[] {
   return text
     .split("|")
     .map((segment) => segment.trim())
@@ -697,7 +697,7 @@ function parseColumnAlignment(text: string): ColumnAlignment[] {
  * gives an empty cell no `TableCell` node at all, so nothing else marks
  * where it sits.
  */
-interface CellSlot {
+export interface CellSlot {
   from: number;
   to: number;
 }
@@ -711,7 +711,7 @@ interface CellSlot {
  * synthesized for it spans whatever sits between the two pipes (nothing,
  * for `||` with no space at all).
  */
-function collectCellSlots(node: SyntaxNode): CellSlot[] {
+export function collectCellSlots(node: SyntaxNode): CellSlot[] {
   const slots: CellSlot[] = [];
   let lastDelimiterEnd: number | null = null;
   let child = node.firstChild;
