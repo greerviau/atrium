@@ -10,6 +10,7 @@
   } from "../ipc/commands";
   import { openFile } from "../stores/tabs";
   import { workspace } from "../stores/workspace";
+  import { getRecentFiles } from "../stores/recentFiles";
   import { tooltip } from "../ui/tooltip";
 
   const DEBOUNCE_MS = 150;
@@ -80,6 +81,27 @@
     previousMode = storeMode;
   });
 
+  /**
+   * Moves any file already in the workspace's recently-opened list to the
+   * front, in recency order (most-recent-first), leaving every other match
+   * in its existing (alphabetical) order after them — the default,
+   * nothing-typed-yet view telescope/VS Code's own file pickers show.
+   */
+  function applyRecencyOrder(matches: FileMatch[]): FileMatch[] {
+    const root = $workspace.root;
+    if (!root) return matches;
+    const recentPaths = getRecentFiles(root);
+    if (recentPaths.length === 0) return matches;
+    const recentRank = new Map(recentPaths.map((path, index) => [path, index]));
+    const recent: FileMatch[] = [];
+    const rest: FileMatch[] = [];
+    for (const match of matches) {
+      (recentRank.has(match.path) ? recent : rest).push(match);
+    }
+    recent.sort((a, b) => recentRank.get(a.path)! - recentRank.get(b.path)!);
+    return [...recent, ...rest];
+  }
+
   async function runSearch(myRequestId: number): Promise<void> {
     const q = query;
     if (mode === "content") {
@@ -120,7 +142,11 @@
       try {
         const response = await findFiles(localWorkspaceId(), q);
         if (myRequestId !== requestId) return; // superseded by a newer query
-        fileResults = response.matches;
+        // Recency ordering only applies to the empty-query browse state
+        // (mirroring VS Code/telescope's own "recently opened files" default
+        // view) — once a query narrows the results by relevance, that
+        // fuzzy-match ranking is what the user is asking for.
+        fileResults = q === "" ? applyRecencyOrder(response.matches) : response.matches;
         truncated = response.truncated;
         errorMessage = null;
         hasSearched = true;
@@ -323,9 +349,6 @@
           autocapitalize="off"
           spellcheck="false"
         />
-        {#if isSearching}
-          <span class="search-spinner" aria-hidden="true"></span>
-        {/if}
         {#if mode === "content"}
           <button
             class="search-toggle"
@@ -348,6 +371,11 @@
             .*
           </button>
         {/if}
+        <!-- Always in the DOM (not `{#if isSearching}`) and hidden with
+             `visibility`, not `display`, so this fixed slot on the far
+             right always reserves its own width — the spinner appearing
+             and disappearing must never resize the rest of the search bar. -->
+        <span class="search-spinner" class:visible={isSearching} aria-hidden="true"></span>
       </div>
 
       {#if errorMessage}
@@ -487,6 +515,10 @@
     border: 2px solid var(--atrium-border);
     border-top-color: var(--atrium-accent);
     border-radius: 50%;
+    visibility: hidden;
+  }
+  .search-spinner.visible {
+    visibility: visible;
     animation: search-spin 0.6s linear infinite;
   }
   @keyframes search-spin {

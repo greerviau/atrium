@@ -5,6 +5,7 @@ import { render, fireEvent, cleanup, screen } from "@testing-library/svelte";
 import SearchOverlay from "../../src/lib/search/SearchOverlay.svelte";
 import { searchOverlay } from "../../src/lib/search/searchOverlay";
 import { workspace } from "../../src/lib/stores/workspace";
+import { recordFileOpened } from "../../src/lib/stores/recentFiles";
 import * as commands from "../../src/lib/ipc/commands";
 import * as tabsStore from "../../src/lib/stores/tabs";
 import type { SearchResults, FileSearchResults } from "../../src/lib/ipc/commands";
@@ -58,6 +59,7 @@ describe("SearchOverlay", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    localStorage.clear();
     searchOverlay.set({ open: false, mode: "content" });
     workspace.set({ id: "local", root: "/proj" });
   });
@@ -121,18 +123,21 @@ describe("SearchOverlay", () => {
     await fireEvent.input(input, { target: { value: "foo" } });
     await tick();
 
-    // Visible immediately, before the debounce timer has even fired.
-    expect(container.querySelector(".search-spinner")).not.toBeNull();
+    // Visible immediately, before the debounce timer has even fired. The
+    // spinner element is always in the DOM (a fixed slot on the far right
+    // of the search bar, so its appearing/disappearing never resizes the
+    // rest of the bar) — visibility is a CSS class, not DOM presence.
+    expect(container.querySelector(".search-spinner.visible")).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(150);
     // Still visible while the backend call is in flight.
-    expect(container.querySelector(".search-spinner")).not.toBeNull();
+    expect(container.querySelector(".search-spinner.visible")).not.toBeNull();
 
     first.resolve(results([]));
     await tick();
     await tick();
 
-    expect(container.querySelector(".search-spinner")).toBeNull();
+    expect(container.querySelector(".search-spinner.visible")).toBeNull();
   });
 
   it("does not show a loading spinner for a query below the minimum length", async () => {
@@ -145,7 +150,7 @@ describe("SearchOverlay", () => {
     await tick();
     await vi.advanceTimersByTimeAsync(150);
 
-    expect(container.querySelector(".search-spinner")).toBeNull();
+    expect(container.querySelector(".search-spinner.visible")).toBeNull();
   });
 
   it("does not search below the minimum query length, and shows a hint instead", async () => {
@@ -412,6 +417,57 @@ describe("SearchOverlay", () => {
 
     expect(commands.findFiles).toHaveBeenCalledWith("local", "");
     expect(await screen.findByText("a.txt")).toBeTruthy();
+  });
+
+  it("shows recently-opened files first in the empty-query Files-mode browse list", async () => {
+    recordFileOpened("/proj", "/proj/c.txt");
+    recordFileOpened("/proj", "/proj/a.txt");
+    // Most recent first: a.txt was opened after c.txt.
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([
+        { path: "/proj/a.txt", displayPath: "a.txt", score: 0, matchIndices: [] },
+        { path: "/proj/b.txt", displayPath: "b.txt", score: 0, matchIndices: [] },
+        { path: "/proj/c.txt", displayPath: "c.txt", score: 0, matchIndices: [] },
+      ]),
+    );
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("a.txt");
+
+    const names = Array.from(container.querySelectorAll(".search-result-filename")).map((el) =>
+      el.textContent?.trim(),
+    );
+    // a.txt (most recent) and c.txt (less recent) come first, in recency
+    // order; b.txt (never opened) falls back after them in its original
+    // (alphabetical) position.
+    expect(names).toEqual(["a.txt", "c.txt", "b.txt"]);
+  });
+
+  it("does not reorder Files-mode results by recency once a query is typed", async () => {
+    recordFileOpened("/proj", "/proj/b.txt");
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([
+        { path: "/proj/a.txt", displayPath: "a.txt", score: 20, matchIndices: [] },
+        { path: "/proj/b.txt", displayPath: "b.txt", score: 10, matchIndices: [] },
+      ]),
+    );
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+
+    const input = await screen.findByPlaceholderText(FILES_PLACEHOLDER);
+    await fireEvent.input(input, { target: { value: "txt" } });
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("a.txt");
+
+    const names = Array.from(document.querySelectorAll(".search-result-filename")).map((el) =>
+      el.textContent?.trim(),
+    );
+    // The backend's relevance ranking (a.txt first) is left untouched, even
+    // though b.txt is the more-recently-opened file.
+    expect(names).toEqual(["a.txt", "b.txt"]);
   });
 
   it("hides the case-sensitivity/regex toggles in Files mode", async () => {
