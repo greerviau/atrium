@@ -21,6 +21,8 @@
     label: string;
   } = $props();
 
+  const uid = $props.id();
+
   let open = $state(false);
   let highlightedIndex = $state(0);
   let rootEl: HTMLDivElement | undefined = $state();
@@ -29,11 +31,19 @@
 
   let selectedIndex = $derived(Math.max(0, options.findIndex((opt) => opt.id === value)));
   let selectedOption = $derived(options[selectedIndex]);
+  let activeOptionId = $derived(
+    open && options[highlightedIndex] ? `${uid}-option-${options[highlightedIndex].id}` : undefined,
+  );
 
+  // Deferred to the next animation frame rather than run directly: `open`
+  // flipping true mounts `ContextMenu`, whose own panel stays
+  // `visibility: hidden` until *its* positioning effect measures and places
+  // it, and a hidden ancestor can't take real focus. Waiting a frame lets
+  // that positioning settle first instead of racing it.
   $effect(() => {
-    if (open) {
-      listboxEl?.focus();
-    }
+    if (!open) return;
+    const raf = requestAnimationFrame(() => listboxEl?.focus());
+    return () => cancelAnimationFrame(raf);
   });
 
   function openMenu(): void {
@@ -129,6 +139,7 @@
         class="dropdown-listbox"
         role="listbox"
         aria-label={label}
+        aria-activedescendant={activeOptionId}
         tabindex="-1"
         onkeydown={onListboxKeydown}
       >
@@ -136,6 +147,7 @@
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
+            id="{uid}-option-{opt.id}"
             class="dropdown-option"
             class:highlighted={index === highlightedIndex}
             role="option"

@@ -107,6 +107,35 @@ describe("Dropdown", () => {
     expect(document.activeElement).toBe(trigger(container));
   });
 
+  it("ArrowDown on the closed trigger opens the dropdown with the selected option highlighted", async () => {
+    const { container } = render(Dropdown, { options: OPTIONS, value: "b", onSelect: vi.fn(), label: "Example" });
+
+    await fireEvent.keyDown(trigger(container), { key: "ArrowDown" });
+
+    expect(container.querySelector('[role="listbox"]')).not.toBeNull();
+    expect(options(container)[1].classList.contains("highlighted")).toBe(true);
+  });
+
+  it("Enter or Space on the closed trigger also opens the dropdown", async () => {
+    const { container } = render(Dropdown, { options: OPTIONS, value: "a", onSelect: vi.fn(), label: "Example" });
+
+    await fireEvent.keyDown(trigger(container), { key: "Enter" });
+
+    expect(container.querySelector('[role="listbox"]')).not.toBeNull();
+  });
+
+  it("exposes the highlighted option to assistive tech via aria-activedescendant", async () => {
+    const { container } = render(Dropdown, { options: OPTIONS, value: "a", onSelect: vi.fn(), label: "Example" });
+    await fireEvent.click(trigger(container));
+
+    const listbox = container.querySelector('[role="listbox"]')!;
+    expect(listbox.getAttribute("aria-activedescendant")).toBe(options(container)[0].id);
+
+    await fireEvent.keyDown(listbox, { key: "ArrowDown" });
+
+    expect(listbox.getAttribute("aria-activedescendant")).toBe(options(container)[1].id);
+  });
+
   it("closes when clicking outside the dropdown", async () => {
     const { container } = render(Dropdown, { options: OPTIONS, value: "a", onSelect: vi.fn(), label: "Example" });
     await fireEvent.click(trigger(container));
