@@ -353,8 +353,13 @@ describe("buildDecorations: reference-style links and images (issue #196)", () =
 
   it("keeps today's behavior for a dangling image reference: raw source stays visible", () => {
     const doc = "See ![alt][missing] for more.\nsecond line";
+    const imageFrom = doc.indexOf("![alt][missing]");
+    const imageTo = imageFrom + "![alt][missing]".length;
     expect(imageWidgetFor(doc)).toBeUndefined();
-    expect(doc).toContain("![alt][missing]");
+    // No decoration replaces the image's own source range, so it stays
+    // visible as plain text rather than being hidden by anything else.
+    const decos = collect(stateFor(doc, doc.length));
+    expect(decos.some((d) => d.isReplace && d.from <= imageFrom && d.to >= imageTo)).toBe(false);
   });
 
   it("resolves duplicate labels to the first definition's URL, per CommonMark's first-wins rule", () => {

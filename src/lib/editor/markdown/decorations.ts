@@ -173,10 +173,12 @@ function normalizeReferenceLabel(label: string): string {
 }
 
 /**
- * Strips a `LinkTitle` node's surrounding delimiters (`"..."`, `'...'`, or
- * `(...)`) down to the bare title text.
+ * Strips the first and last character off `raw`. Shared by two unrelated
+ * uses: a `LinkTitle` node's surrounding quote/paren delimiters (`"..."`,
+ * `'...'`, `(...)`) and a `LinkLabel` node's surrounding `[...]` brackets —
+ * both are "one delimiter character on each end" in the same way.
  */
-function stripTitleDelimiters(raw: string): string {
+function stripOuterDelimiters(raw: string): string {
   if (raw.length >= 2) {
     return raw.slice(1, -1);
   }
@@ -211,11 +213,11 @@ function collectLinkReferences(state: EditorState): Map<string, ReferenceDefinit
         const urlNode = ref.node.getChild("URL");
         if (labelNode && urlNode) {
           const rawLabel = state.doc.sliceString(labelNode.from, labelNode.to);
-          const key = normalizeReferenceLabel(stripTitleDelimiters(rawLabel));
+          const key = normalizeReferenceLabel(stripOuterDelimiters(rawLabel));
           if (!refs.has(key)) {
             const titleNode = ref.node.getChild("LinkTitle");
             const url = state.doc.sliceString(urlNode.from, urlNode.to);
-            const title = titleNode ? stripTitleDelimiters(state.doc.sliceString(titleNode.from, titleNode.to)) : undefined;
+            const title = titleNode ? stripOuterDelimiters(state.doc.sliceString(titleNode.from, titleNode.to)) : undefined;
             refs.set(key, { url, title });
           }
         }
@@ -250,7 +252,7 @@ function referenceLabelFor(state: EditorState, node: SyntaxNode): string | null 
   }
   const linkLabelNode = node.getChild("LinkLabel");
   if (linkLabelNode) {
-    const inner = stripTitleDelimiters(state.doc.sliceString(linkLabelNode.from, linkLabelNode.to));
+    const inner = stripOuterDelimiters(state.doc.sliceString(linkLabelNode.from, linkLabelNode.to));
     if (inner.length > 0) {
       return inner;
     }
