@@ -45,10 +45,14 @@ class PrLinkProvider implements ILinkProvider {
           end: { x: start + url.length, y: bufferLineNumber },
         },
         text: url,
-        activate: () =>
+        activate: (event: MouseEvent) => {
+          if (!(event.metaKey || event.ctrlKey)) {
+            return;
+          }
           shellOpenExternal(url).catch((err: unknown) => {
             showErrorToast(`Couldn't open link: ${describeError(err)}`);
-          }),
+          });
+        },
       };
     });
     callback(links);
@@ -138,7 +142,14 @@ class FilePathLinkProvider implements ILinkProvider {
             end: { x: start + m[0].length, y: bufferLineNumber },
           },
           text: m[0],
-          activate: () => void openFile(resolvedPath, targetLine ? { line: targetLine, col } : undefined),
+          activate: (event: MouseEvent) => {
+            if (!(event.metaKey || event.ctrlKey)) {
+              return;
+            }
+            openFile(resolvedPath, targetLine ? { line: targetLine, col } : undefined).catch((err: unknown) => {
+              showErrorToast(`Couldn't open file: ${describeError(err)}`);
+            });
+          },
         });
       });
       callback(links.length > 0 ? links : undefined);
