@@ -146,6 +146,7 @@ impl PtyManager {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
         let mut cmd = CommandBuilder::new(shell);
         cmd.cwd(cwd);
+        cmd.env("TERM", "xterm-256color");
 
         let child = pair
             .slave
@@ -480,6 +481,91 @@ mod tests {
             Duration::from_secs(10),
             "marker never appeared in pty output",
             || String::from_utf8_lossy(&received.lock().unwrap()).contains("atrium-test-marker"),
+        );
+
+        manager.kill(&terminal_id).unwrap();
+    }
+
+    /// Proves #192's fix: the spawned shell always has `TERM` set, even
+    /// though the test process running `cargo test` may or may not have one
+    /// of its own (mirroring the `launchd`-launched built app, which has
+    /// none) — so this must come from `PtyManager::spawn` explicitly setting
+    /// it, not from inheritance.
+    #[test]
+    fn spawned_shell_has_term_set_to_xterm_256color() {
+        let manager = PtyManager::new();
+        let dir = tempfile::tempdir().unwrap();
+        let terminal_id = manager
+            .spawn(dir.path().to_string_lossy().to_string(), 80, 24)
+            .unwrap();
+
+        let received: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let received_clone = received.clone();
+        let channel = Channel::new(move |body| {
+            if let InvokeResponseBody::Json(json) = body {
+                if let Ok(PtyEvent::Data { data }) = serde_json::from_str::<PtyEvent>(&json) {
+                    if let Ok(bytes) = STANDARD.decode(data) {
+                        received_clone.lock().unwrap().extend_from_slice(&bytes);
+                    }
+                }
+            }
+            Ok(())
+        });
+        manager.subscribe(&terminal_id, channel).unwrap();
+
+        manager.write(&terminal_id, "echo $TERM\n").unwrap();
+
+        wait_for(
+            Duration::from_secs(10),
+            "TERM value never appeared in pty output",
+            || String::from_utf8_lossy(&received.lock().unwrap()).contains("xterm-256color"),
+        );
+
+        manager.kill(&terminal_id).unwrap();
+    }
+
+    /// The most direct regression guard for #192's reported symptom: `clear`
+    /// must not print `TERM environment variable not set`, which only
+    /// happens when `TERM` is unset or names a terminfo entry that doesn't
+    /// exist on the host.
+    #[test]
+    fn clear_does_not_report_term_not_set() {
+        let manager = PtyManager::new();
+        let dir = tempfile::tempdir().unwrap();
+        let terminal_id = manager
+            .spawn(dir.path().to_string_lossy().to_string(), 80, 24)
+            .unwrap();
+
+        let received: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let received_clone = received.clone();
+        let channel = Channel::new(move |body| {
+            if let InvokeResponseBody::Json(json) = body {
+                if let Ok(PtyEvent::Data { data }) = serde_json::from_str::<PtyEvent>(&json) {
+                    if let Ok(bytes) = STANDARD.decode(data) {
+                        received_clone.lock().unwrap().extend_from_slice(&bytes);
+                    }
+                }
+            }
+            Ok(())
+        });
+        manager.subscribe(&terminal_id, channel).unwrap();
+
+        // `clear` alone leaves no marker to wait on, so run an echo after it
+        // and wait for that instead, then assert over everything received.
+        manager
+            .write(&terminal_id, "clear; echo atrium-clear-done\n")
+            .unwrap();
+
+        wait_for(
+            Duration::from_secs(10),
+            "marker after clear never appeared in pty output",
+            || String::from_utf8_lossy(&received.lock().unwrap()).contains("atrium-clear-done"),
+        );
+
+        let output = String::from_utf8_lossy(&received.lock().unwrap()).into_owned();
+        assert!(
+            !output.contains("TERM environment variable not set"),
+            "clear reported a missing TERM: {output}"
         );
 
         manager.kill(&terminal_id).unwrap();
