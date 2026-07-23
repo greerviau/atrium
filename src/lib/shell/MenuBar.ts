@@ -7,6 +7,7 @@ import { openSearch } from "../search/searchOverlay";
 import { openSettings } from "../stores/settingsOverlay";
 import { openShortcuts } from "../stores/shortcutsOverlay";
 import { openExternalLink } from "../ipc/commands";
+import { showErrorToast, describeError } from "../stores/errorToast";
 import { get } from "svelte/store";
 
 /**
@@ -51,8 +52,13 @@ export async function initMenuBar(onNewTerminalTab: () => void, onSplitTerminal:
   await onMenuEvent("menu:zoom-out", () => zoomOut());
   await onMenuEvent("menu:zoom-reset", () => resetZoom());
   await onMenuEvent("menu:help:shortcuts", () => openShortcuts());
-  await onMenuEvent("menu:help:github", () => void openExternalLink("https://github.com/greerviau/atrium"));
+  const openHelpLink = (url: string): void => {
+    openExternalLink(url).catch((err: unknown) => {
+      showErrorToast(`Couldn't open link: ${describeError(err)}`);
+    });
+  };
+  await onMenuEvent("menu:help:github", () => openHelpLink("https://github.com/greerviau/atrium"));
   await onMenuEvent("menu:help:report-issue", () =>
-    void openExternalLink("https://github.com/greerviau/atrium/issues/new"),
+    openHelpLink("https://github.com/greerviau/atrium/issues/new"),
   );
 }

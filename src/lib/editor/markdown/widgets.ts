@@ -2,6 +2,7 @@ import { EditorView, WidgetType } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 import { openFile } from "../../stores/tabs";
 import { openExternalLink } from "../../ipc/commands";
+import { showErrorToast, describeError } from "../../stores/errorToast";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import path from "../../util/path";
 import { loadMermaid } from "./mermaid";
@@ -247,7 +248,9 @@ function resolveImageSrc(url: string, documentPath: string): string {
  */
 export function handleLinkClick(url: string, documentPath: string): void {
   if (/^https?:\/\//i.test(url)) {
-    void openExternalLink(url);
+    openExternalLink(url).catch((err: unknown) => {
+      showErrorToast(`Couldn't open link: ${describeError(err)}`);
+    });
     return;
   }
   const target = path.resolveRelative(path.dirname(documentPath), url);

@@ -1,8 +1,10 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
+import { get } from "svelte/store";
 import { EditorState, EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { invoke } from "@tauri-apps/api/core";
 import { markdownExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
+import { errorToast, dismissErrorToast } from "../../src/lib/stores/errorToast";
 
 // Mocks the real IPC boundary (`invoke`) rather than `openExternalLink`
 // itself, so this test exercises the actual call the frontend makes to the
@@ -43,6 +45,7 @@ afterEach(() => {
   container?.remove();
   container = undefined;
   vi.mocked(invoke).mockClear();
+  dismissErrorToast();
 });
 
 describe("cmd/ctrl-click on a rendered markdown link, at the real IPC boundary", () => {
@@ -81,5 +84,19 @@ describe("cmd/ctrl-click on a rendered markdown link, at the real IPC boundary",
     link.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, metaKey: true }));
 
     expect(invoke).not.toHaveBeenCalledWith("open_external_link", expect.anything());
+  });
+
+  it("surfaces a rejected open_external_link call via the error toast (issue #149)", async () => {
+    vi.mocked(invoke).mockRejectedValue(new Error("refusing to open non-http(s) URL: file:///etc/passwd"));
+    const doc = "See [my link](https://example.com) for more.\nOther line, cursor starts here.";
+    view = makeView(doc);
+    view.dispatch({ selection: EditorSelection.cursor(doc.length) });
+
+    const link = findLink(view);
+    link.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, metaKey: true }));
+    expect(invoke).toHaveBeenCalledWith("open_external_link", { url: "https://example.com" });
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(get(errorToast)).toMatch(/refusing to open non-http\(s\) URL/);
   });
 });

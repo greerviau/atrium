@@ -6,7 +6,7 @@ import { openExternalLink } from "../../src/lib/ipc/commands";
 import { openFile } from "../../src/lib/stores/tabs";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
-  openExternalLink: vi.fn(),
+  openExternalLink: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("../../src/lib/stores/tabs", () => ({
@@ -44,7 +44,7 @@ afterEach(() => {
 
 describe("modifier+click on a rendered markdown link", () => {
   beforeEach(() => {
-    vi.mocked(openExternalLink).mockReset();
+    vi.mocked(openExternalLink).mockReset().mockReturnValue(Promise.resolve());
     vi.mocked(openFile).mockReset();
   });
 
