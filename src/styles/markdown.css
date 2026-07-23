@@ -54,6 +54,7 @@
 .cm-table-cell {
   display: table-cell;
   padding: 0.2em 0.6em;
+  border-right: 1px solid var(--atrium-border);
 }
 
 .cm-table-header-cell {
