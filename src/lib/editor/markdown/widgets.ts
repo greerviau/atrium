@@ -97,6 +97,63 @@ export class ImageWidget extends WidgetType {
   }
 }
 
+/**
+ * Replaces an unordered list item's `-`/`*`/`+` marker. Every bullet renders
+ * the same glyph regardless of position in the list, so there's no computed
+ * state to carry — `eq()` always returns true, letting CodeMirror reuse a
+ * single DOM node across every bullet in the document. The glyph itself
+ * comes from `theme.ts`'s `CLASS.listBullet` `::before` rule in
+ * `markdown.css`, not from this widget's own content.
+ */
+export class ListBulletWidget extends WidgetType {
+  eq(): boolean {
+    return true;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = CLASS.listBullet;
+    return span;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
+/**
+ * Replaces an ordered list item's `ListMark` with its computed rendered
+ * number — `start + index` per CommonMark's numbering rule, not the digits
+ * literally typed on that item's own line (see `decorations.ts`'s
+ * `decorateOrderedList`). Unlike `ListBulletWidget`, the rendered content is
+ * data-dependent, so `eq()` compares the computed number and delimiter,
+ * matching `CheckboxWidget`'s pattern: CodeMirror reuses the DOM node across
+ * any decoration recompute that doesn't change this item's own number.
+ */
+export class ListMarkerWidget extends WidgetType {
+  constructor(
+    readonly number: number,
+    readonly delimiter: string,
+  ) {
+    super();
+  }
+
+  eq(other: ListMarkerWidget): boolean {
+    return this.number === other.number && this.delimiter === other.delimiter;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = CLASS.listNumber;
+    span.textContent = `${this.number}${this.delimiter}`;
+    return span;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
 let nextMermaidWidgetId = 0;
 
 /**
