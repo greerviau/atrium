@@ -3,6 +3,7 @@ import { PR_LINK_REGEX } from "./prLinkRegex";
 import { FILE_PATH_REGEX } from "./filePathRegex";
 import { fsResolveCandidates, shellOpenExternal, type PathCandidate } from "../ipc/commands";
 import { openFile } from "../stores/tabs";
+import { showErrorToast, describeError } from "../stores/errorToast";
 
 /** Extracts an optional trailing `:<line>` or `:<line>:<col>` suffix from a matched candidate. */
 function parseTrailingLineCol(raw: string): { path: string; line?: number; col?: number } {
@@ -44,7 +45,10 @@ class PrLinkProvider implements ILinkProvider {
           end: { x: start + url.length, y: bufferLineNumber },
         },
         text: url,
-        activate: () => void shellOpenExternal(url),
+        activate: () =>
+          shellOpenExternal(url).catch((err: unknown) => {
+            showErrorToast(`Couldn't open link: ${describeError(err)}`);
+          }),
       };
     });
     callback(links);

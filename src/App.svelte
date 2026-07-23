@@ -8,6 +8,7 @@
   import UnsavedChangesDialog from "./lib/shell/UnsavedChangesDialog.svelte";
   import SettingsDialog from "./lib/shell/SettingsDialog.svelte";
   import KeyboardShortcutsDialog from "./lib/shell/KeyboardShortcutsDialog.svelte";
+  import ErrorToast from "./lib/shell/ErrorToast.svelte";
   import StatusBar from "./lib/shell/StatusBar.svelte";
   import { workspace, openWorkspacePath } from "./lib/stores/workspace";
   import { tabsState, setActiveTab, requestCloseTab, reconcileExternalChange } from "./lib/stores/tabs";
@@ -487,6 +488,7 @@
 
 <SettingsDialog />
 <KeyboardShortcutsDialog />
+<ErrorToast />
 {#if !$workspace.root}
   <WelcomeScreen />
 {:else}
