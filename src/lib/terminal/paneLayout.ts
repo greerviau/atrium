@@ -1,4 +1,4 @@
-import type { PaneNode, SplitAxis } from "./paneTree";
+import type { Leaf, PaneNode, SplitAxis } from "../panes/paneTree";
 
 // A node's on-screen rectangle, in percent (0-100) relative to the flat
 // root container `PaneSplit` renders into.
@@ -26,7 +26,11 @@ export interface ResizerRect {
  * sum of `tree.sizes`, mirroring the ratio math `resizeSplit` (paneTree.ts)
  * already uses.
  */
-export function computeRects(tree: PaneNode, rect: Rect, out: Map<string, Rect> = new Map()): Map<string, Rect> {
+export function computeRects<L extends Leaf>(
+  tree: PaneNode<L>,
+  rect: Rect,
+  out: Map<string, Rect> = new Map(),
+): Map<string, Rect> {
   out.set(tree.id, rect);
 
   if (tree.type === "leaf") return out;
@@ -51,7 +55,11 @@ export function computeRects(tree: PaneNode, rect: Rect, out: Map<string, Rect> 
  * adjacent child pair, positioned at the boundary between the two
  * children's rectangles already computed by `computeRects`.
  */
-export function computeResizers(tree: PaneNode, rects: Map<string, Rect>, out: ResizerRect[] = []): ResizerRect[] {
+export function computeResizers<L extends Leaf>(
+  tree: PaneNode<L>,
+  rects: Map<string, Rect>,
+  out: ResizerRect[] = [],
+): ResizerRect[] {
   if (tree.type === "leaf") return out;
 
   const splitRect = rects.get(tree.id)!;
