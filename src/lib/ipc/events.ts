@@ -29,10 +29,6 @@ export type MenuEventId =
   | "menu:zoom-in"
   | "menu:zoom-out"
   | "menu:zoom-reset"
-  | "menu:theme:auto"
-  | "menu:theme:atrium-dark"
-  | "menu:theme:atrium-light"
-  | "menu:theme:atrium-high-contrast"
   | "menu:help:shortcuts"
   | "menu:help:github"
   | "menu:help:report-issue";
