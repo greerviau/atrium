@@ -23,4 +23,9 @@ export const CLASS = {
   blockquote: "cm-blockquote",
   mermaidDiagram: "cm-mermaid-diagram",
   mermaidError: "cm-mermaid-error",
+  horizontalRule: "cm-hr",
+  setextUnderline: "cm-setext-underline",
+  listBullet: "cm-list-bullet",
+  listNumber: "cm-list-number",
+  rawHtml: "cm-raw-html",
 } as const;

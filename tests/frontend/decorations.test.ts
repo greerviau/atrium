@@ -6,7 +6,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 import { buildDecorations, buildMermaidWidgetDecorations } from "../../src/lib/editor/markdown/decorations";
-import { CheckboxWidget, ImageWidget, MermaidWidget } from "../../src/lib/editor/markdown/widgets";
+import { CheckboxWidget, ImageWidget, ListBulletWidget, ListMarkerWidget, MermaidWidget } from "../../src/lib/editor/markdown/widgets";
 import { markdownSourceExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
 
 const markdownCss = readFileSync(resolve(__dirname, "../../src/styles/markdown.css"), "utf-8");
@@ -1435,6 +1435,331 @@ describe("buildDecorations: hasFocus gating (issue #108)", () => {
     const state = stateFor(doc, doc.indexOf("A-->B")); // cursor inside the block — would normally fall back to raw
     const widgets = collectMermaidWidgets(state, false).filter((d) => d.widget instanceof MermaidWidget);
     expect(widgets).toHaveLength(1);
+  });
+});
+
+describe("buildDecorations: horizontal rules", () => {
+  it("hides the marker and gives the line a cm-hr container when the cursor is elsewhere", () => {
+    const doc = "before\n\n---\n\nafter";
+    const state = stateFor(doc, 0); // cursor on the "before" line
+    const decos = collect(state);
+    const hrLine = state.doc.line(3);
+    expect(decos.some((d) => d.class === "cm-hr" && d.from === hrLine.from)).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === hrLine.from && d.to === hrLine.to)).toBe(true);
+  });
+
+  it("reveals the raw marker text when the cursor is on the rule's line", () => {
+    const doc = "before\n\n---\n\nafter";
+    const state = stateFor(doc, doc.indexOf("---"));
+    const decos = collect(state);
+    const hrLine = state.doc.line(3);
+    expect(decos.some((d) => d.class === "cm-hr" && d.from === hrLine.from)).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class && d.from === hrLine.from)).toBe(false);
+    expect(state.doc.toString()).toContain("---");
+  });
+
+  it.each([["***"], ["___"]])("recognizes %s as a horizontal rule too", (marker) => {
+    const doc = `before\n\n${marker}\n\nafter`;
+    const state = stateFor(doc, 0);
+    const decos = collect(state);
+    const hrLine = state.doc.line(3);
+    expect(decos.some((d) => d.class === "cm-hr" && d.from === hrLine.from)).toBe(true);
+  });
+});
+
+describe("buildDecorations: setext headings", () => {
+  it("renders a === underline as an H1, hiding the underline entirely", () => {
+    const doc = "Title\n=====\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const decos = collect(state);
+    const headingDeco = decos.find((d) => d.class === "cm-heading-1");
+    expect(headingDeco).toBeTruthy();
+    expect(state.doc.sliceString(headingDeco!.from, headingDeco!.to)).toBe("Title");
+
+    const underlineLine = state.doc.line(2);
+    expect(decos.some((d) => d.class === "cm-setext-underline" && d.from === underlineLine.from)).toBe(true);
+    expect(
+      decos.some((d) => d.isReplace && !d.class && d.from === underlineLine.from && d.to === underlineLine.to),
+    ).toBe(true);
+  });
+
+  it("renders a --- underline as an H2", () => {
+    const doc = "Title\n-----\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const decos = collect(state);
+    const headingDeco = decos.find((d) => d.class === "cm-heading-2");
+    expect(headingDeco).toBeTruthy();
+    expect(state.doc.sliceString(headingDeco!.from, headingDeco!.to)).toBe("Title");
+  });
+
+  it("keeps both lines fully raw, styled as one unit, when the cursor is on the heading", () => {
+    const doc = "Title\n=====\nafter";
+    const state = stateFor(doc, doc.indexOf("Title"));
+    const decos = collect(state);
+    const headingDeco = decos.find((d) => d.class === "cm-heading-1");
+    expect(headingDeco).toBeTruthy();
+    expect(headingDeco?.from).toBe(0);
+    expect(headingDeco?.to).toBe(doc.indexOf("\nafter"));
+    expect(decos.some((d) => d.isReplace && !d.class)).toBe(false);
+    expect(state.doc.toString()).toContain("Title\n=====");
+  });
+});
+
+describe("buildDecorations: autolinks", () => {
+  it("hides the angle brackets and renders the URL as a working link", () => {
+    const doc = "See <https://example.com/page> for more.\nsecond line";
+    const state = stateFor(doc, doc.length);
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", true);
+    let found: { from: number; to: number; href?: string } | undefined;
+    decorations.between(0, state.doc.length, (from, to, deco) => {
+      if (deco.spec.class === "cm-link") {
+        found = { from, to, href: deco.spec.attributes?.["data-href"] };
+      }
+    });
+    expect(found).toBeTruthy();
+    expect(found?.href).toBe("https://example.com/page");
+    expect(state.doc.sliceString(found!.from, found!.to)).toBe("https://example.com/page");
+
+    const openBracket = doc.indexOf("<");
+    const closeBracket = doc.indexOf(">");
+    const decos = collect(state);
+    expect(
+      decos.some((d) => d.isReplace && !d.class && d.from === openBracket && d.to === openBracket + 1),
+    ).toBe(true);
+    expect(
+      decos.some((d) => d.isReplace && !d.class && d.from === closeBracket && d.to === closeBracket + 1),
+    ).toBe(true);
+  });
+
+  it("fully un-renders when the cursor is on the autolink's line", () => {
+    const doc = "See <https://example.com/page> for more.\nsecond line";
+    const state = stateFor(doc, doc.indexOf("example"));
+    const decos = collect(state);
+    expect(decos.some((d) => d.class === "cm-link")).toBe(false);
+    expect(state.doc.toString()).toContain("<https://example.com/page>");
+  });
+});
+
+describe("buildDecorations: bare URLs (GFM autolinks, #141 gap 3)", () => {
+  function linkRangeFor(doc: string): { from: number; to: number; href?: string } | undefined {
+    const state = stateFor(doc, doc.length);
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", true);
+    let found: { from: number; to: number; href?: string } | undefined;
+    decorations.between(0, state.doc.length, (from, to, deco) => {
+      if (deco.spec.class === "cm-link") {
+        found = { from, to, href: deco.spec.attributes?.["data-href"] };
+      }
+    });
+    return found;
+  }
+
+  it("renders a bare URL directly in a paragraph as a working link", () => {
+    const doc = "See https://example.com/foo for more.\nsecond line";
+    const found = linkRangeFor(doc);
+    expect(found).toBeTruthy();
+    expect(found?.href).toBe("https://example.com/foo");
+  });
+
+  it("renders a bare URL nested inside emphasis as a working link", () => {
+    const doc = "*https://example.com/foo*\nsecond line";
+    const found = linkRangeFor(doc);
+    expect(found).toBeTruthy();
+    expect(found?.href).toBe("https://example.com/foo");
+  });
+
+  it("renders a bare URL inside a table cell as a working link", () => {
+    const doc = "| Name | Site |\n| --- | --- |\n| Alice | https://example.com/foo |\n";
+    const found = linkRangeFor(doc);
+    expect(found).toBeTruthy();
+    expect(found?.href).toBe("https://example.com/foo");
+  });
+
+  it("does not double-decorate a [text](url) link's own URL child", () => {
+    const doc = "[click here](https://example.com/foo)\nsecond line";
+    const state = stateFor(doc, doc.length);
+    const decos = collect(state);
+    const linkMarks = decos.filter((d) => d.class === "cm-link");
+    expect(linkMarks).toHaveLength(1);
+    expect(state.doc.sliceString(linkMarks[0].from, linkMarks[0].to)).toBe("click here");
+  });
+});
+
+describe("buildDecorations: footnote-link suppression (#141 gap 4)", () => {
+  it("renders an unresolved [^1] citation and its own bogus definition line as plain text, not a working link", () => {
+    const doc = "Some text. [^1]\n\ncursor line\n\n[^1]: This is the footnote text.\n";
+    const state = stateFor(doc, doc.indexOf("cursor line"));
+    const decos = collect(state);
+    expect(decos.some((d) => d.class === "cm-link")).toBe(false);
+    expect(state.doc.toString()).toContain("[^1]");
+    expect(state.doc.toString()).toContain("[^1]: This is the footnote text.");
+  });
+
+  it("renders a resolved [^1]: <url> definition's citation as a normal working link", () => {
+    const doc = "Some text. [^1]\n\ncursor line\n\n[^1]: https://example.com/footnote\n";
+    const state = stateFor(doc, doc.indexOf("cursor line"));
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", true);
+    let found: { from: number; to: number; href?: string } | undefined;
+    decorations.between(0, state.doc.length, (from, to, deco) => {
+      if (deco.spec.class === "cm-link") {
+        found = { from, to, href: deco.spec.attributes?.["data-href"] };
+      }
+    });
+    expect(found).toBeTruthy();
+    expect(found?.href).toBe("https://example.com/footnote");
+  });
+
+  it("also decorates a [^1]: <url> definition line's own URL as a bare autolink (composes with gap 3)", () => {
+    const doc = "Some text. [^1]\n\ncursor line\n\n[^1]: https://example.com/footnote\n";
+    const state = stateFor(doc, doc.indexOf("cursor line"));
+    const decos = collect(state);
+    const urlFrom = doc.indexOf("https://example.com/footnote");
+    const urlTo = urlFrom + "https://example.com/footnote".length;
+    expect(decos.some((d) => d.class === "cm-link" && d.from === urlFrom && d.to === urlTo)).toBe(true);
+  });
+
+  it("leaves a non-footnote dangling reference's existing fallback behavior unchanged", () => {
+    const doc = "See [my link][missing] for more.\n\ncursor line\nsecond line";
+    const state = stateFor(doc, doc.indexOf("cursor line"));
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", true);
+    let href: string | undefined;
+    decorations.between(0, state.doc.length, (from, to, deco) => {
+      if (deco.spec.class === "cm-link") {
+        href = deco.spec.attributes?.["data-href"];
+      }
+    });
+    expect(href).toBe("");
+  });
+});
+
+describe("buildDecorations: unordered list markers (#141 gap 5)", () => {
+  function bulletsFor(doc: string, cursor: number): { from: number; to: number }[] {
+    const state = stateFor(doc, cursor);
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", true);
+    const widgets: { from: number; to: number }[] = [];
+    decorations.between(0, state.doc.length, (from, to, deco) => {
+      if (deco.spec.widget instanceof ListBulletWidget) {
+        widgets.push({ from, to });
+      }
+    });
+    return widgets;
+  }
+
+  it("replaces bullet markers with a ListBulletWidget when the cursor is elsewhere", () => {
+    const doc = "- item one\n- item two\n\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const widgets = bulletsFor(doc, doc.indexOf("after"));
+    expect(widgets).toHaveLength(2);
+    expect(state.doc.sliceString(widgets[0].from, widgets[0].to)).toBe("-");
+    expect(state.doc.sliceString(widgets[1].from, widgets[1].to)).toBe("-");
+  });
+
+  it("reveals the raw marker when the cursor is on that item's line, leaving other items decorated", () => {
+    const widgets = bulletsFor("- item one\n- item two\n\nafter", "- item one\n- item two\n\nafter".indexOf("item one"));
+    expect(widgets).toHaveLength(1);
+  });
+
+  it.each([["*"], ["+"]])("recognizes %s as a bullet marker too", (marker) => {
+    const doc = `${marker} item\n\nafter`;
+    const widgets = bulletsFor(doc, doc.indexOf("after"));
+    expect(widgets).toHaveLength(1);
+  });
+});
+
+describe("buildDecorations: ordered list markers (#141 gap 5)", () => {
+  function markersFor(doc: string, cursor: number): { from: number; to: number; widget: ListMarkerWidget }[] {
+    const state = stateFor(doc, cursor);
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", true);
+    const widgets: { from: number; to: number; widget: ListMarkerWidget }[] = [];
+    decorations.between(0, state.doc.length, (from, to, deco) => {
+      if (deco.spec.widget instanceof ListMarkerWidget) {
+        widgets.push({ from, to, widget: deco.spec.widget });
+      }
+    });
+    return widgets.sort((a, b) => a.from - b.from);
+  }
+
+  it("numbers items sequentially from a default start of 1", () => {
+    const doc = "1. one\n2. two\n3. three\n\nafter";
+    const widgets = markersFor(doc, doc.indexOf("after"));
+    expect(widgets.map((w) => w.widget.number)).toEqual([1, 2, 3]);
+    expect(widgets.every((w) => w.widget.delimiter === ".")).toBe(true);
+  });
+
+  it("numbers items from the list's own start value, ignoring each item's own literal digits", () => {
+    const doc = "5. five\n1. six\n1. seven\n\nafter";
+    const widgets = markersFor(doc, doc.indexOf("after"));
+    expect(widgets.map((w) => w.widget.number)).toEqual([5, 6, 7]);
+  });
+
+  it("numbers a nested ordered list independently of its parent", () => {
+    const doc = "1. one\n   1. nested a\n   2. nested b\n2. two\n\nafter";
+    const widgets = markersFor(doc, doc.indexOf("after"));
+    // Document order: outer item 1, nested item 1, nested item 2, outer item 2.
+    expect(widgets.map((w) => w.widget.number)).toEqual([1, 1, 2, 2]);
+  });
+
+  it("reveals the raw marker when the cursor is on that item's line", () => {
+    const doc = "1. one\n2. two\n\nafter";
+    const widgets = markersFor(doc, doc.indexOf("one"));
+    expect(widgets).toHaveLength(1); // only "two" stays decorated
+    expect(widgets[0].widget.number).toBe(2);
+    expect(doc).toContain("1. one");
+  });
+});
+
+describe("buildDecorations: list markers vs task lists (#141 gap 5 interaction)", () => {
+  it("keeps a single CheckboxWidget for an unordered task item, with no bullet layered on top", () => {
+    const doc = "- [ ] todo\n- plain item\n\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", true);
+    const checkboxes: unknown[] = [];
+    const bullets: unknown[] = [];
+    decorations.between(0, state.doc.length, (_f, _t, deco) => {
+      if (deco.spec.widget instanceof CheckboxWidget) checkboxes.push(deco.spec.widget);
+      if (deco.spec.widget instanceof ListBulletWidget) bullets.push(deco.spec.widget);
+    });
+    expect(checkboxes).toHaveLength(1);
+    expect(bullets).toHaveLength(1); // only the plain second item gets a bullet
+  });
+
+  it("keeps a single CheckboxWidget for an ordered task item, with no number layered on top, and still numbers later plain siblings correctly", () => {
+    const doc = "1. [ ] todo\n2. plain\n\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", true);
+    const checkboxes: unknown[] = [];
+    const numbers: ListMarkerWidget[] = [];
+    decorations.between(0, state.doc.length, (_f, _t, deco) => {
+      if (deco.spec.widget instanceof CheckboxWidget) checkboxes.push(deco.spec.widget);
+      if (deco.spec.widget instanceof ListMarkerWidget) numbers.push(deco.spec.widget);
+    });
+    expect(checkboxes).toHaveLength(1);
+    expect(numbers).toHaveLength(1); // only the plain second item gets a rendered number
+    expect(numbers[0].number).toBe(2); // the task item still counted toward the numbering
+  });
+});
+
+describe("buildDecorations: raw HTML (#141 gap 6)", () => {
+  it("styles an HTML block distinctly without hiding, altering, or removing its markup", () => {
+    const doc = "<div>\nhello\n</div>\n\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const decos = collect(state);
+    const htmlDeco = decos.find((d) => d.class === "cm-raw-html");
+    expect(htmlDeco).toBeTruthy();
+    expect(state.doc.sliceString(htmlDeco!.from, htmlDeco!.to)).toContain("<div>");
+    expect(
+      decos.some((d) => d.isReplace && d.from >= htmlDeco!.from && d.to <= htmlDeco!.to),
+    ).toBe(false);
+    expect(state.doc.toString()).toContain("<div>\nhello\n</div>");
+  });
+
+  it("styles inline HTML tags distinctly without hiding, altering, or removing their markup", () => {
+    const doc = "inline <span>hi</span> text\nsecond line";
+    const state = stateFor(doc, doc.length);
+    const decos = collect(state);
+    const htmlDecos = decos.filter((d) => d.class === "cm-raw-html");
+    expect(htmlDecos.length).toBeGreaterThanOrEqual(2); // opening and closing tag
+    expect(decos.some((d) => d.isReplace)).toBe(false);
+    expect(state.doc.toString()).toContain("<span>hi</span>");
   });
 });
 

@@ -4,7 +4,7 @@ import { Decoration } from "@codemirror/view";
 import type { DecorationSet } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 import type { SyntaxNode } from "@lezer/common";
-import { CheckboxWidget, ImageWidget, MermaidWidget } from "./widgets";
+import { CheckboxWidget, ImageWidget, ListBulletWidget, ListMarkerWidget, MermaidWidget } from "./widgets";
 import { headingClass, CLASS } from "./theme";
 import { extractMermaidSource } from "./mermaid";
 
@@ -15,6 +15,20 @@ const HEADING_LEVELS: Record<string, 1 | 2 | 3 | 4 | 5 | 6> = {
   ATXHeading4: 4,
   ATXHeading5: 5,
   ATXHeading6: 6,
+};
+
+/**
+ * CommonMark's other heading form — a text line followed by a line of `===`
+ * (H1) or `---` (H2) — parses into its own node types, distinct from
+ * `HEADING_LEVELS`'s ATX ones. Kept as a separate map (rather than folded
+ * into `HEADING_LEVELS`) because the decoration shape genuinely differs: the
+ * `HeaderMark` here is the underline on the *following* line, not a leading
+ * marker on the same line as the text, so `decorateSetextHeading` needs its
+ * own branch rather than reusing `decorateHeading` verbatim.
+ */
+const SETEXT_HEADING_LEVELS: Record<string, 1 | 2> = {
+  SetextHeading1: 1,
+  SetextHeading2: 2,
 };
 
 /**
@@ -102,6 +116,41 @@ function decorateHeading(
   if (textStart < node.to) {
     out.push(Decoration.mark({ class: headingClass(level) }).range(textStart, node.to));
   }
+}
+
+/**
+ * Decorates a `SetextHeading1`/`SetextHeading2` node: unlike an ATX heading,
+ * the `HeaderMark` is the underline on the line *after* the text, not a
+ * leading marker on the text's own line. With the cursor elsewhere, the
+ * underline's whole physical line is hidden entirely (mirroring the
+ * alignment-delimiter-row treatment in `decorateTable`, via
+ * `CLASS.setextUnderline`'s `display: none`) and the heading class is
+ * applied across the text portion — everything from the node's start up to
+ * the end of the line just before the underline, which also covers the rare
+ * case of a setext heading whose text spans more than one line. With the
+ * cursor on the node (text or underline), both lines stay fully raw, styled
+ * as one unit exactly like `decorateHeading`'s reveal branch.
+ */
+function decorateSetextHeading(
+  state: EditorState,
+  node: SyntaxNode,
+  level: 1 | 2,
+  out: Range<Decoration>[],
+  hasFocus: boolean,
+): void {
+  const mark = node.getChild("HeaderMark");
+  if (!mark) {
+    return;
+  }
+  if (isUnderCursor(state, node.from, node.to, hasFocus)) {
+    out.push(Decoration.mark({ class: headingClass(level) }).range(node.from, node.to));
+    return;
+  }
+  const underlineLine = state.doc.lineAt(mark.from);
+  const textEnd = state.doc.line(underlineLine.number - 1).to;
+  out.push(Decoration.mark({ class: headingClass(level) }).range(node.from, textEnd));
+  out.push(Decoration.line({ class: CLASS.setextUnderline }).range(underlineLine.from));
+  out.push(Decoration.replace({}).range(underlineLine.from, underlineLine.to));
 }
 
 /**
@@ -283,6 +332,19 @@ function resolveReferenceUrl(
   return refs.get(normalizeReferenceLabel(label));
 }
 
+/**
+ * Footnotes aren't part of CommonMark/GFM and `@lezer/markdown` has no
+ * footnote extension, so `[^1]` always parses as an ordinary
+ * shortcut-reference `Link` node. When it doesn't resolve against a real
+ * `LinkReference` definition (the common case — a footnote *definition*
+ * line's body, e.g. `This is the footnote text.`, isn't a valid link
+ * destination, so it never registers one), rendering it as a styled,
+ * clickable-looking link with an empty `data-href` is actively misleading:
+ * it looks exactly like a working link but does nothing on click. A `^`-
+ * prefixed label that *does* resolve (e.g. `[^1]: https://example.com`, a
+ * definition whose body happens to be a valid URL) is not this case and
+ * renders as a normal working link, untouched.
+ */
 function decorateLink(
   state: EditorState,
   node: SyntaxNode,
@@ -297,7 +359,20 @@ function decorateLink(
   const openMark = marks[0];
   const closeTextMark = marks[1];
   const urlNode = node.getChild("URL");
-  const url = urlNode ? state.doc.sliceString(urlNode.from, urlNode.to) : (resolveReferenceUrl(state, node, refs)?.url ?? "");
+
+  let url: string;
+  if (urlNode) {
+    url = state.doc.sliceString(urlNode.from, urlNode.to);
+  } else {
+    const resolved = resolveReferenceUrl(state, node, refs);
+    if (!resolved) {
+      const label = referenceLabelFor(state, node);
+      if (label !== null && label.startsWith("^")) {
+        return;
+      }
+    }
+    url = resolved?.url ?? "";
+  }
 
   out.push(Decoration.replace({}).range(openMark.from, openMark.to));
   out.push(Decoration.replace({}).range(closeTextMark.from, node.to));
@@ -306,6 +381,50 @@ function decorateLink(
       class: CLASS.link,
       attributes: { "data-href": url, "data-document-path": documentPath },
     }).range(openMark.to, closeTextMark.from),
+  );
+}
+
+/**
+ * Decorates `<https://example.com>`-style autolinks: mirrors `decorateLink`'s
+ * shape (hide the `<`/`>` `LinkMark`s, style the URL text between them as a
+ * working link), but always has a real `URL` child of its own — no reference
+ * resolution involved.
+ */
+function decorateAutolink(state: EditorState, node: SyntaxNode, documentPath: string, out: Range<Decoration>[]): void {
+  const marks = node.getChildren("LinkMark");
+  const urlNode = node.getChild("URL");
+  if (marks.length < 2 || !urlNode) {
+    return;
+  }
+  const openMark = marks[0];
+  const closeMark = marks[1];
+  const url = state.doc.sliceString(urlNode.from, urlNode.to);
+  out.push(Decoration.replace({}).range(openMark.from, openMark.to));
+  out.push(Decoration.replace({}).range(closeMark.from, closeMark.to));
+  out.push(
+    Decoration.mark({
+      class: CLASS.link,
+      attributes: { "data-href": url, "data-document-path": documentPath },
+    }).range(openMark.to, closeMark.from),
+  );
+}
+
+/**
+ * Decorates a bare GFM autolink (`https://example.com/path`, no angle
+ * brackets) — a standalone `URL` node with no marks to hide, so the text
+ * itself just gets styled and made clickable in place. The caller is
+ * responsible for excluding a `Link`/`Image`/`Autolink` node's own `URL`
+ * child (see the `URL` switch case in `buildDecorations`), since that child
+ * is visited independently by `tree.iterate` and is already decorated by
+ * its parent.
+ */
+function decorateBareUrl(state: EditorState, node: SyntaxNode, documentPath: string, out: Range<Decoration>[]): void {
+  const url = state.doc.sliceString(node.from, node.to);
+  out.push(
+    Decoration.mark({
+      class: CLASS.link,
+      attributes: { "data-href": url, "data-document-path": documentPath },
+    }).range(node.from, node.to),
   );
 }
 
@@ -401,6 +520,23 @@ function decorateBlockquote(state: EditorState, node: SyntaxNode, out: Range<Dec
   for (let n = startLine; n <= endLine; n++) {
     out.push(Decoration.line({ class: CLASS.blockquote }).range(state.doc.line(n).from));
   }
+}
+
+/**
+ * Decorates a `HorizontalRule` node (`---`, `***`, `___` on their own line):
+ * always a single physical line. The line always gets `CLASS.horizontalRule`
+ * (a `border-top` rule, same container-stays-visible precedent as
+ * `decorateCodeBlock`/`decorateBlockquote`), and the raw dash/asterisk text
+ * is hidden unless the cursor is on that line, in which case it's left
+ * visible so it can be edited.
+ */
+function decorateHorizontalRule(state: EditorState, node: SyntaxNode, out: Range<Decoration>[], hasFocus: boolean): void {
+  const line = state.doc.lineAt(node.from);
+  out.push(Decoration.line({ class: CLASS.horizontalRule }).range(line.from));
+  if (isUnderCursor(state, node.from, node.to, hasFocus)) {
+    return;
+  }
+  out.push(Decoration.replace({}).range(node.from, node.to));
 }
 
 /**
@@ -699,6 +835,101 @@ function decorateTable(state: EditorState, node: SyntaxNode, out: Range<Decorati
   }
 }
 
+/**
+ * Decorates an unordered list item's `ListMark` (`-`/`*`/`+`) with a
+ * `ListBulletWidget` — a fixed CSS-generated bullet, since every marker
+ * renders the same glyph regardless of position, unlike an ordered marker's
+ * computed number. Skips itself (no decoration at all, raw marker left as
+ * is) in two cases: the marker's `ListItem` belongs to an `OrderedList`
+ * (handled entirely by `decorateOrderedList` instead — pushing both would
+ * double-decorate the same range), or the `ListItem` is a task item (its
+ * `Task`/`TaskMarker` child already renders a checkbox via
+ * `decorateTaskMarker`, and layering a bullet in front of it would regress
+ * that already-correct rendering).
+ */
+function decorateListMark(state: EditorState, node: SyntaxNode, out: Range<Decoration>[], hasFocus: boolean): void {
+  const listItem = node.parent;
+  if (!listItem) {
+    return;
+  }
+  if (listItem.parent?.type.name === "OrderedList") {
+    return;
+  }
+  if (listItem.getChild("Task")) {
+    return;
+  }
+  if (isUnderCursor(state, node.from, node.to, hasFocus)) {
+    return;
+  }
+  out.push(Decoration.replace({ widget: new ListBulletWidget() }).range(node.from, node.to));
+}
+
+/**
+ * Decorates every direct `ListItem` child of an `OrderedList` node with its
+ * CommonMark-correct rendered number — `start + index`, not the digits
+ * literally typed on that item's own line, since CommonMark renumbers every
+ * item after the first regardless of what's typed (`1. one` / `1. two` still
+ * renders `1.`/`2.`). `start` and the delimiter character (`.` or `)`) are
+ * parsed once from the *first* item's own `ListMark` text and reused for
+ * every item, since CodeMirror's flat per-line DOM (no real nesting) makes a
+ * pure-CSS `counter-*` approach produce wrong numbers across nesting depths
+ * (see the plan this implements, gap 5, for the two verified reasons a
+ * per-item `ListMarkerWidget` is required instead of CSS).
+ *
+ * `index` advances for every direct `ListItem`, task items included — a task
+ * item still counts toward its own and every later sibling's number, per
+ * CommonMark's numbering rule — but the decoration itself (and the cursor
+ * reveal check) is skipped for a task item or a revealed item, mirroring
+ * `decorateListMark`'s same two skip conditions.
+ */
+function decorateOrderedList(state: EditorState, node: SyntaxNode, out: Range<Decoration>[], hasFocus: boolean): void {
+  const items: SyntaxNode[] = [];
+  for (let child = node.firstChild; child; child = child.nextSibling) {
+    if (child.type.name === "ListItem") {
+      items.push(child);
+    }
+  }
+  if (items.length === 0) {
+    return;
+  }
+  const firstMark = items[0].getChild("ListMark");
+  if (!firstMark) {
+    return;
+  }
+  const match = /^(\d+)([.)])/.exec(state.doc.sliceString(firstMark.from, firstMark.to));
+  if (!match) {
+    return;
+  }
+  const start = parseInt(match[1], 10);
+  const delimiter = match[2];
+
+  items.forEach((item, index) => {
+    const mark = item.getChild("ListMark");
+    if (!mark || item.getChild("Task")) {
+      return;
+    }
+    if (isUnderCursor(state, mark.from, mark.to, hasFocus)) {
+      return;
+    }
+    out.push(
+      Decoration.replace({ widget: new ListMarkerWidget(start + index, delimiter) }).range(mark.from, mark.to),
+    );
+  });
+}
+
+/**
+ * Decorates raw HTML (`HTMLBlock`/`HTMLTag`) with a muted style, matching
+ * the existing inline-code treatment: the tags stay visible as literal
+ * text, just visually marked as "recognized but not rendered" rather than
+ * looking like broken plain prose. Deliberately never hides, alters, or
+ * executes the markup — actually rendering it (`innerHTML` or similar) would
+ * run arbitrary script/markup from whatever file is opened (see the plan
+ * this implements, gap 6, for the settled decision).
+ */
+function decorateRawHtml(node: SyntaxNode, out: Range<Decoration>[]): void {
+  out.push(Decoration.mark({ class: CLASS.rawHtml }).range(node.from, node.to));
+}
+
 function decorateTaskMarker(state: EditorState, node: SyntaxNode, out: Range<Decoration>[]): void {
   // `[ ]` / `[x]`: the status character sits at offset 1 of the 3-char marker.
   const statusFrom = node.from + 1;
@@ -781,8 +1012,29 @@ export function buildDecorations(
           return;
         }
 
+        if (name === "OrderedList") {
+          // Handled as one unit (see decorateOrderedList) so the list's
+          // start value and delimiter are parsed once and every item's
+          // rendered number reflects its position, not its own literal
+          // digits. Bare `return` so descent continues into each item's
+          // inline content — and into any nested list, which is a separate
+          // OrderedList/BulletList node this same walk reaches on its own.
+          decorateOrderedList(state, ref.node, decorations, hasFocus);
+          return;
+        }
+
+        if (name === "HorizontalRule") {
+          decorateHorizontalRule(state, ref.node, decorations, hasFocus);
+          return;
+        }
+
         if (name in HEADING_LEVELS) {
           decorateHeading(state, ref.node, HEADING_LEVELS[name], decorations, hasFocus);
+          return;
+        }
+
+        if (name in SETEXT_HEADING_LEVELS) {
+          decorateSetextHeading(state, ref.node, SETEXT_HEADING_LEVELS[name], decorations, hasFocus);
           return;
         }
 
@@ -805,6 +1057,9 @@ export function buildDecorations(
           case "QuoteMark":
             decorateQuoteMark(state, ref.node, decorations, hasFocus);
             break;
+          case "ListMark":
+            decorateListMark(state, ref.node, decorations, hasFocus);
+            break;
           case "Link":
             if (isRevealTarget(state, ref.node, hasFocus)) {
               break;
@@ -816,6 +1071,32 @@ export function buildDecorations(
               break;
             }
             decorateImage(state, ref.node, documentPath, refs, decorations);
+            break;
+          case "Autolink":
+            if (isRevealTarget(state, ref.node, hasFocus)) {
+              break;
+            }
+            decorateAutolink(state, ref.node, documentPath, decorations);
+            break;
+          case "URL": {
+            // Exclude a Link/Image/Autolink node's own URL child — visited
+            // independently by tree.iterate, and already decorated by its
+            // parent — so only a genuinely bare URL (a standalone node
+            // whose parent is Paragraph, Emphasis, TableCell, etc.) reaches
+            // decorateBareUrl. See decorateBareUrl's doc comment.
+            const parentName = ref.node.parent?.type.name;
+            if (parentName === "Link" || parentName === "Image" || parentName === "Autolink") {
+              break;
+            }
+            if (isRevealTarget(state, ref.node, hasFocus)) {
+              break;
+            }
+            decorateBareUrl(state, ref.node, documentPath, decorations);
+            break;
+          }
+          case "HTMLBlock":
+          case "HTMLTag":
+            decorateRawHtml(ref.node, decorations);
             break;
         }
       },
