@@ -20,19 +20,15 @@ use tauri::{Emitter, Manager};
 /// (Open Folder, Save, New Terminal Tab), `Edit` (standard
 /// Undo/Redo/Cut/Copy/Paste/Select All, plus Find in Files), `View` (Toggle
 /// File Explorer, Toggle Terminal, Split Terminal, Zoom In, Zoom Out, Reset
-/// Zoom), `Window` (standard), `Theme` (Auto plus the three built-in
-/// themes), and `Help` (Keyboard Shortcuts…, Atrium on GitHub, Report an
-/// Issue…). Menu items that need frontend behavior (Settings, Open Folder,
-/// Save, New Terminal Tab, Find in Files, both View toggles, Split Terminal,
-/// all three zoom items, every Theme option, every Help item) emit a
+/// Zoom), `Window` (standard), and `Help` (Keyboard Shortcuts…, Atrium on
+/// GitHub, Report an Issue…). Menu items that need frontend behavior
+/// (Settings, Open Folder, Save, New Terminal Tab, Find in Files, both View
+/// toggles, Split Terminal, all three zoom items, every Help item) emit a
 /// `menu:*` event; `App.svelte` / `MenuBar.ts` listen for these and dispatch
 /// to the active pane, the search overlay, the settings dialog, the
-/// panel-visibility store, the zoom store, the theme store, the keyboard
-/// shortcuts panel, or the external-link opener, since the menu itself has
-/// no notion of "the active editor," "the current theme," "is the panel
-/// shown," or "the current zoom level" (no checkmark on the active Theme
-/// item yet — the menu is built once in Rust, before the WebView and its
-/// `localStorage` selection are available).
+/// panel-visibility store, the zoom store, the keyboard shortcuts panel, or
+/// the external-link opener, since the menu itself has no notion of "the
+/// active editor," "is the panel shown," or "the current zoom level."
 ///
 /// The `Help` submenu's title is the literal string `"Help"`: on macOS,
 /// AppKit recognizes that exact title and automatically adds a menu-search
@@ -162,36 +158,6 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         ],
     )?;
 
-    let theme_menu = Submenu::with_items(
-        app,
-        "Theme",
-        true,
-        &[
-            &MenuItem::with_id(app, "menu:theme:auto", "Auto", true, None::<&str>)?,
-            &MenuItem::with_id(
-                app,
-                "menu:theme:atrium-dark",
-                "Atrium Dark",
-                true,
-                None::<&str>,
-            )?,
-            &MenuItem::with_id(
-                app,
-                "menu:theme:atrium-light",
-                "Atrium Light",
-                true,
-                None::<&str>,
-            )?,
-            &MenuItem::with_id(
-                app,
-                "menu:theme:atrium-high-contrast",
-                "Atrium High Contrast",
-                true,
-                None::<&str>,
-            )?,
-        ],
-    )?;
-
     let shortcuts = MenuItem::with_id(
         app,
         "menu:help:shortcuts",
@@ -233,7 +199,6 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &edit_menu,
             &view_menu,
             &window_menu,
-            &theme_menu,
             &help_menu,
         ],
     )
