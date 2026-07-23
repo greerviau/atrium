@@ -6,7 +6,7 @@ import App from "../../src/App.svelte";
 import { workspace } from "../../src/lib/stores/workspace";
 import { terminalVisible } from "../../src/lib/stores/layout";
 import { tabsState, openFile } from "../../src/lib/stores/tabs";
-import { focusedEditorPaneId } from "../../src/lib/stores/editorPanes";
+import { focusedEditorPaneId, editorPaneTree } from "../../src/lib/stores/editorPanes";
 
 // Covers issue #158's two entry-point scenarios end-to-end against the real
 // App.svelte pane-tree wiring: only FileTree (backed by real fs IPC calls on
@@ -48,6 +48,7 @@ function resetStores(): void {
   terminalVisible.set(false);
   tabsState.set({ tabs: [], activeTabPath: null });
   focusedEditorPaneId.set(null);
+  editorPaneTree.set(null);
 }
 
 describe("App editor split panes (issue #158)", () => {

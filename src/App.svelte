@@ -57,7 +57,7 @@
     type EditorPaneNode,
     type EditorLeafPane,
   } from "./lib/editor/editorPaneTree";
-  import { focusedEditorPaneId } from "./lib/stores/editorPanes";
+  import { focusedEditorPaneId, editorPaneTree } from "./lib/stores/editorPanes";
 
   const initialLayout = loadTerminalLayout();
 
@@ -210,19 +210,21 @@
   // current `savedDoc` at split time (issue #158's PR 1) — cross-view
   // content sync is a follow-up.
   //
-  // `focusedEditorPaneId` (unlike `focusedPaneId` above) is a store, not
-  // local state: `EditorPane.svelte`, several components below this one,
-  // needs to read it directly to decide whether it's the pane allowed to
-  // drive the global cursor-position store for a given path.
-  let editorPaneTree = $state<EditorPaneNode | null>(null);
+  // Both `editorPaneTree` and `focusedEditorPaneId` (unlike `terminalPaneTree`/
+  // `focusedPaneId` above) live in stores (`src/lib/stores/editorPanes.ts`),
+  // not local state: `EditorPane.svelte`, several components below this one,
+  // needs to read the whole tree directly — not just its own pane — to
+  // decide whether it's the one pane, among possibly several showing the
+  // same path, that owns driving the global cursor-position store or
+  // responding to a save request for that path.
 
   // `tabsState.activeTabPath` is kept as a mirror of "the focused editor
   // pane's own active tab" — `MenuBar.ts`'s save handler and `StatusBar.svelte`
   // both just read it, unaware panes exist at all. Every pane-focus or
   // per-leaf active-tab change below calls this afterward to keep it in sync.
   function syncActiveTabToFocusedPane(): void {
-    if (!editorPaneTree || !$focusedEditorPaneId) return;
-    const leaf = findEditorLeaf(editorPaneTree, $focusedEditorPaneId);
+    if (!$editorPaneTree || !$focusedEditorPaneId) return;
+    const leaf = findEditorLeaf($editorPaneTree, $focusedEditorPaneId);
     if (leaf?.activeTabPath) setActiveTab(leaf.activeTabPath);
   }
 
@@ -232,8 +234,8 @@
   }
 
   function setActiveTabInEditorPane(paneId: string, path: string): void {
-    if (!editorPaneTree) return;
-    editorPaneTree = setActiveTabInEditorLeaf(editorPaneTree, paneId, path);
+    if (!$editorPaneTree) return;
+    $editorPaneTree = setActiveTabInEditorLeaf($editorPaneTree, paneId, path);
     $focusedEditorPaneId = paneId;
     syncActiveTabToFocusedPane();
   }
@@ -245,11 +247,11 @@
   // whichever one the user had selected (scenario 2, "split just the active
   // tab") — the original pane's own tab strip is never touched either way.
   function splitEditorPaneAt(paneId: string, direction: SplitDirection): void {
-    if (!editorPaneTree) return;
-    const activePath = findEditorLeaf(editorPaneTree, paneId)?.activeTabPath;
+    if (!$editorPaneTree) return;
+    const activePath = findEditorLeaf($editorPaneTree, paneId)?.activeTabPath;
     if (!activePath) return;
     const newLeaf: EditorLeafPane = { type: "leaf", id: genId("epane"), tabs: [activePath], activeTabPath: activePath };
-    editorPaneTree = splitEditorPane(editorPaneTree, paneId, direction, newLeaf);
+    $editorPaneTree = splitEditorPane($editorPaneTree, paneId, direction, newLeaf);
     $focusedEditorPaneId = newLeaf.id;
     syncActiveTabToFocusedPane();
   }
@@ -269,15 +271,15 @@
   // drops it, whether that happens immediately (a clean tab) or later,
   // asynchronously, via the unsaved-changes dialog.
   function closeTabInEditorPane(paneId: string, path: string): void {
-    if (!editorPaneTree) return;
-    if (pathOpenInOtherEditorLeaf(editorPaneTree, path, paneId)) {
-      const leaf = findEditorLeaf(editorPaneTree, paneId);
+    if (!$editorPaneTree) return;
+    if (pathOpenInOtherEditorLeaf($editorPaneTree, path, paneId)) {
+      const leaf = findEditorLeaf($editorPaneTree, paneId);
       const isPanesLastTab = leaf?.tabs.length === 1;
       const currentFocus = $focusedEditorPaneId;
       const nextFocus =
-        isPanesLastTab && currentFocus === paneId ? nextActiveEditorPane(editorPaneTree, paneId) : currentFocus;
-      editorPaneTree = closeEditorTabInLeaf(editorPaneTree, paneId, path);
-      $focusedEditorPaneId = editorPaneTree ? (nextFocus ?? currentFocus) : null;
+        isPanesLastTab && currentFocus === paneId ? nextActiveEditorPane($editorPaneTree, paneId) : currentFocus;
+      $editorPaneTree = closeEditorTabInLeaf($editorPaneTree, paneId, path);
+      $focusedEditorPaneId = $editorPaneTree ? (nextFocus ?? currentFocus) : null;
       syncActiveTabToFocusedPane();
     } else {
       requestCloseTab(path);
@@ -285,9 +287,9 @@
   }
 
   function resizeEditorPaneSplit(splitId: string, index: number, delta: number, containerSizePx: number): void {
-    if (!editorPaneTree) return;
+    if (!$editorPaneTree) return;
     const minRatio = containerSizePx > 0 ? PANE_MIN_PX / containerSizePx : 0;
-    editorPaneTree = resizeEditorSplit(editorPaneTree, splitId, index, delta, minRatio);
+    $editorPaneTree = resizeEditorSplit($editorPaneTree, splitId, index, delta, minRatio);
   }
 
   // Ensures whatever `tabsState.activeTabPath` currently points at (set by
@@ -306,29 +308,29 @@
   $effect(() => {
     const path = $tabsState.activeTabPath;
     if (!path) return;
-    if (!editorPaneTree) {
+    if (!$editorPaneTree) {
       const paneId = genId("epane");
-      editorPaneTree = { type: "leaf", id: paneId, tabs: [path], activeTabPath: path };
+      $editorPaneTree = { type: "leaf", id: paneId, tabs: [path], activeTabPath: path };
       $focusedEditorPaneId = paneId;
       return;
     }
 
-    const focusedLeaf = $focusedEditorPaneId ? findEditorLeaf(editorPaneTree, $focusedEditorPaneId) : null;
+    const focusedLeaf = $focusedEditorPaneId ? findEditorLeaf($editorPaneTree, $focusedEditorPaneId) : null;
     if (focusedLeaf?.activeTabPath === path) return;
 
     const owningLeaf =
       (focusedLeaf?.tabs.includes(path) ? focusedLeaf : null) ??
-      listEditorLeaves(editorPaneTree).find((leaf) => leaf.tabs.includes(path));
+      listEditorLeaves($editorPaneTree).find((leaf) => leaf.tabs.includes(path));
     if (owningLeaf) {
       if (owningLeaf.activeTabPath !== path) {
-        editorPaneTree = setActiveTabInEditorLeaf(editorPaneTree, owningLeaf.id, path);
+        $editorPaneTree = setActiveTabInEditorLeaf($editorPaneTree, owningLeaf.id, path);
       }
       $focusedEditorPaneId = owningLeaf.id;
       return;
     }
 
-    const targetLeafId = focusedLeaf ? focusedLeaf.id : listEditorLeaves(editorPaneTree)[0].id;
-    editorPaneTree = addEditorTabToLeaf(editorPaneTree, targetLeafId, path);
+    const targetLeafId = focusedLeaf ? focusedLeaf.id : listEditorLeaves($editorPaneTree)[0].id;
+    $editorPaneTree = addEditorTabToLeaf($editorPaneTree, targetLeafId, path);
     $focusedEditorPaneId = targetLeafId;
   });
 
@@ -339,18 +341,18 @@
   // dropping any leaf left with no tabs, and refocus off a leaf that
   // disappeared out from under the current focus.
   $effect(() => {
-    if (!editorPaneTree) return;
+    if (!$editorPaneTree) return;
     const openPaths = new Set($tabsState.tabs.map((t) => t.path));
-    const isStale = listEditorLeaves(editorPaneTree).some((leaf) => leaf.tabs.some((p) => !openPaths.has(p)));
+    const isStale = listEditorLeaves($editorPaneTree).some((leaf) => leaf.tabs.some((p) => !openPaths.has(p)));
     if (!isStale) return;
 
     const currentFocus = $focusedEditorPaneId;
     const focusedLeafFullyStale =
-      currentFocus !== null && (findEditorLeaf(editorPaneTree, currentFocus)?.tabs.every((p) => !openPaths.has(p)) ?? false);
-    const fallbackFocus = focusedLeafFullyStale ? nextActiveEditorPane(editorPaneTree, currentFocus) : currentFocus;
+      currentFocus !== null && (findEditorLeaf($editorPaneTree, currentFocus)?.tabs.every((p) => !openPaths.has(p)) ?? false);
+    const fallbackFocus = focusedLeafFullyStale ? nextActiveEditorPane($editorPaneTree, currentFocus) : currentFocus;
 
-    editorPaneTree = pruneMissingTabs(editorPaneTree, openPaths);
-    $focusedEditorPaneId = editorPaneTree ? (fallbackFocus ?? listEditorLeaves(editorPaneTree)[0]?.id ?? null) : null;
+    $editorPaneTree = pruneMissingTabs($editorPaneTree, openPaths);
+    $focusedEditorPaneId = $editorPaneTree ? (fallbackFocus ?? listEditorLeaves($editorPaneTree)[0]?.id ?? null) : null;
     syncActiveTabToFocusedPane();
   });
 
@@ -489,9 +491,9 @@
     {#each mainSlotOrder as slot (slot)}
       {#if slot === "editor"}
         <div class="editor-area">
-          {#if editorPaneTree}
+          {#if $editorPaneTree}
             <EditorPaneSplit
-              tree={editorPaneTree}
+              tree={$editorPaneTree}
               activePaneId={$focusedEditorPaneId ?? ""}
               onFocus={setFocusedEditorPane}
               onSplit={(paneId, direction) => splitEditorPaneAt(paneId, direction)}

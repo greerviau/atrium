@@ -15,7 +15,8 @@
     notifySaveComplete,
     notifySaveFailed,
   } from "../stores/tabs";
-  import { focusedEditorPaneId } from "../stores/editorPanes";
+  import { focusedEditorPaneId, editorPaneTree } from "../stores/editorPanes";
+  import { saveOwnerLeafId } from "./editorPaneTree";
   import { theme as themeStore } from "../stores/theme";
   import { buildCmTheme, buildHighlightStyle } from "../theme/cmTheme";
   import { baseExtensions } from "./baseExtensions";
@@ -41,6 +42,15 @@
   // `paneId` half, two panes both showing the same path as their active tab
   // (e.g. right after a single-file split) would both think they're active.
   const active = $derived($focusedEditorPaneId === paneId && $tabsState.activeTabPath === filePath);
+
+  // True for exactly one EditorPane instance among possibly several showing
+  // `filePath` — the one that should actually write to disk when a save is
+  // requested for this path. Without this, a `saveTab` request would fire
+  // once per pane showing the path, racing independent, possibly-diverged
+  // buffers (no live content sync between split views yet) against each
+  // other for the disk. See `saveOwnerLeafId`'s own doc comment for which
+  // pane wins and why.
+  const isSaveOwner = $derived($editorPaneTree !== null && saveOwnerLeafId($editorPaneTree, filePath, $focusedEditorPaneId) === paneId);
 
   let container: HTMLDivElement;
   let view: EditorView;
@@ -372,8 +382,11 @@
     clearPendingSelection(filePath);
   });
 
+  // Guarded on `isSaveOwner`, not just `filePath` — otherwise every pane
+  // showing this path would independently save its own buffer in response
+  // to the same request (see `isSaveOwner`'s own comment).
   $effect(() => {
-    if ($saveRequest === filePath) {
+    if ($saveRequest === filePath && isSaveOwner) {
       void save()
         .then(() => {
           saveRequest.set(null);

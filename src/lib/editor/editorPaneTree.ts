@@ -88,3 +88,30 @@ export function pruneMissingTabs(tree: EditorPaneNode, openPaths: ReadonlySet<st
   }
   return result;
 }
+
+/**
+ * Which single leaf's own `EditorPane` instance should respond when `path`
+ * is requested to save (`src/lib/stores/tabs.ts`'s `saveRequest`/`requestSave`),
+ * given that — with no live content sync yet between split views of the same
+ * path (PR1's own scope) — a save request naming just a bare path is
+ * otherwise ambiguous the instant that path is open in more than one leaf:
+ * every instance would independently write its own, possibly-diverged
+ * buffer, racing each other for which write lands last on disk.
+ *
+ * Prefers the focused pane when it's one of the leaves showing `path` (the
+ * common case: `Cmd+S`/`File > Save` always requests a save for
+ * `tabsState.activeTabPath`, which is kept as a mirror of the focused pane's
+ * own active tab, so the focused pane is definitionally among the owners
+ * here). Otherwise falls back to the first leaf (in `listLeaves`'s
+ * deterministic tree order) showing `path` — covering a save requested for a
+ * path that isn't the focused pane's own active tab at all, which happens
+ * when the unsaved-changes dialog's "Save"/"Save All" saves a *different*,
+ * possibly-unfocused dirty tab on its way to closing it. Returns `null` if
+ * `path` isn't open in any leaf (shouldn't happen for a real save request).
+ */
+export function saveOwnerLeafId(tree: EditorPaneNode, path: string, focusedPaneId: string | null): string | null {
+  const owners = listLeaves(tree).filter((leaf) => leaf.tabs.includes(path));
+  if (owners.length === 0) return null;
+  if (focusedPaneId && owners.some((leaf) => leaf.id === focusedPaneId)) return focusedPaneId;
+  return owners[0].id;
+}
