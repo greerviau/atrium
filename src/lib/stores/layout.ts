@@ -158,9 +158,11 @@ export function toggleExplorerVisible(): void {
 }
 
 export function toggleTerminalVisible(): void {
-  terminalVisible.update((visible) => {
-    const next = !visible;
-    persistPanelVisibility({ explorerVisible: get(explorerVisible), terminalVisible: next });
-    return next;
-  });
+  setTerminalVisible(!get(terminalVisible));
+}
+
+/** Sets the terminal dock's shown/hidden state directly and persists it, rather than flipping it. */
+export function setTerminalVisible(visible: boolean): void {
+  terminalVisible.set(visible);
+  persistPanelVisibility({ explorerVisible: get(explorerVisible), terminalVisible: visible });
 }
