@@ -1,3 +1,4 @@
+import { countColumn } from "@codemirror/state";
 import type { EditorState, Range } from "@codemirror/state";
 import { Decoration } from "@codemirror/view";
 import type { DecorationSet } from "@codemirror/view";
@@ -185,26 +186,29 @@ function decorateCodeBlock(
   const closeMark = marks[marks.length - 1];
   // While markers are hidden, the fence/language-tag line(s) they belong to
   // are fully `Decoration.replace`d and render nothing, so they must not
-  // count toward the block's width. `.length` counts characters (a tab is
-  // one character in the doc, same as any other), matching the `ch` unit
-  // it feeds below.
+  // count toward the block's width.
   const openMarkLine = hideMarkers && openMark ? state.doc.lineAt(openMark.from).number : -1;
   const closeMarkLine =
     hideMarkers && closeMark && closeMark !== openMark ? state.doc.lineAt(closeMark.from).number : -1;
 
-  let maxChars = 0;
+  // `countColumn` walks the line the same way CodeMirror's own rendering
+  // does: a tab advances to the next multiple of `state.tabSize` columns
+  // instead of counting as a single character, so a tab-indented line's
+  // `ch`-based width matches where its text actually reaches on screen
+  // (`.cm-content`'s `tab-size` CSS property is set from this same facet).
+  let maxColumns = 0;
   for (let n = startLine; n <= endLine; n++) {
     if (n === openMarkLine || n === closeMarkLine) {
       continue;
     }
-    maxChars = Math.max(maxChars, state.doc.line(n).length);
+    maxColumns = Math.max(maxColumns, countColumn(state.doc.line(n).text, state.tabSize));
   }
 
   for (let n = startLine; n <= endLine; n++) {
     out.push(
       Decoration.line({
         class: CLASS.codeBlock,
-        attributes: { style: `width: ${maxChars}ch` },
+        attributes: { style: `width: ${maxColumns}ch` },
       }).range(state.doc.line(n).from),
     );
   }
