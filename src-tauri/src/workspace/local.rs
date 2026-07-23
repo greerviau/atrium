@@ -11,6 +11,7 @@ use grep_searcher::sinks::UTF8;
 use grep_searcher::{BinaryDetection, SearcherBuilder, SinkError};
 use ignore::WalkState;
 use notify_debouncer_full::{Debouncer, FileIdMap};
+use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher as FuzzyMatcher, Utf32Str};
 use std::future::Future;
 use std::io;
@@ -798,8 +799,20 @@ impl Workspace for LocalWorkspace {
                 }
             } else {
                 let mut matcher = FuzzyMatcher::new(Config::DEFAULT.match_paths());
-                let mut needle_buf = Vec::new();
-                let needle = Utf32Str::new(&query, &mut needle_buf);
+                // `Pattern`, not a single `Matcher::fuzzy_indices` call:
+                // splits the query on whitespace into independent atoms
+                // (`Pattern::indices` requires every atom to match, summing
+                // their scores) so a multi-word query like "readme devloop"
+                // matches `dev-loop/README.md` by fuzzy-matching "readme"
+                // and "devloop" separately against the full path, rather
+                // than requiring the literal (space-containing) query to
+                // appear as one ordered subsequence.
+                let pattern = Pattern::new(
+                    &query,
+                    CaseMatching::Ignore,
+                    Normalization::Smart,
+                    AtomKind::Fuzzy,
+                );
 
                 let mut scored: Vec<FileMatch> = Vec::new();
                 for path in paths {
@@ -807,15 +820,14 @@ impl Workspace for LocalWorkspace {
                     let mut haystack_buf = Vec::new();
                     let haystack = Utf32Str::new(&display, &mut haystack_buf);
                     let mut match_indices = Vec::new();
-                    if let Some(score) = matcher.fuzzy_indices(haystack, needle, &mut match_indices)
+                    if let Some(score) = pattern.indices(haystack, &mut matcher, &mut match_indices)
                     {
-                        // `fuzzy_indices`' own doc: the indices vec is never
-                        // cleared by the matcher (it's designed to let a
-                        // caller merge indices across multiple scans), so
-                        // sorting/deduping here is what guarantees a strictly
-                        // ascending, gap-free sequence for a single scan —
-                        // exactly what the frontend's `highlightSegments`
-                        // coalescing walk assumes.
+                        // Each atom's indices are appended independently and
+                        // not deduplicated against each other (`Pattern::indices`'s
+                        // own doc), so sorting/deduping here is what
+                        // guarantees a strictly ascending, gap-free sequence
+                        // overall — exactly what the frontend's
+                        // `highlightSegments` coalescing walk assumes.
                         match_indices.sort_unstable();
                         match_indices.dedup();
                         scored.push(FileMatch {
@@ -1651,6 +1663,44 @@ mod tests {
             .map(|m| m.display_path.as_str())
             .collect();
         assert_eq!(names, vec!["src/lib/search/SearchOverlay.svelte"]);
+    }
+
+    #[tokio::test]
+    async fn find_files_multi_word_query_matches_each_word_independently() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_dir("github/dev-loop").await.unwrap();
+        ws.create_file("github/dev-loop/README.md").await.unwrap();
+        ws.create_file("unrelated.md").await.unwrap();
+
+        // Each space-separated word is fuzzy-matched independently against
+        // the full path, so "readme" and "devloop" both have to be found as
+        // (possibly gappy) subsequences somewhere in it — neither word
+        // alone needs to be contiguous with the other, unlike the literal
+        // (space-containing) string "readme devloop" which appears nowhere
+        // in the path.
+        let results = ws.find_files("readme devloop").await.unwrap();
+
+        let names: Vec<_> = results
+            .matches
+            .iter()
+            .map(|m| m.display_path.as_str())
+            .collect();
+        assert_eq!(names, vec!["github/dev-loop/README.md"]);
+    }
+
+    #[tokio::test]
+    async fn find_files_multi_word_query_requires_every_word_to_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("README.md").await.unwrap();
+
+        // "readme" matches, but "zzznomatch" doesn't appear anywhere in the
+        // path — a multi-word query is an AND across its words, so the file
+        // must not be returned just because one word matched.
+        let results = ws.find_files("readme zzznomatch").await.unwrap();
+
+        assert!(results.matches.is_empty());
     }
 
     #[tokio::test]
