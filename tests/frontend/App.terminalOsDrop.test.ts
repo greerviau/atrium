@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { tick } from "svelte";
+import { get } from "svelte/store";
 import { render, cleanup } from "@testing-library/svelte";
 import { PhysicalPosition } from "@tauri-apps/api/dpi";
 import App from "../../src/App.svelte";
@@ -8,6 +9,7 @@ import { terminalVisible } from "../../src/lib/stores/layout";
 import * as terminalDropTargets from "../../src/lib/terminal/terminalDropTargets";
 import * as explorerDropTargets from "../../src/lib/explorer/explorerDropTargets";
 import * as importExternalPaths from "../../src/lib/explorer/importExternalPaths";
+import { dragOverTargetDir } from "../../src/lib/explorer/explorerDrag";
 import type { DragDropEvent } from "@tauri-apps/api/webview";
 
 // App's two heaviest leaf components, stubbed the same way
@@ -71,6 +73,7 @@ describe("App OS-level file drop wiring", () => {
     resetStores();
     capturedDragDropHandler = undefined;
     vi.mocked(explorerDropTargets.resolveExplorerDropTargetDir).mockReturnValue(null);
+    dragOverTargetDir.set(null);
   });
 
   afterEach(() => {
@@ -136,5 +139,85 @@ describe("App OS-level file drop wiring", () => {
 
     expect(terminalDropTargets.insertPathsAtScreenPoint).toHaveBeenCalled();
     expect(importExternalPaths.importPathsInto).not.toHaveBeenCalled();
+  });
+
+  it("sets dragOverTargetDir to the resolved directory on 'enter'", async () => {
+    vi.mocked(explorerDropTargets.resolveExplorerDropTargetDir).mockReturnValue("/projects/demo/src");
+    render(App);
+    await tick();
+
+    capturedDragDropHandler?.({ type: "enter", paths: ["/a/b"], position: new PhysicalPosition(100, 100) });
+
+    expect(get(dragOverTargetDir)).toBe("/projects/demo/src");
+  });
+
+  it("sets dragOverTargetDir to the resolved directory on 'over', independent of a prior 'enter'", async () => {
+    vi.mocked(explorerDropTargets.resolveExplorerDropTargetDir).mockReturnValue("/projects/demo/src");
+    render(App);
+    await tick();
+
+    capturedDragDropHandler?.({ type: "over", position: new PhysicalPosition(100, 100) });
+
+    expect(get(dragOverTargetDir)).toBe("/projects/demo/src");
+  });
+
+  it("clears dragOverTargetDir on 'enter'/'over' once the pointer moves off the explorer", async () => {
+    vi.mocked(explorerDropTargets.resolveExplorerDropTargetDir).mockReturnValue("/projects/demo/src");
+    render(App);
+    await tick();
+
+    capturedDragDropHandler?.({ type: "enter", paths: ["/a/b"], position: new PhysicalPosition(100, 100) });
+    expect(get(dragOverTargetDir)).toBe("/projects/demo/src");
+
+    vi.mocked(explorerDropTargets.resolveExplorerDropTargetDir).mockReturnValue(null);
+    capturedDragDropHandler?.({ type: "over", position: new PhysicalPosition(500, 500) });
+
+    expect(get(dragOverTargetDir)).toBeNull();
+  });
+
+  it("clears dragOverTargetDir unconditionally on 'leave'", async () => {
+    vi.mocked(explorerDropTargets.resolveExplorerDropTargetDir).mockReturnValue("/projects/demo/src");
+    render(App);
+    await tick();
+
+    capturedDragDropHandler?.({ type: "enter", paths: ["/a/b"], position: new PhysicalPosition(100, 100) });
+    expect(get(dragOverTargetDir)).toBe("/projects/demo/src");
+
+    capturedDragDropHandler?.({ type: "leave" });
+
+    expect(get(dragOverTargetDir)).toBeNull();
+  });
+
+  it("clears dragOverTargetDir on 'drop' whether it resolved to the explorer or fell back to the terminal", async () => {
+    vi.mocked(explorerDropTargets.resolveExplorerDropTargetDir).mockReturnValue("/projects/demo/src");
+    render(App);
+    await tick();
+
+    capturedDragDropHandler?.({ type: "enter", paths: ["/a/b"], position: new PhysicalPosition(100, 100) });
+    expect(get(dragOverTargetDir)).toBe("/projects/demo/src");
+
+    capturedDragDropHandler?.({ type: "drop", paths: ["/a/b"], position: new PhysicalPosition(100, 100) });
+    expect(get(dragOverTargetDir)).toBeNull();
+
+    vi.mocked(explorerDropTargets.resolveExplorerDropTargetDir).mockReturnValue("/projects/demo/src");
+    capturedDragDropHandler?.({ type: "enter", paths: ["/a/b"], position: new PhysicalPosition(100, 100) });
+    expect(get(dragOverTargetDir)).toBe("/projects/demo/src");
+
+    vi.mocked(explorerDropTargets.resolveExplorerDropTargetDir).mockReturnValue(null);
+    capturedDragDropHandler?.({ type: "drop", paths: ["/a/b"], position: new PhysicalPosition(100, 100) });
+    expect(get(dragOverTargetDir)).toBeNull();
+  });
+
+  it("clears a stale dragOverTargetDir when the window loses focus mid-drag", async () => {
+    vi.mocked(explorerDropTargets.resolveExplorerDropTargetDir).mockReturnValue("/projects/demo/src");
+    render(App);
+    await tick();
+
+    capturedDragDropHandler?.({ type: "enter", paths: ["/a/b"], position: new PhysicalPosition(100, 100) });
+    expect(get(dragOverTargetDir)).toBe("/projects/demo/src");
+
+    window.dispatchEvent(new Event("blur"));
+
+    expect(get(dragOverTargetDir)).toBeNull();
   });
 });
