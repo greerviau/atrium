@@ -1,24 +1,27 @@
 <script lang="ts">
-  import { get } from "svelte/store";
   import type { TreeNode } from "../stores/fileTree";
   import { toggleExpanded } from "../stores/fileTree";
   import { openFile } from "../stores/tabs";
-  import { openContextMenu, movePath } from "./contextMenu";
+  import { openContextMenu } from "./contextMenu";
   import { editingPath, pendingCreate, commitRename, commitCreate } from "./inlineEdit";
-  import { draggingPath, isValidMoveTarget } from "./explorerDrag";
+  import { beginExplorerDrag, dragOverTargetDir } from "./explorerDrag";
   import ExplorerIcon from "./icons/ExplorerIcon.svelte";
   import InlineNameInput from "./InlineNameInput.svelte";
   import NewEntryRow from "./NewEntryRow.svelte";
   import FileTreeNode from "./FileTreeNode.svelte";
-  import { EXPLORER_PATH_DRAG_TYPE } from "../util/dragDropTypes";
 
   let { node, depth = 0 }: { node: TreeNode; depth?: number } = $props();
 
   let isEditing = $derived($editingPath === node.entry.path);
-  let dropTargetActive = $state(false);
+  let dropTargetActive = $derived($dragOverTargetDir === node.entry.path);
   let rowEl: HTMLDivElement;
+  let justDragged = false;
 
   function onClick(): void {
+    if (justDragged) {
+      justDragged = false;
+      return;
+    }
     if (node.entry.isDir) {
       void toggleExpanded(node);
     } else {
@@ -38,41 +41,16 @@
     }
   }
 
-  function onDragStart(event: DragEvent): void {
-    event.dataTransfer?.setData(EXPLORER_PATH_DRAG_TYPE, node.entry.path);
-    if (event.dataTransfer) {
-      event.dataTransfer.effectAllowed = "copyMove";
-    }
-    draggingPath.set(node.entry.path);
-  }
-
-  function onDragEnd(): void {
-    draggingPath.set(null);
-  }
-
-  function onRowDragOver(event: DragEvent): void {
-    if (!node.entry.isDir) return;
-    if (!event.dataTransfer?.types.includes(EXPLORER_PATH_DRAG_TYPE)) return;
-    const source = get(draggingPath);
-    if (!source || !isValidMoveTarget(source, node.entry.path)) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    dropTargetActive = true;
-  }
-
-  function onRowDragLeave(event: DragEvent): void {
-    if (event.relatedTarget instanceof Node && rowEl.contains(event.relatedTarget)) return;
-    dropTargetActive = false;
-  }
-
-  function onRowDrop(event: DragEvent): void {
-    if (!node.entry.isDir) return;
-    dropTargetActive = false;
-    const source = event.dataTransfer?.getData(EXPLORER_PATH_DRAG_TYPE);
-    if (!source || !isValidMoveTarget(source, node.entry.path)) return;
-    event.preventDefault();
-    void movePath(source, node.entry.path).catch((err) => {
-      console.error("atrium: failed to move", source, "into", node.entry.path, err);
+  function onRowPointerDown(event: PointerEvent): void {
+    if (isEditing || event.button !== 0) return;
+    // Cleared here, not just after use — a `click` fires on the nearest
+    // common ancestor of the pointerdown/pointerup targets, not necessarily
+    // on this row (a drag released over a different row never runs *this*
+    // row's onClick), so a stale `true` from an earlier gesture must never
+    // survive into this one.
+    justDragged = false;
+    beginExplorerDrag(rowEl, event, node.entry.path, () => {
+      justDragged = true;
     });
   }
 </script>
@@ -88,12 +66,7 @@
     onclick={isEditing ? undefined : onClick}
     onkeydown={isEditing ? undefined : onKeydown}
     oncontextmenu={isEditing ? undefined : onContextMenu}
-    draggable={!isEditing}
-    ondragstart={isEditing ? undefined : onDragStart}
-    ondragend={onDragEnd}
-    ondragover={onRowDragOver}
-    ondragleave={onRowDragLeave}
-    ondrop={onRowDrop}
+    onpointerdown={isEditing ? undefined : onRowPointerDown}
     role="treeitem"
     aria-selected="false"
     aria-expanded={node.entry.isDir ? node.expanded : undefined}
