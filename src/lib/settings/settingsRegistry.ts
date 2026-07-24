@@ -70,3 +70,15 @@ export function sectionMatchesQuery(section: SettingsSectionDef, normalizedQuery
   const haystack = `${section.title} ${section.keywords.join(" ")}`.toLowerCase();
   return haystack.includes(normalizedQuery);
 }
+
+/**
+ * There is exactly one settings tabpanel whose content swaps with the
+ * selected category, so every tab's `aria-controls` points at this same
+ * fixed id rather than each tab needing its own panel id.
+ */
+export const SETTINGS_TABPANEL_ID = "settings-tabpanel";
+
+/** The `id` a sidebar tab button uses, shared with `SettingsDialog`'s `aria-labelledby`. */
+export function settingsTabId(categoryId: SettingsCategoryId): string {
+  return `settings-tab-${categoryId}`;
+}

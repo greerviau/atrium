@@ -142,6 +142,132 @@ describe("SettingsDialog", () => {
     });
   });
 
+  describe("tab ARIA wiring", () => {
+    it("gives every tab an aria-controls pointing at the tabpanel's id", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const panel = screen.getByRole("tabpanel");
+      for (const tab of screen.getAllByRole("tab")) {
+        expect(tab.getAttribute("aria-controls")).toBe(panel.id);
+      }
+    });
+
+    it("the tabpanel's aria-labelledby matches the selected tab's id, and updates on selection", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const panel = screen.getByRole("tabpanel");
+      expect(panel.getAttribute("aria-labelledby")).toBe(screen.getByRole("tab", { name: "General" }).id);
+
+      await selectCategory("Appearance");
+
+      expect(panel.getAttribute("aria-labelledby")).toBe(screen.getByRole("tab", { name: "Appearance" }).id);
+    });
+
+    it("keeps the tabpanel named via aria-label when no tabs render (no-match search state)", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      const preSearchLabel = screen.getByRole("tabpanel").getAttribute("aria-label");
+
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "nonexistent-setting" } });
+      await tick();
+
+      expect(screen.queryAllByRole("tab")).toHaveLength(0);
+      expect(preSearchLabel).toBeTruthy();
+      expect(screen.getByRole("tabpanel").getAttribute("aria-label")).toBe(preSearchLabel);
+    });
+  });
+
+  describe("keyboard navigation (sidebar tablist)", () => {
+    it("gives the selected tab tabindex 0 and every other tab tabindex -1", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const tabs = screen.getAllByRole("tab");
+      expect(tabs.map((t) => [t.textContent, t.getAttribute("tabindex")])).toEqual([
+        ["General", "0"],
+        ["Appearance", "-1"],
+        ["Editor", "-1"],
+        ["Terminal", "-1"],
+      ]);
+    });
+
+    it("ArrowRight/ArrowDown selects the next category and moves DOM focus to it", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const general = screen.getByRole("tab", { name: "General" });
+      await fireEvent.keyDown(general, { key: "ArrowRight" });
+      await flush();
+
+      const appearance = screen.getByRole("tab", { name: "Appearance" });
+      expect(appearance.getAttribute("aria-selected")).toBe("true");
+      expect(appearance.getAttribute("tabindex")).toBe("0");
+      expect(general.getAttribute("aria-selected")).toBe("false");
+      expect(general.getAttribute("tabindex")).toBe("-1");
+      expect(document.activeElement).toBe(appearance);
+    });
+
+    it("ArrowRight/ArrowDown wraps from the last category back to the first", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Terminal");
+
+      await fireEvent.keyDown(screen.getByRole("tab", { name: "Terminal" }), { key: "ArrowDown" });
+      await flush();
+
+      const general = screen.getByRole("tab", { name: "General" });
+      expect(general.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(general);
+    });
+
+    it("ArrowLeft/ArrowUp selects the previous category, wrapping from the first back to the last", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      await fireEvent.keyDown(screen.getByRole("tab", { name: "General" }), { key: "ArrowUp" });
+      await flush();
+
+      const terminal = screen.getByRole("tab", { name: "Terminal" });
+      expect(terminal.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(terminal);
+
+      await fireEvent.keyDown(terminal, { key: "ArrowLeft" });
+      await flush();
+
+      const editor = screen.getByRole("tab", { name: "Editor" });
+      expect(editor.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(editor);
+    });
+
+    it("Home jumps to the first category and End jumps to the last", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      await fireEvent.keyDown(screen.getByRole("tab", { name: "Editor" }), { key: "End" });
+      await flush();
+      const terminal = screen.getByRole("tab", { name: "Terminal" });
+      expect(terminal.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(terminal);
+
+      await fireEvent.keyDown(terminal, { key: "Home" });
+      await flush();
+      const general = screen.getByRole("tab", { name: "General" });
+      expect(general.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(general);
+    });
+  });
+
   describe("collapsible sections", () => {
     it("start expanded, and the chevron toggles the body's visibility and aria-expanded", async () => {
       settingsOverlay.set({ open: true });
@@ -195,7 +321,7 @@ describe("SettingsDialog", () => {
       expect(screen.getByText("Dock Position")).toBeTruthy();
     });
 
-    it("auto-expands a matched section that was collapsed", async () => {
+    it("auto-expands a matched section that was collapsed, and a click during search can collapse it again", async () => {
       settingsOverlay.set({ open: true });
       const { container } = render(SettingsDialog);
       await tick();
@@ -211,6 +337,54 @@ describe("SettingsDialog", () => {
 
       expect(header.getAttribute("aria-expanded")).toBe("true");
       expect(container.querySelector(".dropdown-trigger")).not.toBeNull();
+
+      // Clicking the auto-expanded header while searching used to be a
+      // no-op; it now visibly collapses the section.
+      await fireEvent.click(header);
+      await tick();
+      expect(header.getAttribute("aria-expanded")).toBe("false");
+      expect(container.querySelector(".dropdown-trigger")).toBeNull();
+
+      // Clicking again re-expands it: a genuine toggle, not a one-shot
+      // escape from the forced-expanded state.
+      await fireEvent.click(header);
+      await tick();
+      expect(header.getAttribute("aria-expanded")).toBe("true");
+      expect(container.querySelector(".dropdown-trigger")).not.toBeNull();
+
+      // Clearing the query restores the pre-search state (manually
+      // collapsed), proving the search override never leaked into the
+      // persisted `expandedSections`.
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "" } });
+      await tick();
+      expect(header.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("resets search overrides once the query clears, so a later search auto-expands again", async () => {
+      settingsOverlay.set({ open: true });
+      const { container } = render(SettingsDialog);
+      await tick();
+      await selectCategory("Appearance");
+
+      const searchInput = screen.getByLabelText("Search settings");
+      await fireEvent.input(searchInput, { target: { value: "theme" } });
+      await tick();
+      const header = container.querySelector(".settings-section-header") as HTMLElement;
+      expect(header.getAttribute("aria-expanded")).toBe("true");
+
+      await fireEvent.click(header);
+      await tick();
+      expect(header.getAttribute("aria-expanded")).toBe("false");
+
+      await fireEvent.input(searchInput, { target: { value: "" } });
+      await tick();
+
+      // A different query that also matches the Theme section (via the
+      // "color" keyword synonym rather than "theme" itself).
+      await fireEvent.input(searchInput, { target: { value: "color" } });
+      await tick();
+
+      expect(header.getAttribute("aria-expanded")).toBe("true");
     });
 
     it("shows an empty state when nothing matches", async () => {

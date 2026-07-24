@@ -14,7 +14,9 @@
   import {
     SETTINGS_CATEGORIES,
     SETTINGS_SECTIONS,
+    SETTINGS_TABPANEL_ID,
     sectionMatchesQuery,
+    settingsTabId,
     type SettingsCategoryId,
   } from "../settings/settingsRegistry";
 
@@ -46,6 +48,10 @@
   let selectedCategory = $state<SettingsCategoryId>(DEFAULT_CATEGORY);
   let searchQuery = $state("");
   let expandedSections = $state<Record<string, boolean>>({});
+  // Overrides are scoped to a single active search: once the query is
+  // cleared, the next search starts fresh rather than remembering
+  // collapse/expand choices from an unrelated earlier query.
+  let searchOverrides = $state<Record<string, boolean>>({});
 
   function describeError(err: unknown): string {
     if (isAppError(err)) return err.message;
@@ -105,21 +111,33 @@
     if (firstMatch) selectedCategory = firstMatch.id;
   });
 
+  $effect(() => {
+    if (!searching) searchOverrides = {};
+  });
+
   function isSectionVisible(id: string): boolean {
     return !searching || matchingSectionIds.has(id);
   }
 
   // A matched section that's collapsed auto-expands while a query is
   // active, so the match is actually visible rather than hidden behind its
-  // own disclosure. This only affects the *displayed* state, not the
-  // stored `expandedSections` value, so clearing the query restores
-  // whatever the user had explicitly set.
+  // own disclosure. A manual toggle taken while searching is recorded in
+  // `searchOverrides` and wins over the auto-expand, so the click is no
+  // longer a no-op; `expandedSections` itself stays untouched while
+  // searching, so clearing the query restores whatever the user had
+  // explicitly set before the search started.
   function isSectionExpanded(id: string): boolean {
-    return (expandedSections[id] ?? true) || (searching && matchingSectionIds.has(id));
+    if (searching && id in searchOverrides) return searchOverrides[id];
+    if (searching && matchingSectionIds.has(id)) return true;
+    return expandedSections[id] ?? true;
   }
 
   function toggleSection(id: string): void {
-    expandedSections[id] = !(expandedSections[id] ?? true);
+    if (searching) {
+      searchOverrides[id] = !isSectionExpanded(id);
+    } else {
+      expandedSections[id] = !isSectionExpanded(id);
+    }
   }
 
   async function clearRecentProjects(): Promise<void> {
@@ -187,7 +205,13 @@
           onSelect={(id) => (selectedCategory = id)}
         />
 
-        <div class="settings-content" role="tabpanel" aria-label={currentCategoryLabel}>
+        <div
+          class="settings-content"
+          id={SETTINGS_TABPANEL_ID}
+          role="tabpanel"
+          aria-labelledby={settingsTabId(selectedCategory)}
+          aria-label={currentCategoryLabel}
+        >
           {#if selectedCategory === "general" && isSectionVisible("recent-projects")}
             <SettingsSection
               title="Recent Projects"
