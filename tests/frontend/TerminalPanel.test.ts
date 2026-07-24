@@ -47,6 +47,15 @@ describe("TerminalPanel", () => {
     expect(slots[1].classList.contains("hidden")).toBe(true);
   });
 
+  it("renders a leading terminal icon in every tab", () => {
+    const { container } = render(TerminalPanel, { tree: TWO_TABS, ...baseProps });
+
+    const tabs = container.querySelectorAll('.tab-list .tab[role="tab"]');
+    for (const tab of tabs) {
+      expect(tab.querySelector(".terminal-icon")).not.toBeNull();
+    }
+  });
+
   it("clicking a tab switches which TerminalPane is visible", async () => {
     const onSetActiveTab = vi.fn();
     const { container } = render(TerminalPanel, { tree: TWO_TABS, ...baseProps, onSetActiveTab });
