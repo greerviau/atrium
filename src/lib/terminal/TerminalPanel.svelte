@@ -2,6 +2,7 @@
   import type { LeafPane, SplitDirection } from "./paneTree";
   import TerminalPane from "./TerminalPane.svelte";
   import SplitMenu from "./SplitMenu.svelte";
+  import TerminalIcon from "./icons/TerminalIcon.svelte";
 
   /**
    * One leaf's full top bar (tab strip + controls) and its stack of
@@ -50,6 +51,7 @@
           tabindex="0"
           aria-selected={session.id === tree.activeTabId}
         >
+          <TerminalIcon />
           <span class="tab-name" title={session.title}>{session.title}</span>
           <button
             class="tab-close"
