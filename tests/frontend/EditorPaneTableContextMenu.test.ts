@@ -310,6 +310,10 @@ describe("EditorPane: table context menu — triggered from a handle (phase 3)",
 
     const handles = container.querySelectorAll(".cm-table-row-handle");
     await fireEvent.contextMenu(handles[0]); // header
+    // Duplicate Row is the one command enabled on the header (per the
+    // locked-in header decision); Delete Row stays disabled there.
+    expect(menuItem(container, "Duplicate Row").disabled).toBe(false);
+    expect(menuItem(container, "Delete Row").disabled).toBe(true);
     await fireEvent.click(menuItem(container, "Duplicate Row"));
 
     expect(view.state.doc.toString()).toBe(

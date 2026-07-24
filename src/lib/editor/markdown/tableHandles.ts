@@ -132,16 +132,19 @@ function createHandleGlyph(): HTMLElement {
 
 /**
  * Wires the pointerenter/pointerleave/click/contextmenu quartet every handle
- * shares: hovering sets (and leaving clears) `tableHoverField`; clicking
- * pins `target` into `tableSelectionField` instead, so it stays highlighted
- * regardless of where the pointer travels afterward (see
- * `tableSelectionField`'s own doc comment for why selection is kept
- * separate from — not merged into — hover). Also stamps `target`'s identity
- * onto the element as `data-table-handle-*` attributes and lets a
- * right-click bubble normally (only `preventDefault`, never
- * `stopPropagation`) — `EditorPane.svelte`'s document-level context-menu
- * handler reads those attributes via `tableContextFromHandleElement` before
- * falling back to its usual coordinate-based resolution.
+ * shares: hovering sets (and leaving clears) `tableHoverField`; clicking, or
+ * right-clicking to open the context menu, both pin `target` into
+ * `tableSelectionField` instead, so it stays highlighted regardless of
+ * where the pointer travels afterward (see `tableSelectionField`'s own doc
+ * comment for why selection is kept separate from — not merged into —
+ * hover; the context menu is exactly the case that comment describes, since
+ * the pointer moves off the handle and onto the menu the moment it opens).
+ * Also stamps `target`'s identity onto the element as `data-table-handle-*`
+ * attributes and lets a right-click bubble normally (only `preventDefault`,
+ * never `stopPropagation`) — `EditorPane.svelte`'s document-level
+ * context-menu handler reads those attributes via
+ * `tableContextFromHandleElement` before falling back to its usual
+ * coordinate-based resolution.
  */
 function attachHandleInteractions(el: HTMLElement, view: EditorView, target: TableHoverState): void {
   el.dataset.tableHandleTable = String(target.table);
@@ -163,6 +166,7 @@ function attachHandleInteractions(el: HTMLElement, view: EditorView, target: Tab
   });
   el.addEventListener("contextmenu", (event) => {
     event.preventDefault();
+    view.dispatch({ effects: setTableSelection.of(target) });
   });
 }
 
