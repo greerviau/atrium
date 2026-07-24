@@ -5,8 +5,8 @@ import { EditorState, EditorSelection } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
-import { buildDecorations, buildMermaidWidgetDecorations } from "../../src/lib/editor/markdown/decorations";
-import { CheckboxWidget, ImageWidget, ListBulletWidget, ListMarkerWidget, MermaidWidget } from "../../src/lib/editor/markdown/widgets";
+import { buildDecorations, buildMermaidWidgetDecorations, buildTableWrapRanges } from "../../src/lib/editor/markdown/decorations";
+import { CheckboxWidget, EmptyCellWidget, ImageWidget, ListBulletWidget, ListMarkerWidget, MermaidWidget } from "../../src/lib/editor/markdown/widgets";
 import { markdownSourceExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
 
 const markdownCss = readFileSync(resolve(__dirname, "../../src/styles/markdown.css"), "utf-8");
@@ -588,8 +588,10 @@ describe("buildDecorations: tables", () => {
   it("doesn't break gap coverage on a zero-width empty cell (adjacent pipes, no space at all)", () => {
     // The synthesized slot for this cell has zero width (nothing sits
     // between its two bordering pipes), so — unlike a whitespace-padded
-    // empty cell — it gets no cm-table-cell mark of its own (a zero-length
-    // mark decoration isn't meaningful); this only asserts that the two
+    // empty cell — it gets no cm-table-cell *mark* of its own (a zero-length
+    // mark decoration isn't meaningful); it gets an EmptyCellWidget instead
+    // (see the test below), which carries no top-level `class` spec key, so
+    // it's invisible to this filter — this only asserts that the two
     // adjacent gaps still tile the row with no stray undecorated text.
     const doc = "| A | B |\n| --- | --- |\n| x||\n";
     const state = stateFor(doc, doc.length);
@@ -606,6 +608,34 @@ describe("buildDecorations: tables", () => {
       pos = d.to;
     }
     expect(pos).toBe(bodyLine.to);
+  });
+
+  // Regression coverage for round 2's must-fix 2: a zero-width slot can't
+  // carry a `Decoration.mark` (@codemirror/view throws on a zero-width mark),
+  // so it needs a real, classed `.cm-table-cell` box some other way — an
+  // `EmptyCellWidget` placeholder, positioned exactly at the slot.
+  it("gives a zero-width empty cell an EmptyCellWidget placeholder carrying the right column's classes", () => {
+    const doc = "| A | B | C |\n| --- | --- | ---: |\n| x |||\n";
+    const state = stateFor(doc, doc.length);
+    const decos = collect(state);
+    const zeroWidthPos = doc.indexOf("||") + 1;
+    const placeholder = decos.find((d) => d.from === zeroWidthPos && d.to === zeroWidthPos && d.widget);
+    expect(placeholder).toBeTruthy();
+    const widget = placeholder!.widget as EmptyCellWidget;
+    expect(widget.eq(new EmptyCellWidget("cm-table-cell"))).toBe(true);
+  });
+
+  it("still gives a single-character cell a real mark, not a widget placeholder", () => {
+    const doc = "| A | B |\n| --- | --- |\n| x | y |\n";
+    const state = stateFor(doc, doc.length);
+    const decos = collect(state);
+    const headerLine = state.doc.line(1);
+    const cellA = decos.find(
+      (d) => d.class?.split(" ").includes("cm-table-header-cell") && d.from >= headerLine.from && d.to <= headerLine.to,
+    );
+    expect(cellA).toBeTruthy();
+    expect(state.doc.sliceString(cellA!.from, cellA!.to)).toBe("A");
+    expect(cellA!.widget).toBeUndefined();
   });
 
   it("fully consumes the inter-cell gap, leaving no stray text node between cells", () => {
@@ -1992,5 +2022,83 @@ describe("markdown.css: prose line wrap width (issue #147)", () => {
     expect(body).toMatch(/position:\s*sticky/);
     expect(body).toMatch(/left:\s*0/);
     expect(body).toMatch(/width:\s*100cqw/);
+  });
+});
+
+describe("markdown.css: table wrap/border redesign (issue #201 phase 1)", () => {
+  // `.cm-table-box` (the `EditorView.blockWrappers` wrapper `buildTableWrapRanges`
+  // provides) is what carries the table's own width cap now — `max-width`,
+  // never a bare `width`, since `width` is a *preferred* width CSS's auto
+  // table-layout algorithm stretches every column out to fill, padding even
+  // a short table out to the full pane.
+  it(".cm-table-box caps at the pane's width via max-width, never a bare width, and anchors phase 2's overlays", () => {
+    const body = ruleBodyFor(".cm-table-box");
+    expect(body).toMatch(/display:\s*table/);
+    expect(body).toMatch(/max-width:\s*100cqw/);
+    expect(body).not.toMatch(/(?:^|[^-])width:/);
+    expect(body).toMatch(/position:\s*relative/);
+    expect(body).toMatch(/border-top/);
+    expect(body).toMatch(/border-left/);
+  });
+
+  // Round 1's must-fix 2: `white-space: normal` would collapse internal
+  // whitespace runs and desync CodeMirror's position mapping; the fix is to
+  // delete the override entirely and let `.cm-content.cm-lineWrapping`'s own
+  // `break-spaces` (which preserves whitespace *and* wraps) take over.
+  it(".cm-table-row no longer forces cell content onto a single unwrapped line", () => {
+    expect(ruleBodyFor(".cm-table-row")).not.toMatch(/white-space/);
+  });
+
+  it(".cm-table-cell keeps a defensive (currently redundant) overflow-wrap declaration", () => {
+    expect(ruleBodyFor(".cm-table-cell")).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+});
+
+describe("buildTableWrapRanges", () => {
+  function tableNodeRanges(state: EditorState): { from: number; to: number }[] {
+    const out: { from: number; to: number }[] = [];
+    syntaxTree(state).iterate({
+      enter(ref) {
+        if (ref.name === "Table") {
+          out.push({ from: ref.from, to: ref.to });
+          return false;
+        }
+      },
+    });
+    return out;
+  }
+
+  function collectWraps(state: EditorState): { from: number; to: number }[] {
+    const out: { from: number; to: number }[] = [];
+    buildTableWrapRanges(state).between(0, state.doc.length, (from, to) => {
+      out.push({ from, to });
+    });
+    return out;
+  }
+
+  it("spans a table's own full Table-node range, header row through the last row", () => {
+    const doc =
+      "| Name | Role |\n| --- | --- |\n| Alice | Engineer |\n| Bob | Designer |\n| Carol | Manager |\n| Dan | Analyst |\n";
+    const state = stateFor(doc, doc.length);
+    expect(collectWraps(state)).toEqual(tableNodeRanges(state));
+  });
+
+  it("gives two tables in one document two independent wrappers", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\n\nSome text.\n\n| C |\n| --- |\n| 3 |\n";
+    const state = stateFor(doc, doc.length);
+    const wraps = collectWraps(state);
+    expect(wraps).toEqual(tableNodeRanges(state));
+    expect(wraps).toHaveLength(2);
+  });
+
+  it("wraps a table nested inside a blockquote", () => {
+    const doc = "> | A | B |\n> | --- | --- |\n> | 1 | 2 |\n";
+    const state = stateFor(doc, doc.length);
+    expect(collectWraps(state)).toEqual(tableNodeRanges(state));
+  });
+
+  it("produces no wrapper at all for a document with no table", () => {
+    const state = stateFor("plain text, no table here\n", 0);
+    expect(collectWraps(state)).toEqual([]);
   });
 });

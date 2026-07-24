@@ -1,10 +1,10 @@
-import type { Extension, Transaction } from "@codemirror/state";
+import type { Extension, RangeSet, Transaction } from "@codemirror/state";
 import { Prec, StateEffect, StateField } from "@codemirror/state";
-import { Decoration, EditorView, ViewPlugin, ViewUpdate, keymap, lineNumbers, type DecorationSet } from "@codemirror/view";
+import { BlockWrapper, Decoration, EditorView, ViewPlugin, ViewUpdate, keymap, lineNumbers, type DecorationSet } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { syntaxTree } from "@codemirror/language";
-import { buildDecorations, buildMermaidWidgetDecorations, buildTableGapAtomicRanges } from "./decorations";
+import { buildDecorations, buildMermaidWidgetDecorations, buildTableGapAtomicRanges, buildTableWrapRanges } from "./decorations";
 import { handleLinkClick } from "./widgets";
 import { tableNavigationKeymap } from "./tableEdit";
 
@@ -58,14 +58,23 @@ const focusTrackingHandlers = EditorView.domEventHandlers({
  * to avoid the layout shift a revealed gap causes — see its docstring), so
  * cursor motion jumps over a hidden gap in one step instead of being able to
  * land inside it.
+ *
+ * And provides `EditorView.blockWrappers` with one `.cm-table-box` per
+ * `Table` node (`buildTableWrapRanges`), recomputed only on a doc change or
+ * syntax-tree-identity change — unlike `decorations`, this never depends on
+ * the viewport, selection, or focus, since a `BlockWrapper`'s range is a
+ * structural property of the table itself, not of what's currently
+ * revealed.
  */
 function livePreviewPlugin(documentPath: string) {
   const plugin = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
+      tableWraps: RangeSet<BlockWrapper>;
 
       constructor(view: EditorView) {
         this.decorations = buildDecorations(view.state, view.visibleRanges, documentPath, view.state.field(editorFocusField));
+        this.tableWraps = buildTableWrapRanges(view.state);
       }
 
       update(update: ViewUpdate) {
@@ -84,6 +93,9 @@ function livePreviewPlugin(documentPath: string) {
             update.state.field(editorFocusField),
           );
         }
+        if (update.docChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
+          this.tableWraps = buildTableWrapRanges(update.state);
+        }
       }
     },
     {
@@ -96,6 +108,10 @@ function livePreviewPlugin(documentPath: string) {
     EditorView.atomicRanges.of((view) => {
       const value = view.plugin(plugin);
       return value ? buildTableGapAtomicRanges(view.state, value.decorations) : Decoration.none;
+    }),
+    EditorView.blockWrappers.of((view) => {
+      const value = view.plugin(plugin);
+      return value ? value.tableWraps : BlockWrapper.set([]);
     }),
   ];
 }

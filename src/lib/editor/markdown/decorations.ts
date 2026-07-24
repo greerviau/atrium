@@ -1,10 +1,10 @@
 import { countColumn } from "@codemirror/state";
-import type { EditorState, Range } from "@codemirror/state";
-import { Decoration } from "@codemirror/view";
+import type { EditorState, Range, RangeSet } from "@codemirror/state";
+import { BlockWrapper, Decoration } from "@codemirror/view";
 import type { DecorationSet } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 import type { SyntaxNode } from "@lezer/common";
-import { CheckboxWidget, ImageWidget, ListBulletWidget, ListMarkerWidget, MermaidWidget } from "./widgets";
+import { CheckboxWidget, EmptyCellWidget, ImageWidget, ListBulletWidget, ListMarkerWidget, MermaidWidget } from "./widgets";
 import { headingClass, CLASS } from "./theme";
 import { extractMermaidSource } from "./mermaid";
 
@@ -738,10 +738,14 @@ export function collectCellSlots(node: SyntaxNode): CellSlot[] {
  * physical line). The row gets an always-visible `Decoration.line`
  * container (`display: table-row`, matching the code-block precedent), and
  * every column — including an empty one, via the synthesized slot
- * `collectCellSlots` produces for it — always keeps its `cm-table-cell`/
- * alignment `Decoration.mark` regardless of cursor position, so a cell's
+ * `collectCellSlots` produces for it — always gets a real, classed
+ * `.cm-table-cell` box regardless of cursor position, so a cell's
  * `display: table-cell` styling never drops out from under it and every
- * column occupies a real slot in the row.
+ * column occupies a real slot in the row. A slot with real content
+ * (`slot.to > slot.from`) gets an ordinary `Decoration.mark`; a genuinely
+ * empty slot (two adjacent pipes with nothing between them) gets an
+ * `EmptyCellWidget` instead, since `@codemirror/view` rejects a zero-width
+ * `Decoration.mark` outright.
  *
  * The gap between columns (each `|` plus its surrounding alignment
  * whitespace) is always replaced away — never cursor-gated. Revealing it
@@ -788,17 +792,19 @@ function decorateTableRow(
     if (slot.from > prevEnd) {
       out.push(Decoration.replace({ tableGap: true }).range(prevEnd, slot.from));
     }
+    const classes: string[] = [CLASS.tableCell];
+    if (isHeader) {
+      classes.push(CLASS.tableHeaderCell);
+    }
+    if (alignment[column] === "center") {
+      classes.push(CLASS.tableAlignCenter);
+    } else if (alignment[column] === "right") {
+      classes.push(CLASS.tableAlignRight);
+    }
     if (slot.to > slot.from) {
-      const classes: string[] = [CLASS.tableCell];
-      if (isHeader) {
-        classes.push(CLASS.tableHeaderCell);
-      }
-      if (alignment[column] === "center") {
-        classes.push(CLASS.tableAlignCenter);
-      } else if (alignment[column] === "right") {
-        classes.push(CLASS.tableAlignRight);
-      }
       out.push(Decoration.mark({ class: classes.join(" ") }).range(slot.from, slot.to));
+    } else {
+      out.push(Decoration.widget({ widget: new EmptyCellWidget(classes.join(" ")), side: 0 }).range(slot.from));
     }
     prevEnd = slot.to;
     column++;
@@ -836,6 +842,42 @@ function decorateTable(state: EditorState, node: SyntaxNode, out: Range<Decorati
     }
     child = child.nextSibling;
   }
+}
+
+/**
+ * Builds one `BlockWrapper` per `Table` node in the whole document — a real
+ * `<div class="cm-table-box">` DOM parent of that table's own line rows
+ * (`EditorView.blockWrappers`, added in `@codemirror/view` 6.39.0). This is
+ * the anchor both the width cap (`max-width: 100cqw` in `markdown.css`) and
+ * everything phase 2 draws outside the table's own border rely on.
+ *
+ * Built from each `Table` node's own `from`/`to` — not `view.visibleRanges`
+ * like `buildDecorations` — since a `BlockWrapper`'s range describes DOM
+ * structure that should exist for the table as a whole, not just its
+ * currently-rendered slice; the practical effect is that a table's rendered
+ * column widths still only reflect whichever of its rows CodeMirror has
+ * actually built `.cm-line` elements for (pre-existing behavior of the
+ * underlying `display: table` auto-layout, not something this changes).
+ *
+ * Walks the whole document, pruned to `BLOCK_CONTAINER_NODES` the same way
+ * `buildMermaidWidgetDecorations`/`collectLinkReferences` are, so a table
+ * nested inside a blockquote or list still gets a correctly-anchored
+ * wrapper without descending into unrelated inline content.
+ */
+export function buildTableWrapRanges(state: EditorState): RangeSet<BlockWrapper> {
+  const wrappers: Range<BlockWrapper>[] = [];
+  syntaxTree(state).iterate({
+    enter(ref) {
+      if (ref.name === "Table") {
+        wrappers.push(BlockWrapper.create({ tagName: "div", attributes: { class: CLASS.tableBox } }).range(ref.from, ref.to));
+        return false;
+      }
+      if (ref.name !== "Document" && !BLOCK_CONTAINER_NODES.has(ref.name)) {
+        return false;
+      }
+    },
+  });
+  return BlockWrapper.set(wrappers, true);
 }
 
 /**

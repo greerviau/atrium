@@ -12,6 +12,7 @@ export const CLASS = {
   strikethrough: "cm-strikethrough",
   inlineCode: "cm-inline-code",
   link: "cm-link",
+  tableBox: "cm-table-box",
   tableRow: "cm-table-row",
   tableHeaderRow: "cm-table-header-row",
   tableCell: "cm-table-cell",
