@@ -115,6 +115,16 @@
   margin-inline-start: max(0px, (100cqw - var(--atrium-prose-max-width)) / 2);
   margin-inline-end: auto;
   position: relative;
+  /* Stays in the separated borders model (the initial value) deliberately.
+     `border-collapse: collapse` looks like the natural fix for the row rules
+     — see `.cm-table-cell`'s `border-bottom` below for why they can't live on
+     the rows — but in Blink it stops the absolutely-positioned
+     `.cm-table-col-bar` widgets painting entirely: they keep their correct
+     computed geometry above the table (measured and written by
+     `tableGeometryMeasurePlugin`), and simply never appear, silently killing
+     the column drag handles. The row handles, which overflow to the left
+     rather than above, survive it — which is exactly what makes the
+     regression easy to miss. */
   border-top: 1px solid var(--atrium-border);
   border-left: 1px solid var(--atrium-border);
 }
@@ -130,25 +140,77 @@
    stretching the row. */
 .cm-table-row {
   display: table-row !important;
-  border-bottom: 1px solid var(--atrium-border);
 }
 
 .cm-table-cell {
   display: table-cell;
   padding: 0.2em 0.6em;
+  /* Both rules of the grid are drawn per-cell, and the horizontal one has to
+     be: CSS 2.1 §17.6.1 gives rows, row groups, columns and column groups no
+     borders at all in the separated model, so the `border-bottom` this lived
+     on as `.cm-table-row` was silently dropped and a table rendered with
+     column rules but no line between any two rows. `.cm-table-box` explains
+     why collapsing the borders — the other way to make a row's own border
+     paint — isn't available here. Each edge is still drawn exactly once: a
+     cell's right border is its right neighbor's left edge, its bottom border
+     the next row's top edge, and the last column/row supply the table's own
+     outer right/bottom edges, with the box itself supplying top and left. */
   border-right: 1px solid var(--atrium-border);
+  border-bottom: 1px solid var(--atrium-border);
   /* Already inherited from `.cm-content.cm-lineWrapping`'s base-theme rule
      today, so this is currently a no-op — kept explicit and defensive in
      case a future change ever scopes `.cm-table-cell` outside a
      `.cm-lineWrapping` ancestor. */
   overflow-wrap: anywhere;
+  /* `anywhere` above (unlike `break-word`, which is otherwise identical at
+     render time) is the one CSS Text value whose soft-wrap opportunities
+     count toward min-content intrinsic size, so without a floor every cell
+     reports a min-content width of about one character — which licenses
+     `table-layout: auto` to crush any column of `.cm-table-box` down to a
+     single-character ribbon, mid-word, as soon as the table's content
+     exceeds the shared reading column. A `min-width` on a table cell raises
+     that column's own minimum contribution, so columns keep a sane floor
+     (and an empty cell's `EmptyCellWidget` stays wide enough to click)
+     while `anywhere` still serves as the overflow valve that keeps one long
+     unbroken token — a URL, a hash — from pushing the table past the column
+     cap and inflating `.cm-content` sideways (issue #199); `.cm-table-box`
+     has no `overflow-x: auto` of its own to trap that the way
+     `.cm-code-block-box` does, and being a `display: table` box it couldn't
+     use one, since `overflow` doesn't apply to table boxes. The floor costs
+     column budget: each column takes this plus the ~2ch its `0.6em` side
+     padding comes to at the editor's monospace metrics, so a table outgrows
+     `--atrium-prose-max-width` every ~7ch of it — around nine columns at
+     65ch, eleven at 80ch. */
+  min-width: 5ch;
+  /* A table cell's initial `vertical-align` is `baseline`, which drops a
+     short cell to the first-line baseline of a tall wrapped neighbor and
+     leaves the row reading ragged. `top` aligns every cell in a row to the
+     row's own top edge, matching how Obsidian/Notion render a wrapped
+     table. */
+  vertical-align: top;
+}
+
+/* A column whose every cell is short (`findNarrowColumns` in decorations.ts,
+   which also bounds how many columns per table may qualify). `text-wrap`, not
+   `white-space: nowrap`: the shorthand would also set `white-space-collapse:
+   collapse`, folding a cell's internal whitespace runs away and breaking the
+   position mapping `posAtCoords`/`findTableContext` depend on — the same
+   hazard `.cm-table-row`'s comment above declines to take. `text-wrap` sets
+   only the wrapping half, leaving the ambient `break-spaces` collapse
+   behavior inherited from `.cm-content.cm-lineWrapping` untouched. */
+.cm-table-cell-narrow {
+  text-wrap: nowrap;
 }
 
 .cm-table-header-cell {
   font-weight: 700;
 }
 
-.cm-table-header-row {
+/* The heavier rule separating the header from the body, on the header's own
+   cells for the same reason `.cm-table-cell` carries the ordinary one. Written
+   as a two-class descendant so it outranks `.cm-table-cell`'s 1px on
+   specificity rather than on stylesheet order. */
+.cm-table-header-row .cm-table-cell {
   border-bottom: 2px solid var(--atrium-border);
 }
 

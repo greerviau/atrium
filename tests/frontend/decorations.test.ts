@@ -592,6 +592,92 @@ describe("buildDecorations: tables", () => {
     expect(bodyCells[3].class?.split(" ")).not.toEqual(expect.arrayContaining(["cm-table-align-center", "cm-table-align-right"]));
   });
 
+  // A column of short labels sits a hair under what its text needs whenever
+  // the table's total max-content overshoots the reading column, and wraps in
+  // the worst possible place (a two-word label splitting after its emoji).
+  // Refusing to wrap raises such a column's min-content to its max-content so
+  // `table-layout: auto` has to satisfy it, taking the deficit from the long
+  // prose column that was already wrapping anyway.
+  it("marks a uniformly short column narrow, leaving a column with any long cell wrapping", () => {
+    const doc =
+      "| Name | Notes | Status |\n" +
+      "| --- | --- | --- |\n" +
+      "| alpha | A note long enough that this column has to wrap somewhere | ✅ ready |\n" +
+      "| beta | short | ⬜ pending |\n";
+    const state = stateFor(doc, doc.length);
+    const decos = collect(state);
+    const rowFrom = state.doc.line(3).from;
+    const rowTo = state.doc.line(3).to;
+    const cells = decos
+      .filter((d) => d.class?.split(" ").includes("cm-table-cell") && d.from >= rowFrom && d.to <= rowTo)
+      .sort((a, b) => a.from - b.from);
+    expect(cells).toHaveLength(3);
+    expect(cells[0].class?.split(" ")).toContain("cm-table-cell-narrow");
+    expect(cells[1].class?.split(" ")).not.toContain("cm-table-cell-narrow");
+    expect(cells[2].class?.split(" ")).toContain("cm-table-cell-narrow");
+  });
+
+  // The header cell counts toward its column's width like any other, so a
+  // short column under a long header keeps wrapping — the header is what
+  // would overflow otherwise.
+  it("does not mark a column narrow when only its header is long", () => {
+    const doc = "| Short | Extraordinarily Long Header |\n| --- | --- |\n| a | b |\n";
+    const state = stateFor(doc, doc.length);
+    const decos = collect(state);
+    const rowFrom = state.doc.line(3).from;
+    const cells = decos
+      .filter((d) => d.class?.split(" ").includes("cm-table-cell") && d.from >= rowFrom)
+      .sort((a, b) => a.from - b.from);
+    expect(cells[0].class?.split(" ")).toContain("cm-table-cell-narrow");
+    expect(cells[1].class?.split(" ")).not.toContain("cm-table-cell-narrow");
+  });
+
+  // A narrow column can't be squeezed, so past `MAX_NARROW_COLUMNS` their
+  // combined demand could push the table past its cap — and `.cm-table-box`
+  // has no `overflow-x` to trap that, which is issue #199 all over again.
+  // Every column reverts to wrapping rather than an arbitrary subset winning.
+  it("leaves every column wrapping when more than MAX_NARROW_COLUMNS qualify", () => {
+    const doc = "| A | B | C | D |\n| --- | --- | --- | --- |\n| 1 | 2 | 3 | 4 |\n";
+    const state = stateFor(doc, doc.length);
+    const decos = collect(state);
+    const cells = decos.filter((d) => d.class?.split(" ").includes("cm-table-cell"));
+    expect(cells).toHaveLength(8);
+    for (const cell of cells) {
+      expect(cell.class?.split(" ")).not.toContain("cm-table-cell-narrow");
+    }
+  });
+
+  // The separated borders model gives a row no borders at all (CSS 2.1
+  // §17.6.1), so a `border-bottom` on `.cm-table-row` never paints and the
+  // table renders with column rules but nothing between two rows.
+  it("draws both grid rules on the cells, since a row's own border never paints", () => {
+    expect(ruleBodyFor(".cm-table-cell")).toMatch(/border-bottom:\s*1px solid/);
+    expect(ruleBodyFor(".cm-table-cell")).toMatch(/border-right:\s*1px solid/);
+    expect(ruleBodyFor(".cm-table-header-row .cm-table-cell")).toMatch(/border-bottom:\s*2px solid/);
+    expect(ruleBodyFor(".cm-table-row")).not.toMatch(/border/);
+  });
+
+  // Collapsing the borders is the obvious alternative to the per-cell rules
+  // above and looks correct in isolation, but in Blink it stops the
+  // absolutely-positioned column bars painting at all — they keep their
+  // measured geometry and simply never appear, silently killing the column
+  // drag handles while the row handles (which overflow left, not up) survive.
+  it("keeps the table in the separated borders model so the column bars still paint", () => {
+    // Comments stripped first — the rule documents at length why it *doesn't*
+    // collapse, and that prose would otherwise match.
+    const declarations = ruleBodyFor(".cm-content.cm-md-rendered .cm-table-box").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(declarations).not.toMatch(/border-collapse/);
+  });
+
+  // `white-space: nowrap` would also set `white-space-collapse: collapse`,
+  // folding away the internal whitespace runs CodeMirror's position mapping
+  // depends on; `text-wrap` sets only the wrapping half.
+  it("suppresses wrapping in a narrow column without collapsing its whitespace", () => {
+    const body = ruleBodyFor(".cm-table-cell-narrow");
+    expect(body).toMatch(/text-wrap:\s*nowrap/);
+    expect(body).not.toMatch(/white-space:/);
+  });
+
   // Regression coverage for issue #110's must-fix round 2: the markdown
   // parser gives an empty cell no `TableCell` node at all, so a row with an
   // empty cell used to have its interior swallowed into the surrounding
@@ -654,7 +740,10 @@ describe("buildDecorations: tables", () => {
     const placeholder = decos.find((d) => d.from === zeroWidthPos && d.to === zeroWidthPos && d.widget);
     expect(placeholder).toBeTruthy();
     const widget = placeholder!.widget as EmptyCellWidget;
-    expect(widget.eq(new EmptyCellWidget("cm-table-cell"))).toBe(true);
+    // Every column here is uniformly short, so the placeholder carries its
+    // column's narrow class the same way it carries the alignment classes —
+    // inert on a zero-width cell, but the column's class list is one list.
+    expect(widget.eq(new EmptyCellWidget("cm-table-cell cm-table-cell-narrow"))).toBe(true);
   });
 
   it("still gives a single-character cell a real mark, not a widget placeholder", () => {

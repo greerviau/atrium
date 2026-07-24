@@ -742,6 +742,68 @@ export function collectCellSlots(node: SyntaxNode): CellSlot[] {
 }
 
 /**
+ * The longest a column's own widest cell may be for that whole column to be
+ * treated as narrow (see `findNarrowColumns`). Sized so a narrow column's
+ * demand — this plus the ~2ch its `0.6em` side padding comes to at the
+ * editor's monospace metrics — stays a small fraction of the reading column.
+ */
+export const NARROW_COLUMN_MAX_CHARS = 16;
+
+/**
+ * At most this many columns in one table may be treated as narrow. Their
+ * combined demand (`NARROW_COLUMN_MAX_CHARS` + ~2ch padding each) has to stay
+ * inside the narrowest `--atrium-prose-max-width` anyone is plausibly running,
+ * because a narrow column refuses to wrap and therefore can't be squeezed:
+ * overshooting would push the table past its cap with no `overflow-x` on
+ * `.cm-table-box` to trap it, re-opening issue #199's sideways-scrolling
+ * `.cm-content`. Three columns cost at most 54ch, which clears even the 65ch
+ * this variable shipped with.
+ */
+export const MAX_NARROW_COLUMNS = 3;
+
+/**
+ * Column indices whose every cell is short enough that the column should
+ * never wrap (`.cm-table-cell-narrow`, `text-wrap: nowrap` in markdown.css).
+ *
+ * `table-layout: auto` sizes a column that fits its content to somewhere
+ * between its min-content and max-content width, and when the table's total
+ * max-content overshoots the reading-column cap — often by only a few
+ * characters — it takes that deficit out of every column proportionally.
+ * A column of short labels then lands a hair under what its own text needs
+ * and wraps in the worst possible place: a two-word status label splitting
+ * after its leading emoji, one word stranded on a second line, in a column
+ * with room for all of it but for two pixels. Refusing to wrap raises such a
+ * column's
+ * min-content to its max-content, so the auto algorithm has to satisfy it
+ * outright and takes the deficit from a genuinely long prose column instead
+ * — which wraps gracefully because it was already wrapping.
+ *
+ * A column qualifies only if *every* one of its cells is short: applying this
+ * per-cell instead would let one row of a column wrap while the next doesn't,
+ * which reads as a rendering bug rather than a layout choice. The header cell
+ * counts like any other, so a short column under a long header stays wrapping.
+ * `MAX_NARROW_COLUMNS` bounds how much total width this can demand.
+ */
+export function findNarrowColumns(state: EditorState, table: SyntaxNode, columnCount: number): boolean[] {
+  if (columnCount === 0) return [];
+
+  const widest = new Array<number>(columnCount).fill(0);
+  for (let row = table.firstChild; row; row = row.nextSibling) {
+    if (row.type.name !== "TableHeader" && row.type.name !== "TableRow") continue;
+    let column = 0;
+    for (const slot of collectCellSlots(row)) {
+      if (column >= columnCount) break;
+      widest[column] = Math.max(widest[column], state.doc.sliceString(slot.from, slot.to).trim().length);
+      column++;
+    }
+  }
+
+  const narrow = widest.map((chars) => chars <= NARROW_COLUMN_MAX_CHARS);
+  if (narrow.filter(Boolean).length > MAX_NARROW_COLUMNS) return new Array<boolean>(columnCount).fill(false);
+  return narrow;
+}
+
+/**
  * Decorates one table row (`TableHeader` or `TableRow`, always a single
  * physical line). The row gets an always-visible `Decoration.line`
  * container (`display: table-row`, matching the code-block precedent), and
@@ -788,6 +850,7 @@ function decorateTableRow(
   state: EditorState,
   node: SyntaxNode,
   alignment: ColumnAlignment[],
+  narrowColumns: boolean[],
   isHeader: boolean,
   tableFrom: number,
   rowIndex: number,
@@ -813,6 +876,9 @@ function decorateTableRow(
     const classes: string[] = [CLASS.tableCell];
     if (isHeader) {
       classes.push(CLASS.tableHeaderCell);
+    }
+    if (narrowColumns[column]) {
+      classes.push(CLASS.tableCellNarrow);
     }
     if (alignment[column] === "center") {
       classes.push(CLASS.tableAlignCenter);
@@ -885,13 +951,14 @@ function decorateTable(
   const alignment = delimiterNode
     ? parseColumnAlignment(state.doc.sliceString(delimiterNode.from, delimiterNode.to))
     : [];
+  const narrowColumns = findNarrowColumns(state, node, alignment.length);
   const tableFrom = node.from;
 
   let rowIndex = 0;
   let child = node.firstChild;
   while (child) {
     if (child.type.name === "TableHeader") {
-      decorateTableRow(state, child, alignment, true, tableFrom, rowIndex, hover, selection, out);
+      decorateTableRow(state, child, alignment, narrowColumns, true, tableFrom, rowIndex, hover, selection, out);
       const headerLineStart = state.doc.lineAt(child.from).from;
       out.push(
         Decoration.widget({ widget: new RowHandleWidget(tableFrom, rowIndex), side: ROW_HANDLE_SIDE }).range(
@@ -915,7 +982,7 @@ function decorateTable(
       );
       rowIndex++;
     } else if (child.type.name === "TableRow") {
-      decorateTableRow(state, child, alignment, false, tableFrom, rowIndex, hover, selection, out);
+      decorateTableRow(state, child, alignment, narrowColumns, false, tableFrom, rowIndex, hover, selection, out);
       const rowLineStart = state.doc.lineAt(child.from).from;
       out.push(
         Decoration.widget({ widget: new RowHandleWidget(tableFrom, rowIndex), side: ROW_HANDLE_SIDE }).range(
