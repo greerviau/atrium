@@ -506,3 +506,212 @@ describe("nested tables get their header cells and phase-2 widgets inside .cm-ta
     view.destroy();
   });
 });
+
+describe("drag-to-reposition (phase 4)", () => {
+  // jsdom has no layout engine, so every element's getBoundingClientRect()
+  // is zero by default; mocking it directly on the real handle elements is
+  // this suite's version of the same technique EditorPaneTableContextMenu's
+  // posAtCoords stub and EditorPaneSplit.test.ts's pointerLikeEvent already
+  // use elsewhere in this codebase for the same jsdom gap. The mocked
+  // elements are reused (not recreated) across a moveRow/moveColumn dispatch
+  // — RowHandleWidget/TableColumnBarWidget's own eq() only compares
+  // table+row/column *slot* identity, not content, so CodeMirror keeps the
+  // same DOM node for "row 2" (say) even though the swap changes what
+  // content now sits there — meaning the mocks set up before the drag stay
+  // valid for its whole duration.
+  function mockRect(el: Element, start: number, end: number): void {
+    vi.spyOn(el, "getBoundingClientRect").mockReturnValue({
+      top: start,
+      bottom: end,
+      left: start,
+      right: end,
+      width: end - start,
+      height: end - start,
+      x: start,
+      y: start,
+      toJSON: () => ({}),
+    } as DOMRect);
+  }
+
+  function pointerCoordEvent(type: string, coord: "clientX" | "clientY", value: number): Event {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "button", { value: 0, configurable: true });
+    Object.defineProperty(event, coord, { value, configurable: true });
+    Object.defineProperty(event, coord === "clientY" ? "clientX" : "clientY", { value: 0, configurable: true });
+    return event;
+  }
+
+  it("dragging a row handle down two positions composes two moveRow steps", () => {
+    const doc =
+      "| Name  | Role     |\n| ----- | -------- |\n| Alice | Engineer |\n| Bob   | Designer |\n| Carol | Manager  |\n";
+    const view = makeView(doc);
+    const handles = view.dom.querySelectorAll<HTMLElement>(".cm-table-row-handle");
+    expect(handles).toHaveLength(4); // header, Alice, Bob, Carol
+    mockRect(handles[0], 0, 20);
+    mockRect(handles[1], 20, 40); // Alice
+    mockRect(handles[2], 40, 60); // Bob
+    mockRect(handles[3], 60, 80); // Carol
+
+    handles[1].dispatchEvent(pointerCoordEvent("pointerdown", "clientY", 30));
+    window.dispatchEvent(pointerCoordEvent("pointermove", "clientY", 75)); // past Bob's and Carol's own centers
+    window.dispatchEvent(pointerCoordEvent("pointerup", "clientY", 75));
+
+    expect(view.state.doc.toString()).toBe(
+      "| Name  | Role     |\n| ----- | -------- |\n| Bob   | Designer |\n| Carol | Manager  |\n| Alice | Engineer |\n",
+    );
+    view.destroy();
+  });
+
+  it("dragging a row handle up one position composes one moveRow step", () => {
+    const doc =
+      "| Name  | Role     |\n| ----- | -------- |\n| Alice | Engineer |\n| Bob   | Designer |\n| Carol | Manager  |\n";
+    const view = makeView(doc);
+    const handles = view.dom.querySelectorAll<HTMLElement>(".cm-table-row-handle");
+    mockRect(handles[0], 0, 20);
+    mockRect(handles[1], 20, 40); // Alice
+    mockRect(handles[2], 40, 60); // Bob
+    mockRect(handles[3], 60, 80); // Carol
+
+    handles[2].dispatchEvent(pointerCoordEvent("pointerdown", "clientY", 50)); // Bob
+    window.dispatchEvent(pointerCoordEvent("pointermove", "clientY", 25)); // past Alice's own center
+    window.dispatchEvent(pointerCoordEvent("pointerup", "clientY", 25));
+
+    expect(view.state.doc.toString()).toBe(
+      "| Name  | Role     |\n| ----- | -------- |\n| Bob   | Designer |\n| Alice | Engineer |\n| Carol | Manager  |\n",
+    );
+    view.destroy();
+  });
+
+  it("stops at the table's own top edge without throwing (never drags past the header)", () => {
+    const doc = "| Name  | Role     |\n| ----- | -------- |\n| Alice | Engineer |\n| Bob   | Designer |\n";
+    const view = makeView(doc);
+    const handles = view.dom.querySelectorAll<HTMLElement>(".cm-table-row-handle");
+    mockRect(handles[0], 0, 20); // header
+    mockRect(handles[1], 20, 40); // Alice
+    mockRect(handles[2], 40, 60); // Bob
+
+    handles[1].dispatchEvent(pointerCoordEvent("pointerdown", "clientY", 30));
+    expect(() => {
+      window.dispatchEvent(pointerCoordEvent("pointermove", "clientY", -100)); // far past the header
+    }).not.toThrow();
+    window.dispatchEvent(pointerCoordEvent("pointerup", "clientY", -100));
+
+    // Alice never moved above the header — moveRow(..., "up") returns null
+    // once the only row left "above" is the header itself.
+    expect(view.state.doc.toString()).toBe(doc);
+    view.destroy();
+  });
+
+  it("dragging a column bar right one position composes one moveColumn step", () => {
+    const doc = "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n";
+    const view = makeView(doc);
+    const bars = view.dom.querySelectorAll<HTMLElement>(".cm-table-col-bar");
+    expect(bars).toHaveLength(3);
+    mockRect(bars[0], 0, 20); // A
+    mockRect(bars[1], 20, 40); // B
+    mockRect(bars[2], 40, 60); // C
+
+    bars[0].dispatchEvent(pointerCoordEvent("pointerdown", "clientX", 10));
+    window.dispatchEvent(pointerCoordEvent("pointermove", "clientX", 35)); // past B's own center
+    window.dispatchEvent(pointerCoordEvent("pointerup", "clientX", 35));
+
+    expect(view.state.doc.toString()).toBe("| B | A | C |\n| --- | --- | --- |\n| 2 | 1 | 3 |\n");
+    view.destroy();
+  });
+
+  it("stops at the table's own right edge without throwing (never drags past the last column)", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+    const view = makeView(doc);
+    const bars = view.dom.querySelectorAll<HTMLElement>(".cm-table-col-bar");
+    mockRect(bars[0], 0, 20);
+    mockRect(bars[1], 20, 40);
+
+    bars[1].dispatchEvent(pointerCoordEvent("pointerdown", "clientX", 30));
+    expect(() => {
+      window.dispatchEvent(pointerCoordEvent("pointermove", "clientX", 1000)); // far past the last column
+    }).not.toThrow();
+    window.dispatchEvent(pointerCoordEvent("pointerup", "clientX", 1000));
+
+    expect(view.state.doc.toString()).toBe(doc);
+    view.destroy();
+  });
+
+  it("removes its window listeners on pointerup (no further moves after the gesture ends)", () => {
+    const doc =
+      "| Name  | Role     |\n| ----- | -------- |\n| Alice | Engineer |\n| Bob   | Designer |\n| Carol | Manager  |\n";
+    const view = makeView(doc);
+    const handles = view.dom.querySelectorAll<HTMLElement>(".cm-table-row-handle");
+    mockRect(handles[0], 0, 20);
+    mockRect(handles[1], 20, 40);
+    mockRect(handles[2], 40, 60);
+    mockRect(handles[3], 60, 80);
+
+    handles[1].dispatchEvent(pointerCoordEvent("pointerdown", "clientY", 30));
+    window.dispatchEvent(pointerCoordEvent("pointermove", "clientY", 50));
+    window.dispatchEvent(pointerCoordEvent("pointerup", "clientY", 50));
+    const afterFirstDrag = view.state.doc.toString();
+
+    // A pointermove after pointerup must be a no-op — the listeners were
+    // removed, not just the drag "finished" logically.
+    window.dispatchEvent(pointerCoordEvent("pointermove", "clientY", 75));
+    expect(view.state.doc.toString()).toBe(afterFirstDrag);
+    view.destroy();
+  });
+
+  // Must-fix regression: on a table taller than the rendered viewport,
+  // CodeMirror only builds .cm-table-row-handle elements for rows in its
+  // current viewport (confirmed here: after scrolling, the rendered set is
+  // row 0 plus a contiguous run around row 165-166, not every row 0-400) —
+  // so a neighbour must be looked up by its own stamped row index, never by
+  // its position in that (non-contiguous, viewport-scoped) rendered list.
+  // Indexing positionally there either finds nothing (a false no-op) or,
+  // worse, resolves to whatever row happens to sit at that position in the
+  // rendered array — silently swapping the wrong pair.
+  it("drags the correct adjacent row even when only a scrolled-to subset of a large table is rendered", () => {
+    let doc = "| Name | Role |\n| --- | --- |\n";
+    for (let i = 0; i < 400; i++) {
+      doc += `| Row${i} | Val${i} |\n`;
+    }
+    const view = makeView(doc);
+    const targetLine = view.state.doc.line(202);
+    view.dispatch({ effects: EditorView.scrollIntoView(targetLine.from, { y: "center" }) });
+
+    const handlesByRow = new Map<number, HTMLElement>();
+    for (const h of Array.from(view.dom.querySelectorAll<HTMLElement>(".cm-table-row-handle"))) {
+      const idx = Number(h.dataset.tableHandleRow);
+      if (Number.isFinite(idx)) {
+        handlesByRow.set(idx, h);
+      }
+    }
+    // Confirms the premise: a large, mostly-off-viewport gap exists between
+    // the header (row 0) and the scrolled-to region, and rows 165/166 (the
+    // pair this test drags) are both actually rendered.
+    expect(handlesByRow.has(5)).toBe(false);
+    expect(handlesByRow.has(165)).toBe(true);
+    expect(handlesByRow.has(166)).toBe(true);
+
+    let y = 0;
+    for (const idx of [...handlesByRow.keys()].sort((a, b) => a - b)) {
+      mockRect(handlesByRow.get(idx)!, y, y + 20);
+      y += 20;
+    }
+
+    const handle165 = handlesByRow.get(165)!;
+    const rect166 = handlesByRow.get(166)!.getBoundingClientRect();
+
+    handle165.dispatchEvent(pointerCoordEvent("pointerdown", "clientY", 10));
+    window.dispatchEvent(pointerCoordEvent("pointermove", "clientY", rect166.bottom - 1));
+    window.dispatchEvent(pointerCoordEvent("pointerup", "clientY", rect166.bottom - 1));
+
+    // Row index 165 is document line 167 ("Row164"); row index 166 is line
+    // 168 ("Row165") — header (line 1) + delimiter (line 2) + rowIndex - 1.
+    expect(view.state.doc.line(167).text).toBe("| Row165 | Val165 |");
+    expect(view.state.doc.line(168).text).toBe("| Row164 | Val164 |");
+    // Nothing outside the swapped pair moved.
+    expect(view.state.doc.line(166).text).toBe("| Row163 | Val163 |");
+    expect(view.state.doc.line(169).text).toBe("| Row166 | Val166 |");
+    expect(view.state.doc.line(10).text).toBe("| Row7 | Val7 |");
+
+    view.destroy();
+  });
+});

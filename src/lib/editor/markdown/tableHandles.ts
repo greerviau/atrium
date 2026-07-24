@@ -1,8 +1,8 @@
 import { StateEffect, StateField } from "@codemirror/state";
-import type { EditorState, StateEffectType, Transaction } from "@codemirror/state";
+import type { EditorState, StateEffectType, Transaction, TransactionSpec } from "@codemirror/state";
 import { EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import type { KeyBinding, ViewUpdate } from "@codemirror/view";
-import { findTableContext, insertColumn, insertRow } from "./tableEdit";
+import { findTableContext, insertColumn, insertRow, moveColumn, moveRow } from "./tableEdit";
 import type { TableEditContext } from "./tableEdit";
 import { collectCellSlots } from "./decorations";
 import { tooltip } from "../../ui/tooltip";
@@ -171,15 +171,176 @@ function attachHandleInteractions(el: HTMLElement, view: EditorView, target: Tab
 }
 
 /**
+ * A `pointerdown`-driven drag gesture shared in shape by row and column
+ * reordering: track which slot currently holds the dragged row/column
+ * (`current`, updated after every crossed boundary — never the position it
+ * started at, since that's exactly the stale-anchor bug the plan's "Identity
+ * tracking across steps" note warns about), and on each `pointermove`,
+ * compare the pointer's coordinate against the *other* handles' own
+ * currently-rendered positions (`measureRectsByIndex`, always re-queried
+ * fresh — never cached — since a swap can itself change row heights/column
+ * widths).
+ *
+ * Neighbours are looked up by their own stamped `data-table-handle-row`/
+ * `-col` index (`indexDatasetKey`), never by position in the rendered DOM
+ * list — CodeMirror only builds `.cm-table-row-handle` elements for rows in
+ * its current viewport, so on a table taller than the viewport the
+ * *document* row index `current` tracks and the *render-order* position in
+ * a `querySelectorAll` result diverge the moment any row above the table
+ * (or above the viewport) isn't rendered. Indexing positionally there either
+ * silently no-ops (the neighbour "at that position" doesn't exist) or,
+ * worse, resolves to the wrong row entirely (the position happens to hold a
+ * different, further-away row) — reordering the wrong pair with no error.
+ * Looking a neighbour up by its own index and treating a missing lookup as
+ * "no step available" (rather than falling back to whatever the DOM
+ * position holds) keeps a drag that scrolls past the rendered edge inert
+ * instead of silently wrong.
+ *
+ * `window`-level listeners (matching `EditorPaneSplit.svelte`'s own
+ * `startDragResizer` pattern) mean the gesture keeps tracking the pointer
+ * correctly even though the handle DOM element under the cursor is reused
+ * for whatever content now occupies that slot after a swap, not whatever
+ * content the user started dragging.
+ *
+ * `attemptStep` resolves a fresh `TableEditContext` from `current` and
+ * dispatches one `moveRow`/`moveColumn` step — the existing adjacent-swap
+ * commands are the whole atomic unit a drag composes, never bypassed with
+ * bulk-move logic — returning whether a step actually happened (`null` from
+ * `moveRow`/`moveColumn` means the table's own edge was reached, ending
+ * the loop for this move event without erroring).
+ */
+function attachDragReorder(options: {
+  el: HTMLElement;
+  view: EditorView;
+  table: number;
+  initial: number;
+  pointerCoord: (event: PointerEvent) => number;
+  handleSelector: string;
+  indexDatasetKey: "tableHandleRow" | "tableHandleCol";
+  rectCoords: (rect: DOMRect) => { start: number; end: number };
+  attemptStep: (state: EditorState, table: number, current: number, dir: "before" | "after") => { spec: TransactionSpec | null; next: number };
+}): void {
+  const { el, view, table, initial, pointerCoord, handleSelector, indexDatasetKey, rectCoords } = options;
+  el.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    let current = initial;
+
+    function measureRectsByIndex(): Map<number, DOMRect> {
+      const box = el.closest<HTMLElement>(".cm-table-box");
+      const out = new Map<number, DOMRect>();
+      if (!box) {
+        return out;
+      }
+      for (const handle of Array.from(box.querySelectorAll<HTMLElement>(handleSelector))) {
+        const raw = handle.dataset[indexDatasetKey];
+        const idx = raw === undefined ? NaN : Number(raw);
+        if (Number.isFinite(idx)) {
+          out.set(idx, handle.getBoundingClientRect());
+        }
+      }
+      return out;
+    }
+
+    function attemptStep(dir: "before" | "after"): boolean {
+      const { spec, next } = options.attemptStep(view.state, table, current, dir);
+      if (!spec) {
+        return false;
+      }
+      view.dispatch(spec);
+      current = next;
+      return true;
+    }
+
+    function onMove(e: PointerEvent): void {
+      const pos = pointerCoord(e);
+      let moved = true;
+      while (moved) {
+        moved = false;
+        const rectsByIndex = measureRectsByIndex();
+        const prevRect = rectsByIndex.get(current - 1);
+        const nextRect = rectsByIndex.get(current + 1);
+        if (prevRect) {
+          const { start, end } = rectCoords(prevRect);
+          if (pos < (start + end) / 2 && attemptStep("before")) {
+            moved = true;
+            continue;
+          }
+        }
+        if (nextRect) {
+          const { start, end } = rectCoords(nextRect);
+          if (pos > (start + end) / 2 && attemptStep("after")) {
+            moved = true;
+          }
+        }
+      }
+    }
+
+    function onUp(): void {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  });
+}
+
+function attachRowDrag(el: HTMLElement, view: EditorView, table: number, initialRow: number): void {
+  attachDragReorder({
+    el,
+    view,
+    table,
+    initial: initialRow,
+    pointerCoord: (e) => e.clientY,
+    handleSelector: ".cm-table-row-handle",
+    indexDatasetKey: "tableHandleRow",
+    rectCoords: (rect) => ({ start: rect.top, end: rect.bottom }),
+    attemptStep: (state, tableFrom, row, dir) => {
+      const ctx = rowHandleContext(state, tableFrom, row);
+      if (!ctx) {
+        return { spec: null, next: row };
+      }
+      const spec = moveRow(state, ctx, dir === "before" ? "up" : "down");
+      return { spec, next: dir === "before" ? row - 1 : row + 1 };
+    },
+  });
+}
+
+function attachColumnDrag(el: HTMLElement, view: EditorView, table: number, initialColumn: number): void {
+  attachDragReorder({
+    el,
+    view,
+    table,
+    initial: initialColumn,
+    pointerCoord: (e) => e.clientX,
+    handleSelector: ".cm-table-col-bar",
+    indexDatasetKey: "tableHandleCol",
+    rectCoords: (rect) => ({ start: rect.left, end: rect.right }),
+    attemptStep: (state, tableFrom, column, dir) => {
+      const ctx = columnBarContext(state, tableFrom, column);
+      if (!ctx) {
+        return { spec: null, next: column };
+      }
+      const spec = moveColumn(state, ctx, dir === "before" ? "left" : "right");
+      return { spec, next: dir === "before" ? column - 1 : column + 1 };
+    },
+  });
+}
+
+/**
  * A widget at a table row's own physical-line-start position (the same
  * anchor `decorateTableRow`'s leading `tableGap` already uses, so a nested
  * table's blockquote/list-marker handling doesn't need a second special
  * case). `tableGeometryMeasurePlugin` writes this row's own measured `top`/
  * `height` onto the element (see that plugin's own doc comment for why a
  * plain CSS `height: 100%` resolves against the wrong ancestor). Hovering
- * sets `tableHoverField`; clicking pins the row into `tableSelectionField`;
- * `decorateTableRow`/`decorateTable` read both back to apply the
- * row-selected outline class to every cell in the row.
+ * sets `tableHoverField`; clicking (or dragging — see `attachRowDrag`) pins
+ * the row into `tableSelectionField`; `decorateTableRow`/`decorateTable`
+ * read both back to apply the row-selected outline class to every cell in
+ * the row.
  */
 export class RowHandleWidget extends WidgetType {
   constructor(
@@ -198,6 +359,7 @@ export class RowHandleWidget extends WidgetType {
     el.className = "cm-table-row-handle";
     el.appendChild(createHandleGlyph());
     attachHandleInteractions(el, view, { table: this.table, row: this.row, col: null });
+    attachRowDrag(el, view, this.table, this.row);
     return el;
   }
 
@@ -233,6 +395,7 @@ export class TableColumnBarWidget extends WidgetType {
     el.className = "cm-table-col-bar";
     el.appendChild(createHandleGlyph());
     attachHandleInteractions(el, view, { table: this.table, row: null, col: this.column });
+    attachColumnDrag(el, view, this.table, this.column);
     return el;
   }
 
