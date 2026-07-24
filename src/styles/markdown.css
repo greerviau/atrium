@@ -19,12 +19,15 @@
 /* Caps a prose line's wrap width to the pane instead of the runaway
    `.cm-content` box (see the container-query comment above). Scoped to
    `.cm-lineWrapping` panes only (markdown; code panes never wrap) and
-   excludes code-block and table-row lines, which are meant to stay
-   coherent, scrollable units at their own width, not wrap at the pane's.
-   `position: sticky; left: 0` (no `top`) tracks only the scroller's
-   horizontal scroll position, keeping the line visible at the left edge
-   instead of scrolling out of view when the user scrolls right to see a
-   wide code block elsewhere in the document. */
+   excludes code-block and table-row lines: a code block is meant to stay a
+   coherent, scrollable unit at its own width, and a table row's own width
+   cap comes from `.cm-table-box` (below) rather than this per-line
+   mechanism — `width`/`position: sticky` on a `display: table-row` line
+   wouldn't do anything useful, since a table row isn't the box that needs
+   capping. `position: sticky; left: 0` (no `top`) tracks only the
+   scroller's horizontal scroll position, keeping the line visible at the
+   left edge instead of scrolling out of view when the user scrolls right to
+   see a wide code block elsewhere in the document. */
 .cm-content.cm-lineWrapping
   .cm-line:not(.cm-code-block):not(.cm-table-row):not(.cm-table-header-row):not(.cm-table-delimiter-line) {
   position: sticky;
@@ -67,25 +70,55 @@
   cursor: pointer;
 }
 
-/* A run of consecutive `display: table-row` lines gets wrapped in an
-   anonymous `display: table` box by the browser automatically — no <table>
-   element or widget replacement needed. `!important` is required: CodeMirror's
-   own base theme sets `.cm-line { display: block }` through a scoped
-   two-class selector, which beats a bare `.cm-table-row` on specificity
-   alone regardless of stylesheet load order. `white-space: pre` stops the
-   cell content from wrapping; horizontal scrolling for a long cell comes
-   from CodeMirror's own `.cm-scroller { overflow-x: auto }` (`overflow`
-   has no effect on `display: table-row` itself). */
+/* `EditorView.blockWrappers` (`buildTableWrapRanges` in decorations.ts)
+   wraps every table's own line rows in a real `<div class="cm-table-box">`,
+   spanning the `Table` syntax node's full range. A run of consecutive
+   `display: table-row` children inside it gets grouped into that box's
+   anonymous `display: table` layout automatically — no per-row `<table>`
+   markup needed beyond the wrapper element itself. `max-width` (not
+   `width`) caps the box at the pane's own visible width, resolved via the
+   `container-type: inline-size` ancestor above, while still letting the
+   table shrink to its content when that's narrower — `width` would instead
+   be a *preferred* width that CSS's auto table-layout algorithm stretches
+   every table's columns out to fill, padding a short table out to the full
+   pane regardless of its content. `position: relative` gives phase 2's
+   handles/bands a positioned ancestor to anchor to. `border-top`/
+   `border-left` supply the table's own top and left edges; the existing
+   per-cell `border-right` and per-row `border-bottom` below already supply
+   the right/bottom edges (including the outer ones, via the last column/row),
+   so no edge is doubled. */
+.cm-table-box {
+  display: table;
+  table-layout: auto;
+  max-width: 100cqw;
+  position: relative;
+  border-top: 1px solid var(--atrium-border);
+  border-left: 1px solid var(--atrium-border);
+}
+
+/* `!important` is required: CodeMirror's own base theme sets `.cm-line {
+   display: block }` through a scoped two-class selector, which beats a bare
+   `.cm-table-row` on specificity alone regardless of stylesheet load order.
+   No `white-space` override here — the ambient `break-spaces` that
+   `.cm-content.cm-lineWrapping` already sets (CodeMirror's own base theme)
+   both preserves whitespace runs (so `posAtCoords`/`findTableContext`'s
+   position mapping stays correct) and wraps long content, which is what
+   lets a long cell's text wrap inside `.cm-table-box`'s width cap instead of
+   stretching the row. */
 .cm-table-row {
   display: table-row !important;
   border-bottom: 1px solid var(--atrium-border);
-  white-space: pre;
 }
 
 .cm-table-cell {
   display: table-cell;
   padding: 0.2em 0.6em;
   border-right: 1px solid var(--atrium-border);
+  /* Already inherited from `.cm-content.cm-lineWrapping`'s base-theme rule
+     today, so this is currently a no-op — kept explicit and defensive in
+     case a future change ever scopes `.cm-table-cell` outside a
+     `.cm-lineWrapping` ancestor. */
+  overflow-wrap: anywhere;
 }
 
 .cm-table-header-cell {

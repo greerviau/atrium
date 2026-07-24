@@ -155,6 +155,40 @@ export class ListMarkerWidget extends WidgetType {
   }
 }
 
+/**
+ * Stands in for a genuinely empty table cell — two adjacent pipes with
+ * nothing between them (`||`), a zero-width slot `collectCellSlots`
+ * synthesizes but that `decorateTableRow` can't cover with a
+ * `Decoration.mark` (`@codemirror/view` rejects a zero-width mark outright).
+ * A `Decoration.widget` can occupy a single point instead, giving the column
+ * a real, measurable `.cm-table-cell` box regardless of content. Carries the
+ * same classes a real cell mark would (base cell class plus header/alignment
+ * modifiers), so `eq()` compares them rather than falling back to
+ * `WidgetType`'s default identity check — otherwise CodeMirror can't tell a
+ * placeholder for one column's alignment apart from another's and either
+ * recreates it needlessly or reuses one across a column whose alignment
+ * class has changed.
+ */
+export class EmptyCellWidget extends WidgetType {
+  constructor(readonly classes: string) {
+    super();
+  }
+
+  eq(other: EmptyCellWidget): boolean {
+    return this.classes === other.classes;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = this.classes;
+    return span;
+  }
+
+  ignoreEvent(): boolean {
+    return true;
+  }
+}
+
 let nextMermaidWidgetId = 0;
 
 /**
