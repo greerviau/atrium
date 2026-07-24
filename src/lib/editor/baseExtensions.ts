@@ -1,4 +1,4 @@
-import { EditorSelection, EditorState, findClusterBreak, type Extension } from "@codemirror/state";
+import { EditorSelection, EditorState, Prec, findClusterBreak, type Extension } from "@codemirror/state";
 import { EditorView, ViewPlugin, keymap, type MouseSelectionStyle } from "@codemirror/view";
 import { history, defaultKeymap, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { searchKeymap } from "@codemirror/search";
@@ -254,17 +254,6 @@ export function handleScrollSettleMousedown(event: MouseEvent, view: EditorView)
   if (sinceWheel >= RECENT_SCROLL_WINDOW_MS) {
     return false;
   }
-  // A not-yet-focused pane's first click normally focuses it via CM's own
-  // `mustFocus` branch, synchronously, inside this same trusted mousedown.
-  // Deferring the whole mousedown to the next frame (below) would leave that
-  // focus call to run there too, against the replayed *synthetic* event —
-  // outside the original trusted user-gesture stack the browser's
-  // scroll-preserving focus behavior relies on. Focusing here, still inside
-  // the real gesture, keeps that guarantee; the replay then sees the pane
-  // already focused and skips CM's own focus branch entirely.
-  if (!view.hasFocus) {
-    view.focus();
-  }
   replayMousedownNextFrame(view, event, event.target ?? view.contentDOM);
   return true;
 }
@@ -273,11 +262,52 @@ export const scrollSettleMouseHandler = EditorView.domEventHandlers({
   mousedown: handleScrollSettleMousedown,
 });
 
+// --- Part 3: never let a not-yet-focused pane's first click scroll it back to the top (issue #183) ---
+//
+// A click into a pane that hasn't been focused yet runs through CodeMirror's
+// own `mustFocus` branch (`@codemirror/view` internals, `handlers.mousedown`),
+// which focuses the content element via `focusPreventScroll` — normally
+// scroll-safe, but this app has no way to verify that guard holds on every
+// engine it ships to, and a focus call also writes whatever selection the
+// pane currently holds (document position 0, for a freshly opened file)
+// into the DOM, which is itself the off-screen-caret condition a native
+// scroll-into-view reacts to. Rather than depending on knowing exactly which
+// internal path is at fault, this captures the scroll position immediately
+// before any of that runs and restores it next frame if it moved — it holds
+// regardless of mechanism, and restoring a position that never moved is a
+// no-op.
+
+/**
+ * `Prec.highest` below ensures this runs before every other `mousedown`
+ * handler on the view, including `handleScrollSettleMousedown` above and
+ * CodeMirror's own built-in handling, so `scrollTop` is always captured
+ * before anything has a chance to move it.
+ */
+export function guardFirstFocusScrollPosition(event: MouseEvent, view: EditorView): boolean {
+  if (view.hasFocus) {
+    return false;
+  }
+  const scroller = view.scrollDOM;
+  const before = scroller.scrollTop;
+  requestAnimationFrame(() => {
+    if (scroller.scrollTop !== before) {
+      scroller.scrollTop = before;
+    }
+  });
+  return false;
+}
+
+export const firstFocusScrollGuard = Prec.highest(
+  EditorView.domEventHandlers({
+    mousedown: guardFirstFocusScrollPosition,
+  }),
+);
+
 /**
  * Extensions shared by every pane (markdown rendered, markdown source, and
  * code — all via `EditorPane.svelte`'s `viewModeExtensions`): history, the
  * default/history keymaps, tab-to-indent, the find/replace panel, word-based
- * autocompletion, and the scroll-safe mouse-selection handling above.
+ * autocompletion, and the scroll-safe mouse-selection/focus handling above.
  * `EditorState.allowMultipleSelections` is turned on here since it's a
  * `static` facet that must be part of the initial configuration: without it,
  * every multi-cursor gesture (Alt-click, Cmd-D select-next, the search
@@ -300,6 +330,7 @@ export function baseExtensions(): Extension[] {
     EditorState.allowMultipleSelections.of(true),
     EditorView.mouseSelectionStyle.of(movementAwareMouseSelectionStyle),
     wheelTracker,
+    firstFocusScrollGuard,
     scrollSettleMouseHandler,
   ];
 }

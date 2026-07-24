@@ -1,7 +1,12 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { handleScrollSettleMousedown, wheelTracker, RECENT_SCROLL_WINDOW_MS } from "../../src/lib/editor/baseExtensions";
+import {
+  handleScrollSettleMousedown,
+  guardFirstFocusScrollPosition,
+  wheelTracker,
+  RECENT_SCROLL_WINDOW_MS,
+} from "../../src/lib/editor/baseExtensions";
 
 let view: EditorView | undefined;
 
@@ -139,50 +144,59 @@ describe("handleScrollSettleMousedown: Part 2 (issue #161)", () => {
   });
 });
 
-describe("handleScrollSettleMousedown: focuses synchronously before deferring (issue #183)", () => {
-  it("focuses an unfocused pane synchronously, inside the original mousedown, before deferring", () => {
+describe("guardFirstFocusScrollPosition (issue #183)", () => {
+  it("restores the scroll position on the next frame if something moved it while the pane was unfocused", () => {
     const v = makeView();
-    const target = makeTarget();
     const frame = stubAnimationFrame();
-    const focusSpy = vi.spyOn(v, "focus");
-    v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
-
     expect(v.hasFocus).toBe(false);
-    const event = dispatchMousedownOn(target, 5, 5);
-    handleScrollSettleMousedown(event, v);
 
-    // Called synchronously by the handler itself, not only after the deferred replay fires.
-    expect(focusSpy).toHaveBeenCalledTimes(1);
+    v.scrollDOM.scrollTop = 4000;
+    const event = dispatchMousedownOn(makeTarget());
+    expect(guardFirstFocusScrollPosition(event, v)).toBe(false);
+
+    // Simulate whatever runs later in this same mousedown's handling (e.g.
+    // CodeMirror's own first-focus path) dropping the scroll position.
+    v.scrollDOM.scrollTop = 0;
 
     frame.flush();
+
+    expect(v.scrollDOM.scrollTop).toBe(4000);
   });
 
-  it("does not call focus again when the pane already has focus", () => {
+  it("does nothing when the scroll position never moved", () => {
     const v = makeView();
-    const target = makeTarget();
     const frame = stubAnimationFrame();
+
+    v.scrollDOM.scrollTop = 4000;
+    const event = dispatchMousedownOn(makeTarget());
+    guardFirstFocusScrollPosition(event, v);
+
+    frame.flush();
+
+    expect(v.scrollDOM.scrollTop).toBe(4000);
+  });
+
+  it("does not guard a pane that already has focus", () => {
+    const v = makeView();
     v.contentDOM.focus();
     expect(v.hasFocus).toBe(true);
 
-    const focusSpy = vi.spyOn(v, "focus");
-    v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
-    const event = dispatchMousedownOn(target, 5, 5);
-    handleScrollSettleMousedown(event, v);
+    const frame = stubAnimationFrame();
+    v.scrollDOM.scrollTop = 4000;
+    const event = dispatchMousedownOn(makeTarget());
+    expect(guardFirstFocusScrollPosition(event, v)).toBe(false);
 
-    expect(focusSpy).not.toHaveBeenCalled();
-
+    v.scrollDOM.scrollTop = 0;
     frame.flush();
+
+    // No restore was scheduled, since the pane already had focus.
+    expect(v.scrollDOM.scrollTop).toBe(0);
   });
 
-  it("does not call focus when the mousedown is not deferred at all", () => {
+  it("never pre-empts other mousedown handling", () => {
     const v = makeView();
-    const target = makeTarget();
-    const focusSpy = vi.spyOn(v, "focus");
+    const event = dispatchMousedownOn(makeTarget());
 
-    // No recent wheel event, so this mousedown passes through untouched.
-    const event = dispatchMousedownOn(target);
-    handleScrollSettleMousedown(event, v);
-
-    expect(focusSpy).not.toHaveBeenCalled();
+    expect(guardFirstFocusScrollPosition(event, v)).toBe(false);
   });
 });
