@@ -287,6 +287,18 @@ export function guardFirstFocusScrollPosition(event: MouseEvent, view: EditorVie
   if (view.hasFocus) {
     return false;
   }
+  // A mousedown Part 2 above is about to defer (inside the settle window,
+  // not itself already a replay) hasn't seen the scroll settle yet — the
+  // current `scrollTop` here is the same stale pre-settle value Part 2
+  // exists to wait out. Capturing it now and restoring it next frame would
+  // roll the settled position back to that stale one, right as the replayed
+  // click is about to resolve against it, reintroducing issue #161. Skip the
+  // capture here; the replayed mousedown re-enters this handler on an
+  // already-settled, still-unfocused pane and arms the real guard then.
+  const sinceWheel = Date.now() - (view.plugin(wheelTracker)?.lastWheelTime ?? -Infinity);
+  if (!deferredMouseEvents.has(event) && sinceWheel < RECENT_SCROLL_WINDOW_MS) {
+    return false;
+  }
   const scroller = view.scrollDOM;
   const before = scroller.scrollTop;
   requestAnimationFrame(() => {
