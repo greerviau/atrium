@@ -2,7 +2,7 @@
   import type { TreeNode } from "../stores/fileTree";
   import { toggleExpanded } from "../stores/fileTree";
   import { openFile } from "../stores/tabs";
-  import { openContextMenu } from "./contextMenu";
+  import { openContextMenu, treeActionRequest, type TreeActionRequest } from "./contextMenu";
   import { editingPath, pendingCreate, commitRename, commitCreate } from "./inlineEdit";
   import { beginExplorerDrag, dragOverTargetDir } from "./explorerDrag";
   import ExplorerIcon from "./icons/ExplorerIcon.svelte";
@@ -34,10 +34,42 @@
     openContextMenu(event, node.entry.path, node.entry.isDir);
   }
 
+  // Maps a chord to a tree-action dispatch — the same `treeActionRequest`
+  // channel `FileTree.svelte`'s own container-level fallback uses (§
+  // Approach step 1). None of these are native `main.rs` menu accelerators:
+  // firing globally regardless of what has focus would be unsafe for
+  // New/Rename/Delete (see the plan's safety-constraint note), so they're
+  // plain DOM `keydown` handlers scoped to whichever row holds focus instead.
+  function dispatchAction(action: TreeActionRequest["action"]): void {
+    treeActionRequest.set({ action, path: node.entry.path, isDir: node.entry.isDir });
+  }
+
   function onKeydown(event: KeyboardEvent): void {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onClick();
+      return;
+    }
+    const cmd = event.metaKey;
+    const key = event.key.toLowerCase();
+    if (cmd && !event.altKey && key === "n") {
+      event.preventDefault();
+      dispatchAction(event.shiftKey ? "newFolder" : "newFile");
+      return;
+    }
+    if (!cmd && !event.altKey && event.key === "F2") {
+      event.preventDefault();
+      dispatchAction("rename");
+      return;
+    }
+    if (cmd && !event.altKey && event.key === "Backspace") {
+      event.preventDefault();
+      dispatchAction("delete");
+      return;
+    }
+    if (cmd && event.altKey && key === "r") {
+      event.preventDefault();
+      dispatchAction("reveal");
     }
   }
 
@@ -124,6 +156,18 @@
     user-select: none;
   }
   .row:hover {
+    background: var(--atrium-bg-hover);
+  }
+  /* Plain `:focus`, not `:focus-visible` — this row is a keyboard-shortcut
+     target (New/Rename/Delete/Reveal act on whichever row holds focus), so
+     it must paint regardless of whether focus arrived via click or Tab.
+     `:focus-visible` is designed to suppress exactly the click-focus case on
+     an element like this one (a `<div tabindex="0">` with no built-in
+     text-editing semantics), which is the primary path these shortcuts are
+     built around: click a row, then press a shortcut. */
+  .row:focus {
+    outline: 1px solid var(--atrium-accent);
+    outline-offset: -1px;
     background: var(--atrium-bg-hover);
   }
   .row.drop-target-active {

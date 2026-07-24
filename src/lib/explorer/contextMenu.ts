@@ -18,6 +18,22 @@ export interface ContextMenuState {
 
 export const contextMenu = writable<ContextMenuState | null>(null);
 
+/**
+ * The FileTreeNode -> FileTree channel for keyboard-originated tree actions
+ * (the five explorer shortcuts), playing the same role for a keyboard chord
+ * that `contextMenu`'s `(x, y, path, isDir)` shape plays for a right-click:
+ * `FileTreeNode.svelte` can't call `FileTree.svelte`'s local handlers
+ * directly (plain component-local `$state`, not exported), so it sets this
+ * store instead and `FileTree.svelte` reacts to it.
+ */
+export interface TreeActionRequest {
+  action: "newFile" | "newFolder" | "rename" | "delete" | "reveal";
+  path: string;
+  isDir: boolean;
+}
+
+export const treeActionRequest = writable<TreeActionRequest | null>(null);
+
 export function openContextMenu(event: MouseEvent, path: string, isDir: boolean): void {
   event.preventDefault();
   contextMenu.set({ x: event.clientX, y: event.clientY, path, isDir });
