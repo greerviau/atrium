@@ -1,7 +1,12 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { handleScrollSettleMousedown, wheelTracker, RECENT_SCROLL_WINDOW_MS } from "../../src/lib/editor/baseExtensions";
+import {
+  handleScrollSettleMousedown,
+  guardFirstFocusScrollPosition,
+  wheelTracker,
+  RECENT_SCROLL_WINDOW_MS,
+} from "../../src/lib/editor/baseExtensions";
 
 let view: EditorView | undefined;
 
@@ -136,5 +141,134 @@ describe("handleScrollSettleMousedown: Part 2 (issue #161)", () => {
     frame.flush();
 
     expect(seenTypes).toEqual(["mousedown"]);
+  });
+});
+
+describe("guardFirstFocusScrollPosition (issue #183)", () => {
+  it("restores the scroll position on the next frame if something moved it while the pane was unfocused", () => {
+    const v = makeView();
+    const frame = stubAnimationFrame();
+    expect(v.hasFocus).toBe(false);
+
+    v.scrollDOM.scrollTop = 4000;
+    const event = dispatchMousedownOn(makeTarget());
+    expect(guardFirstFocusScrollPosition(event, v)).toBe(false);
+
+    // Simulate whatever runs later in this same mousedown's handling (e.g.
+    // CodeMirror's own first-focus path) dropping the scroll position.
+    v.scrollDOM.scrollTop = 0;
+
+    frame.flush();
+
+    expect(v.scrollDOM.scrollTop).toBe(4000);
+  });
+
+  it("does nothing when the scroll position never moved", () => {
+    const v = makeView();
+    const frame = stubAnimationFrame();
+
+    v.scrollDOM.scrollTop = 4000;
+    const event = dispatchMousedownOn(makeTarget());
+    guardFirstFocusScrollPosition(event, v);
+
+    frame.flush();
+
+    expect(v.scrollDOM.scrollTop).toBe(4000);
+  });
+
+  it("does not guard a pane that already has focus", () => {
+    const v = makeView();
+    v.contentDOM.focus();
+    expect(v.hasFocus).toBe(true);
+
+    const frame = stubAnimationFrame();
+    v.scrollDOM.scrollTop = 4000;
+    const event = dispatchMousedownOn(makeTarget());
+    expect(guardFirstFocusScrollPosition(event, v)).toBe(false);
+
+    v.scrollDOM.scrollTop = 0;
+    frame.flush();
+
+    // No restore was scheduled, since the pane already had focus.
+    expect(v.scrollDOM.scrollTop).toBe(0);
+  });
+
+  it("never pre-empts other mousedown handling", () => {
+    const v = makeView();
+    const event = dispatchMousedownOn(makeTarget());
+
+    expect(guardFirstFocusScrollPosition(event, v)).toBe(false);
+  });
+
+  it("skips the capture on a mousedown that Part 2 is about to defer, instead of locking in the pre-settle position", () => {
+    const v = makeView();
+    const frame = stubAnimationFrame();
+    v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+
+    // The compositor hasn't caught up yet — `scrollTop` still reads the
+    // stale, pre-settle position at the moment of this click.
+    v.scrollDOM.scrollTop = 1000;
+    const event = dispatchMousedownOn(makeTarget());
+    expect(guardFirstFocusScrollPosition(event, v)).toBe(false);
+
+    // The scroll settles before the deferred frame runs.
+    v.scrollDOM.scrollTop = 4000;
+    frame.flush();
+
+    // Must land on the settled position — capturing the stale 1000 here
+    // and restoring it on this same frame would roll the settle back,
+    // reintroducing issue #161 for exactly this once-per-file click.
+    expect(v.scrollDOM.scrollTop).toBe(4000);
+  });
+});
+
+describe("guardFirstFocusScrollPosition composed with handleScrollSettleMousedown (issue #183/#161 interaction)", () => {
+  /** Wires both handlers on `target` in the same precedence order `baseExtensions()` gives them in production (`firstFocusScrollGuard` is `Prec.highest`, so it always runs before `scrollSettleMouseHandler`), so a single `mousedown` dispatch — original or replayed — exercises the real composed behavior instead of either handler in isolation. */
+  function installComposedMousedownHandler(target: HTMLElement, v: EditorView): void {
+    target.addEventListener("mousedown", (e) => {
+      const event = e as MouseEvent;
+      if (guardFirstFocusScrollPosition(event, v)) return;
+      handleScrollSettleMousedown(event, v);
+    });
+  }
+
+  it("lands on the settled scroll position, not the pre-settle stale one, for a click deferred into an unfocused pane", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const frame = stubAnimationFrame();
+    installComposedMousedownHandler(target, v);
+
+    v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+    v.scrollDOM.scrollTop = 1000;
+    dispatchMousedownOn(target, 5, 5);
+
+    // Settles before the deferred replay's frame runs.
+    v.scrollDOM.scrollTop = 4000;
+    frame.flush();
+
+    expect(v.scrollDOM.scrollTop).toBe(4000);
+  });
+
+  it("still restores a scroll position dropped while handling the deferred replay itself", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const frame = stubAnimationFrame();
+    installComposedMousedownHandler(target, v);
+
+    v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+    v.scrollDOM.scrollTop = 1000;
+    dispatchMousedownOn(target, 5, 5);
+    v.scrollDOM.scrollTop = 4000;
+
+    // Dispatches the replayed mousedown, which re-enters the guard (still
+    // unfocused) and arms a fresh restore for whatever happens next.
+    frame.flush();
+
+    // Something else — e.g. CodeMirror's own first-focus path — drops the
+    // scroll position as a further effect of that same replayed mousedown.
+    v.scrollDOM.scrollTop = 0;
+    frame.flush();
+
+    expect(v.scrollDOM.scrollTop).toBe(4000);
   });
 });
