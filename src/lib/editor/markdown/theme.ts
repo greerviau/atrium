@@ -20,6 +20,8 @@ export const CLASS = {
   tableDelimiterLine: "cm-table-delimiter-line",
   tableAlignCenter: "cm-table-align-center",
   tableAlignRight: "cm-table-align-right",
+  tableRowSelected: "cm-table-row-selected",
+  tableColSelected: "cm-table-col-selected",
   codeBlock: "cm-code-block",
   blockquote: "cm-blockquote",
   mermaidDiagram: "cm-mermaid-diagram",

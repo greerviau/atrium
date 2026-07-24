@@ -7,6 +7,7 @@ import { syntaxTree } from "@codemirror/language";
 import { buildDecorations, buildMermaidWidgetDecorations, buildTableGapAtomicRanges, buildTableWrapRanges } from "./decorations";
 import { handleLinkClick } from "./widgets";
 import { tableNavigationKeymap } from "./tableEdit";
+import { tableColumnBarMeasurePlugin, tableHoverField } from "./tableHandles";
 
 /**
  * Tracks whether the editor's `contentDOM` currently has DOM focus, driven
@@ -65,6 +66,10 @@ const focusTrackingHandlers = EditorView.domEventHandlers({
  * the viewport, selection, or focus, since a `BlockWrapper`'s range is a
  * structural property of the table itself, not of what's currently
  * revealed.
+ *
+ * Also rebuilds decorations on a `tableHoverField` change, so hovering or
+ * clicking a table row/column handle applies its highlight class the same
+ * update it's dispatched in.
  */
 function livePreviewPlugin(documentPath: string) {
   const plugin = ViewPlugin.fromClass(
@@ -73,17 +78,25 @@ function livePreviewPlugin(documentPath: string) {
       tableWraps: RangeSet<BlockWrapper>;
 
       constructor(view: EditorView) {
-        this.decorations = buildDecorations(view.state, view.visibleRanges, documentPath, view.state.field(editorFocusField));
+        this.decorations = buildDecorations(
+          view.state,
+          view.visibleRanges,
+          documentPath,
+          view.state.field(editorFocusField),
+          view.state.field(tableHoverField),
+        );
         this.tableWraps = buildTableWrapRanges(view.state);
       }
 
       update(update: ViewUpdate) {
         const focusChanged = update.startState.field(editorFocusField) !== update.state.field(editorFocusField);
+        const hoverChanged = update.startState.field(tableHoverField) !== update.state.field(tableHoverField);
         if (
           update.docChanged ||
           update.selectionSet ||
           update.viewportChanged ||
           focusChanged ||
+          hoverChanged ||
           syntaxTree(update.startState) !== syntaxTree(update.state)
         ) {
           this.decorations = buildDecorations(
@@ -91,6 +104,7 @@ function livePreviewPlugin(documentPath: string) {
             update.view.visibleRanges,
             documentPath,
             update.state.field(editorFocusField),
+            update.state.field(tableHoverField),
           );
         }
         if (update.docChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
@@ -216,9 +230,11 @@ export function markdownExtensions(documentPath: string): Extension[] {
   return [
     markdown({ base: markdownLanguage, codeLanguages: languages }),
     editorFocusField,
+    tableHoverField,
     focusTrackingHandlers,
     livePreviewPlugin(documentPath),
     mermaidWidgetField,
+    tableColumnBarMeasurePlugin,
     linkClickHandler,
     Prec.highest(keymap.of(tableNavigationKeymap)),
   ];
