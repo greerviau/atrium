@@ -4,7 +4,13 @@ import { BlockWrapper, Decoration, EditorView, ViewPlugin, ViewUpdate, keymap, l
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { syntaxTree } from "@codemirror/language";
-import { buildDecorations, buildMermaidWidgetDecorations, buildTableGapAtomicRanges, buildTableWrapRanges } from "./decorations";
+import {
+  buildCodeBlockWrapRanges,
+  buildDecorations,
+  buildMermaidWidgetDecorations,
+  buildTableGapAtomicRanges,
+  buildTableWrapRanges,
+} from "./decorations";
 import { handleLinkClick } from "./widgets";
 import { tableNavigationKeymap } from "./tableEdit";
 import {
@@ -67,11 +73,14 @@ const focusTrackingHandlers = EditorView.domEventHandlers({
  * land inside it.
  *
  * And provides `EditorView.blockWrappers` with one `.cm-table-box` per
- * `Table` node (`buildTableWrapRanges`), recomputed only on a doc change or
- * syntax-tree-identity change — unlike `decorations`, this never depends on
- * the viewport, selection, or focus, since a `BlockWrapper`'s range is a
- * structural property of the table itself, not of what's currently
- * revealed.
+ * `Table` node (`buildTableWrapRanges`) and one `.cm-code-block-box` per
+ * non-mermaid fenced/indented code block (`buildCodeBlockWrapRanges`), both
+ * recomputed only on a doc change or syntax-tree-identity change — unlike
+ * `decorations`, neither depends on the viewport, selection, or focus, since
+ * a `BlockWrapper`'s range is a structural property of the block itself, not
+ * of what's currently revealed. `EditorView.blockWrappers` is an ordinary
+ * multi-input facet, so the two wrapper sets are provided as two separate
+ * facet inputs below rather than merged into one `RangeSet` here.
  *
  * Also rebuilds decorations on a `tableHoverField`/`tableSelectionField`
  * change, so hovering or clicking a table row/column handle applies its
@@ -82,6 +91,7 @@ function livePreviewPlugin(documentPath: string) {
     class {
       decorations: DecorationSet;
       tableWraps: RangeSet<BlockWrapper>;
+      codeBlockWraps: RangeSet<BlockWrapper>;
 
       constructor(view: EditorView) {
         this.decorations = buildDecorations(
@@ -93,6 +103,7 @@ function livePreviewPlugin(documentPath: string) {
           view.state.field(tableSelectionField),
         );
         this.tableWraps = buildTableWrapRanges(view.state);
+        this.codeBlockWraps = buildCodeBlockWrapRanges(view.state);
       }
 
       update(update: ViewUpdate) {
@@ -119,6 +130,7 @@ function livePreviewPlugin(documentPath: string) {
         }
         if (update.docChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
           this.tableWraps = buildTableWrapRanges(update.state);
+          this.codeBlockWraps = buildCodeBlockWrapRanges(update.state);
         }
       }
     },
@@ -136,6 +148,10 @@ function livePreviewPlugin(documentPath: string) {
     EditorView.blockWrappers.of((view) => {
       const value = view.plugin(plugin);
       return value ? value.tableWraps : BlockWrapper.set([]);
+    }),
+    EditorView.blockWrappers.of((view) => {
+      const value = view.plugin(plugin);
+      return value ? value.codeBlockWraps : BlockWrapper.set([]);
     }),
   ];
 }
@@ -236,6 +252,16 @@ const linkClickHandler = EditorView.domEventHandlers({
  * (on the cursor being inside a table, or on a selection actually being
  * pinned) and falls through (returns `false`) otherwise, so outranking the
  * generic keymap never changes behavior outside those cases.
+ *
+ * `EditorView.contentAttributes.of({ class: "cm-md-rendered" })` marks this
+ * pane's `.cm-content` (the same mechanism `EditorView.lineWrapping` itself
+ * uses for `cm-lineWrapping`, and `combineAttrs` concatenates the two into
+ * one space-joined class list) so `markdown.css`'s reading-column rules
+ * (prose max-width, `.cm-code-block-box`, `.cm-table-box`,
+ * `.cm-mermaid-diagram`) can be scoped to the rendered pane only.
+ * `markdownSourceExtensions` below gains no such marker, so the raw source
+ * pane's `.cm-content` never matches those rules and keeps rendering exactly
+ * as it does today.
  */
 export function markdownExtensions(documentPath: string): Extension[] {
   return [
@@ -249,6 +275,7 @@ export function markdownExtensions(documentPath: string): Extension[] {
     tableGeometryMeasurePlugin,
     clearTableSelectionOnClickElsewhere,
     linkClickHandler,
+    EditorView.contentAttributes.of({ class: "cm-md-rendered" }),
     Prec.highest(keymap.of([...tableNavigationKeymap, ...tableSelectionKeymap])),
   ];
 }

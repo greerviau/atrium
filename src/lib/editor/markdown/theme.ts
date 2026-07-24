@@ -23,6 +23,7 @@ export const CLASS = {
   tableRowSelected: "cm-table-row-selected",
   tableColSelected: "cm-table-col-selected",
   codeBlock: "cm-code-block",
+  codeBlockBox: "cm-code-block-box",
   blockquote: "cm-blockquote",
   mermaidDiagram: "cm-mermaid-diagram",
   mermaidError: "cm-mermaid-error",

@@ -986,6 +986,56 @@ export function buildTableWrapRanges(state: EditorState): RangeSet<BlockWrapper>
 }
 
 /**
+ * Builds one `BlockWrapper` per fenced/indented code block in the whole
+ * document — a real `<div class="cm-code-block-box scrollbar-autohide">` DOM
+ * parent of that block's own `.cm-code-block` lines, modeled directly on
+ * `buildTableWrapRanges` above (same pruning to `BLOCK_CONTAINER_NODES`, same
+ * physical-line-start `from` so a block nested inside a blockquote or list is
+ * fully wrapped, marker and all). This is what lets `markdown.css` cap the
+ * block's own width and trap a too-wide line's overflow inside it instead of
+ * inflating `.cm-content` (see the plan this implements — the reverted
+ * #146/#135 per-line `overflow-x` attempt is exactly what this wrapper-per-block
+ * shape avoids repeating, since one shared `scrollLeft` now governs every line
+ * in the block together).
+ *
+ * A `` ```mermaid `` fence is deliberately excluded, structurally rather than
+ * by cursor/focus state: `extractMermaidSource` returning non-`null` means
+ * the fence's own `CodeInfo` tag is (trimmed, case-insensitive) `mermaid`,
+ * independent of whether the cursor currently has it open as raw source or
+ * `buildMermaidWidgetDecorations` is rendering it as a diagram widget. Every
+ * line inside a `BlockWrapper`'s range gets wrapped, block widgets included,
+ * so wrapping a mermaid fence unconditionally would enclose a rendered
+ * diagram's `<svg>` in code-block chrome — a visible regression on the
+ * shipped Mermaid feature (#67, #82). A mermaid block currently being edited
+ * (raw source shown, no diagram widget) is therefore left with no wrapper and
+ * no width cap — an accepted, narrow, self-resolving gap (see the plan).
+ */
+export function buildCodeBlockWrapRanges(state: EditorState): RangeSet<BlockWrapper> {
+  const wrappers: Range<BlockWrapper>[] = [];
+  syntaxTree(state).iterate({
+    enter(ref) {
+      if (ref.name === "FencedCode" || ref.name === "CodeBlock") {
+        if (ref.name === "FencedCode" && extractMermaidSource(state, ref.node) !== null) {
+          return false;
+        }
+        const wrapperFrom = state.doc.lineAt(ref.from).from;
+        wrappers.push(
+          BlockWrapper.create({ tagName: "div", attributes: { class: `${CLASS.codeBlockBox} scrollbar-autohide` } }).range(
+            wrapperFrom,
+            ref.to,
+          ),
+        );
+        return false;
+      }
+      if (ref.name !== "Document" && !BLOCK_CONTAINER_NODES.has(ref.name)) {
+        return false;
+      }
+    },
+  });
+  return BlockWrapper.set(wrappers, true);
+}
+
+/**
  * Decorates an unordered list item's `ListMark` (`-`/`*`/`+`) with a
  * `ListBulletWidget` — a fixed CSS-generated bullet, since every marker
  * renders the same glyph regardless of position, unlike an ordered marker's
