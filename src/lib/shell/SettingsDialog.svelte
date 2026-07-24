@@ -14,7 +14,9 @@
   import {
     SETTINGS_CATEGORIES,
     SETTINGS_SECTIONS,
+    SETTINGS_TABPANEL_ID,
     sectionMatchesQuery,
+    settingsTabId,
     type SettingsCategoryId,
   } from "../settings/settingsRegistry";
 
@@ -187,7 +189,13 @@
           onSelect={(id) => (selectedCategory = id)}
         />
 
-        <div class="settings-content" role="tabpanel" aria-label={currentCategoryLabel}>
+        <div
+          class="settings-content"
+          id={SETTINGS_TABPANEL_ID}
+          role="tabpanel"
+          aria-labelledby={settingsTabId(selectedCategory)}
+          aria-label={currentCategoryLabel}
+        >
           {#if selectedCategory === "general" && isSectionVisible("recent-projects")}
             <SettingsSection
               title="Recent Projects"
