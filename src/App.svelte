@@ -80,6 +80,14 @@
   let terminalPaneTree = $state<PaneNode | null>(null);
   let focusedPaneId = $state<string | null>(null);
 
+  // Which of the two split-pane surfaces — the terminal dock or the
+  // editor's own split panes — last had focus, so a global split-direction
+  // shortcut (with no specific pane of its own to act on) knows which one to
+  // route to. Set alongside every existing terminal-focus assignment below
+  // (to "terminal") and every existing editor-focus assignment further down
+  // (to "editor"); see `splitFocusedSurface`.
+  let lastFocusedSurface = $state<"terminal" | "editor" | null>(null);
+
   // Blocks the auto-spawn effect (below) from immediately retrying right
   // after a session's own shell exits within CRASH_EXIT_WINDOW_MS of being
   // spawned, as opposed to its tab being closed via the × button or a
@@ -105,6 +113,7 @@
   // Adds a new tab to a specific panel — used by that panel's own `+` button,
   // where the target pane id is already known.
   function addTabToPane(paneId: string): void {
+    lastFocusedSurface = "terminal";
     const root = $workspace.root;
     if (!root || !terminalPaneTree) return;
     terminalPaneTree = addTabToLeaf(terminalPaneTree, paneId, spawnSession(root));
@@ -115,6 +124,7 @@
   // their own to act on: opens the first panel if the dock is empty,
   // otherwise adds a tab to whichever panel last had focus.
   function newTerminalTab(): void {
+    lastFocusedSurface = "terminal";
     const root = $workspace.root;
     if (!root) return;
     suppressAutoSpawn = false;
@@ -134,6 +144,7 @@
   // Code's default: a split is immediately followed by typing into the new
   // shell, not the old one).
   function splitPaneAt(paneId: string, direction: SplitDirection): void {
+    lastFocusedSurface = "terminal";
     const root = $workspace.root;
     if (!terminalPaneTree || !root) return;
     // A new panel's first tab always starts at the workspace root, matching
@@ -152,6 +163,55 @@
     const target =
       focusedPaneId && findLeaf(terminalPaneTree, focusedPaneId) ? focusedPaneId : listLeaves(terminalPaneTree)[0]?.id;
     if (target) splitPaneAt(target, direction);
+  }
+
+  // Used by the four ⌥⌘-arrow split-direction shortcuts, which route to
+  // whichever surface — terminal or editor — last had focus rather than
+  // acting on a specific pane of their own; see `splitFocusedSurface`.
+  function splitFocusedEditorPane(direction: SplitDirection): void {
+    if (!$editorPaneTree) return;
+    const target =
+      $focusedEditorPaneId && findEditorLeaf($editorPaneTree, $focusedEditorPaneId)
+        ? $focusedEditorPaneId
+        : listEditorLeaves($editorPaneTree)[0]?.id;
+    if (target) splitEditorPaneAt(target, direction);
+  }
+
+  // The four ⌥⌘-arrow menu items (§ issue #156) share one dispatch, unlike
+  // `splitFocusedPane` above (still exclusively wired to the pre-existing
+  // ⌘\ terminal-only alias): each of these needs to decide, at the moment
+  // it fires, which surface to act on. Prefers whichever of the terminal
+  // dock or the editor's split panes `lastFocusedSurface` names, as long as
+  // that surface is currently eligible — the terminal is only eligible while
+  // its dock is visible *and* has a pane tree at all (hiding the dock never
+  // tears the tree down, so a hidden dock must still be treated as "can't
+  // act on it," not just "empty"); the editor is eligible whenever it has a
+  // pane tree. Falls back to whichever eligible surface exists, preferring
+  // the terminal (matching today's ⌘\ behavior when nothing has explicitly
+  // claimed focus yet), and is a silent no-op if neither is eligible (e.g.
+  // before any file has been opened and the terminal dock is hidden).
+  function splitFocusedSurface(direction: SplitDirection): void {
+    const terminalEligible = terminalPaneTree !== null && $terminalVisible;
+    const editorEligible = $editorPaneTree !== null;
+
+    let target: "terminal" | "editor" | null;
+    if (lastFocusedSurface === "terminal" && terminalEligible) {
+      target = "terminal";
+    } else if (lastFocusedSurface === "editor" && editorEligible) {
+      target = "editor";
+    } else if (terminalEligible) {
+      target = "terminal";
+    } else if (editorEligible) {
+      target = "editor";
+    } else {
+      target = null;
+    }
+
+    if (target === "terminal") {
+      splitFocusedPane(direction);
+    } else if (target === "editor") {
+      splitFocusedEditorPane(direction);
+    }
   }
 
   function removeTabFromPane(paneId: string, sessionId: string): void {
@@ -194,6 +254,7 @@
   }
 
   function setActiveTabInPane(paneId: string, sessionId: string): void {
+    lastFocusedSurface = "terminal";
     if (!terminalPaneTree) return;
     terminalPaneTree = setActiveTabInLeaf(terminalPaneTree, paneId, sessionId);
     focusedPaneId = paneId;
@@ -205,6 +266,7 @@
   }
 
   function setFocusedPane(paneId: string): void {
+    lastFocusedSurface = "terminal";
     focusedPaneId = paneId;
   }
 
@@ -241,11 +303,13 @@
   }
 
   function setFocusedEditorPane(paneId: string): void {
+    lastFocusedSurface = "editor";
     $focusedEditorPaneId = paneId;
     syncActiveTabToFocusedPane();
   }
 
   function setActiveTabInEditorPane(paneId: string, path: string): void {
+    lastFocusedSurface = "editor";
     if (!$editorPaneTree) return;
     $editorPaneTree = setActiveTabInEditorLeaf($editorPaneTree, paneId, path);
     $focusedEditorPaneId = paneId;
@@ -259,6 +323,7 @@
   // whichever one the user had selected (scenario 2, "split just the active
   // tab") — the original pane's own tab strip is never touched either way.
   function splitEditorPaneAt(paneId: string, direction: SplitDirection): void {
+    lastFocusedSurface = "editor";
     if (!$editorPaneTree) return;
     const activePath = findEditorLeaf($editorPaneTree, paneId)?.activeTabPath;
     if (!activePath) return;
@@ -324,6 +389,7 @@
       const paneId = genId("epane");
       $editorPaneTree = { type: "leaf", id: paneId, tabs: [path], activeTabPath: path };
       $focusedEditorPaneId = paneId;
+      lastFocusedSurface = "editor";
       return;
     }
 
@@ -465,7 +531,7 @@
       // just applied.
       saveTerminalLayout({ position: $terminalPosition, height: terminalHeight, width: terminalWidth });
     }
-    void initMenuBar(newTerminalTab, () => splitFocusedPane("right"));
+    void initMenuBar(newTerminalTab, () => splitFocusedPane("right"), splitFocusedSurface);
     void onFsChanged((event) => {
       void reconcileExternalChange(event.path);
       void refreshDirectoryContaining(event.path);

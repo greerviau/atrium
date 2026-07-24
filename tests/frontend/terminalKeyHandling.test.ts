@@ -38,7 +38,15 @@ function setupTerminal(isMacPlatform: boolean) {
 // not `event.key` — real browsers still populate it on a physical keypress,
 // so a synthetic event needs it set explicitly for xterm's default encoding
 // to recognize the key at all.
-const KEY_CODES: Record<string, number> = { Enter: 13, b: 66, r: 82 };
+const KEY_CODES: Record<string, number> = {
+  Enter: 13,
+  b: 66,
+  r: 82,
+  ArrowUp: 38,
+  ArrowDown: 40,
+  ArrowLeft: 37,
+  ArrowRight: 39,
+};
 
 function dispatchKeydown(
   terminal: Terminal,
@@ -133,6 +141,15 @@ describe("handleTerminalKeyEvent wired into a real xterm.js Terminal", () => {
     expect(received.join("")).toBe("");
   });
 
+  it("excludes the four split-direction chords (⌥⌘-arrow) from xterm's own encoding on macOS", () => {
+    for (const key of ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]) {
+      const { terminal, writeToPty, received } = setupTerminal(true);
+      dispatchKeydown(terminal, { key, metaKey: true, altKey: true });
+      expect(writeToPty).not.toHaveBeenCalled();
+      expect(received.join("")).toBe("");
+    }
+  });
+
   it("remaps Shift+Enter on macOS the same as elsewhere", () => {
     const { terminal, writeToPty, received } = setupTerminal(true);
 
@@ -198,5 +215,32 @@ describe("handleTerminalKeyEvent as a pure function", () => {
     });
     expect(keyupResult).toBe(true);
     expect(writeToPty).not.toHaveBeenCalled();
+  });
+
+  it("returns false (skip xterm's own encoding) for ⌘⌥-arrow on macOS, one direction at a time", () => {
+    const writeToPty = vi.fn<(data: string) => void>();
+    for (const key of ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]) {
+      const event = new KeyboardEvent("keydown", { key, metaKey: true, altKey: true });
+      expect(handleTerminalKeyEvent(event, { isMacPlatform: true, writeToPty })).toBe(false);
+    }
+    expect(writeToPty).not.toHaveBeenCalled();
+  });
+
+  it("returns false (skip xterm's own encoding) for Ctrl+⌥-arrow off macOS, where CmdOrCtrl resolves to Ctrl", () => {
+    const writeToPty = vi.fn<(data: string) => void>();
+    const event = new KeyboardEvent("keydown", { key: "ArrowRight", ctrlKey: true, altKey: true });
+    expect(handleTerminalKeyEvent(event, { isMacPlatform: false, writeToPty })).toBe(false);
+  });
+
+  it("leaves a bare Alt+Arrow (no Cmd/Ctrl) to xterm's own default word-navigation encoding", () => {
+    const writeToPty = vi.fn<(data: string) => void>();
+    const event = new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true });
+    expect(handleTerminalKeyEvent(event, { isMacPlatform: true, writeToPty })).toBe(true);
+  });
+
+  it("leaves a bare Cmd+Arrow (no Alt) alone — only the combined chord is excluded", () => {
+    const writeToPty = vi.fn<(data: string) => void>();
+    const event = new KeyboardEvent("keydown", { key: "ArrowRight", metaKey: true });
+    expect(handleTerminalKeyEvent(event, { isMacPlatform: true, writeToPty })).toBe(true);
   });
 });

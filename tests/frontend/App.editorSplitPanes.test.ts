@@ -75,7 +75,7 @@ describe("App editor split panes (issue #158)", () => {
 
     const splitButton = container.querySelector('button[aria-label="Split editor"]')!;
     await fireEvent.click(splitButton);
-    const rightItem = [...container.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent === "Split Right")!;
+    const rightItem = [...container.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent?.startsWith("Split Right"))!;
     await fireEvent.click(rightItem);
     await tick();
 
@@ -114,7 +114,7 @@ describe("App editor split panes (issue #158)", () => {
 
     const splitButton = container.querySelector('button[aria-label="Split editor"]')!;
     await fireEvent.click(splitButton);
-    const rightItem = [...container.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent === "Split Right")!;
+    const rightItem = [...container.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent?.startsWith("Split Right"))!;
     await fireEvent.click(rightItem);
     await tick();
 
@@ -138,7 +138,7 @@ describe("App editor split panes (issue #158)", () => {
 
     const splitButton = container.querySelector('button[aria-label="Split editor"]')!;
     await fireEvent.click(splitButton);
-    const rightItem = [...container.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent === "Split Right")!;
+    const rightItem = [...container.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent?.startsWith("Split Right"))!;
     await fireEvent.click(rightItem);
     await tick();
 
@@ -167,7 +167,7 @@ describe("App editor split panes (issue #158)", () => {
     // now-focused (new) pane so the two panes show different files.
     const splitButton = container.querySelector('button[aria-label="Split editor"]')!;
     await fireEvent.click(splitButton);
-    const rightItem = [...container.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent === "Split Right")!;
+    const rightItem = [...container.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent?.startsWith("Split Right"))!;
     await fireEvent.click(rightItem);
     await tick();
 

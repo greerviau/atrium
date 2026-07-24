@@ -31,6 +31,7 @@ describe("MenuBar help links", () => {
     await initMenuBar(
       () => {},
       () => {},
+      () => {},
     );
   });
 
@@ -61,5 +62,39 @@ describe("MenuBar help links", () => {
     await new Promise((r) => setTimeout(r, 0));
 
     expect(showErrorToast).not.toHaveBeenCalled();
+  });
+});
+
+describe("MenuBar split-direction events (issue #156)", () => {
+  it("routes each menu:split-* event through onSplitDirection with the right direction", async () => {
+    handlers.clear();
+    const onSplitDirection = vi.fn();
+    await initMenuBar(
+      () => {},
+      () => {},
+      onSplitDirection,
+    );
+
+    handlers.get("menu:split-up")?.();
+    handlers.get("menu:split-down")?.();
+    handlers.get("menu:split-left")?.();
+    handlers.get("menu:split-right")?.();
+
+    expect(onSplitDirection).toHaveBeenNthCalledWith(1, "up");
+    expect(onSplitDirection).toHaveBeenNthCalledWith(2, "down");
+    expect(onSplitDirection).toHaveBeenNthCalledWith(3, "left");
+    expect(onSplitDirection).toHaveBeenNthCalledWith(4, "right");
+  });
+
+  it("still routes menu:split-terminal through the separate onSplitTerminal callback, not onSplitDirection", async () => {
+    handlers.clear();
+    const onSplitTerminal = vi.fn();
+    const onSplitDirection = vi.fn();
+    await initMenuBar(() => {}, onSplitTerminal, onSplitDirection);
+
+    handlers.get("menu:split-terminal")?.();
+
+    expect(onSplitTerminal).toHaveBeenCalledTimes(1);
+    expect(onSplitDirection).not.toHaveBeenCalled();
   });
 });
