@@ -14,10 +14,12 @@
   import { tabsState, setActiveTab, requestCloseTab, reconcileExternalChange } from "./lib/stores/tabs";
   import { closePrompt } from "./lib/stores/closePrompt";
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
+  import { get } from "svelte/store";
   import { onFsChanged, onDockOpenPath, onCloseRequested, onDragDropEvent } from "./lib/ipc/events";
   import { insertPathsAtScreenPoint } from "./lib/terminal/terminalDropTargets";
   import { resolveExplorerDropTargetDir } from "./lib/explorer/explorerDropTargets";
   import { importPathsInto } from "./lib/explorer/importExternalPaths";
+  import { dragOverTargetDir } from "./lib/explorer/explorerDrag";
   import { workspaceTakePendingOpen, appConfirmClose } from "./lib/ipc/commands";
   import { initMenuBar } from "./lib/shell/MenuBar";
   import {
@@ -445,6 +447,13 @@
     window.addEventListener("pointerup", onUp);
   }
 
+  // Avoids notifying every row's `$derived` read of dragOverTargetDir on
+  // every "over" tick (pointer-move rate) when the resolved target hasn't
+  // actually changed.
+  function setDragOverTargetDir(next: string | null): void {
+    if (get(dragOverTargetDir) !== next) dragOverTargetDir.set(next);
+  }
+
   onMount(() => {
     if (mainEl) {
       terminalHeight = clampToContainer(terminalHeight, HEIGHT_MIN, mainEl.clientHeight);
@@ -463,7 +472,16 @@
     });
     void onDockOpenPath((path) => void openWorkspacePath(path));
     void onDragDropEvent((event) => {
-      if (event.type !== "drop") return;
+      if (event.type === "leave") {
+        setDragOverTargetDir(null);
+        return;
+      }
+      if (event.type === "enter" || event.type === "over") {
+        const logical = event.position.toLogical(window.devicePixelRatio);
+        setDragOverTargetDir(resolveExplorerDropTargetDir(logical.x, logical.y));
+        return;
+      }
+      setDragOverTargetDir(null);
       const logical = event.position.toLogical(window.devicePixelRatio);
       const dir = resolveExplorerDropTargetDir(logical.x, logical.y);
       if (dir) {
@@ -472,6 +490,7 @@
       }
       insertPathsAtScreenPoint(event.paths, logical.x, logical.y);
     });
+    window.addEventListener("blur", () => setDragOverTargetDir(null));
     void onCloseRequested(() => {
       const dirty = $tabsState.tabs.filter((t) => t.isDirty);
       if (dirty.length === 0) {
