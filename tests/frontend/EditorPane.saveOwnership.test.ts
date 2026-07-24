@@ -7,12 +7,13 @@ import { focusedEditorPaneId, editorPaneTree } from "../../src/lib/stores/editor
 import type { EditorPaneNode } from "../../src/lib/editor/editorPaneTree";
 import * as commands from "../../src/lib/ipc/commands";
 
-// A path open in two split panes has two independent, unsynced `EditorPane`
-// instances (PR1's own scope — no live content sync yet), so a single save
-// request naming just the path is ambiguous unless exactly one instance
-// responds: see the `isSaveOwner` derived value and `saveOwnerLeafId`'s own
-// doc comment for the fix and why a plain `active`-only guard isn't enough
-// (a background save — e.g. "Save All" on a dirty tab that isn't the
+// A path open in two split panes has two independent `EditorPane` instances
+// kept in content sync (`editorViewRegistry.ts`), but a single save request
+// naming just the path is still ambiguous unless exactly one instance
+// responds — otherwise the same, now-identical buffer gets written to disk
+// once per pane. See the `isSaveOwner` derived value and `saveOwnerLeafId`'s
+// own doc comment for the fix and why a plain `active`-only guard isn't
+// enough (a background save — e.g. "Save All" on a dirty tab that isn't the
 // focused pane's own active tab — would otherwise get no responder at all).
 vi.mock("../../src/lib/ipc/commands", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/lib/ipc/commands")>();

@@ -17,6 +17,7 @@
   } from "../stores/tabs";
   import { focusedEditorPaneId, editorPaneTree } from "../stores/editorPanes";
   import { saveOwnerLeafId } from "./editorPaneTree";
+  import { registerView, unregisterView, liveDocFor, createSyncDispatch, syncAnnotation } from "./editorViewRegistry";
   import { theme as themeStore } from "../stores/theme";
   import { buildCmTheme, buildHighlightStyle } from "../theme/cmTheme";
   import { minimapEnabled } from "../stores/minimapEnabled";
@@ -61,10 +62,10 @@
   // True for exactly one EditorPane instance among possibly several showing
   // `filePath` — the one that should actually write to disk when a save is
   // requested for this path. Without this, a `saveTab` request would fire
-  // once per pane showing the path, racing independent, possibly-diverged
-  // buffers (no live content sync between split views yet) against each
-  // other for the disk. See `saveOwnerLeafId`'s own doc comment for which
-  // pane wins and why.
+  // once per pane showing the path — redundant disk writes of the same,
+  // now-synced buffer (see `editorViewRegistry.ts`) rather than a
+  // divergence risk. See `saveOwnerLeafId`'s own doc comment for which pane
+  // wins and why.
   const isSaveOwner = $derived($editorPaneTree !== null && saveOwnerLeafId($editorPaneTree, filePath, $focusedEditorPaneId) === paneId);
 
   let container: HTMLDivElement;
@@ -302,13 +303,16 @@
       }),
     ];
 
+    const seedDoc = liveDocFor(filePath) ?? initialTab?.savedDoc ?? "";
     view = new EditorView({
       state: EditorState.create({
-        doc: initialTab?.savedDoc ?? "",
+        doc: seedDoc,
         extensions,
       }),
       parent: container,
+      dispatchTransactions: createSyncDispatch(filePath),
     });
+    registerView(filePath, view);
     detachScrollbarAutoHide = attachScrollbarAutoHide(view.scrollDOM);
 
     if (lastAppliedActive) {
@@ -332,6 +336,7 @@
   onDestroy(() => {
     cancelMinimapIdle();
     detachScrollbarAutoHide?.();
+    unregisterView(filePath, view);
     view?.destroy();
     if ($tabsState.activeTabPath === null) {
       clearCursorPosition();
@@ -456,6 +461,7 @@
       const cursorLine = view.state.doc.lineAt(view.state.selection.main.head).number;
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: current.savedDoc },
+        annotations: [syncAnnotation.of(true)],
       });
       const newLineCount = view.state.doc.lines;
       const targetLine = Math.min(cursorLine, newLineCount);

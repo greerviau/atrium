@@ -92,11 +92,12 @@ export function pruneMissingTabs(tree: EditorPaneNode, openPaths: ReadonlySet<st
 /**
  * Which single leaf's own `EditorPane` instance should respond when `path`
  * is requested to save (`src/lib/stores/tabs.ts`'s `saveRequest`/`requestSave`),
- * given that — with no live content sync yet between split views of the same
- * path (PR1's own scope) — a save request naming just a bare path is
- * otherwise ambiguous the instant that path is open in more than one leaf:
- * every instance would independently write its own, possibly-diverged
- * buffer, racing each other for which write lands last on disk.
+ * given that a save request naming just a bare path is otherwise ambiguous
+ * the instant that path is open in more than one leaf: every instance would
+ * independently write to disk in response to the same request, which is
+ * wasted work (`N` redundant writes of the same, now-synced buffer) even
+ * though `editorViewRegistry.ts` keeps every view of `path` on identical
+ * content.
  *
  * Prefers the focused pane when it's one of the leaves showing `path` (the
  * common case: `Cmd+S`/`File > Save` always requests a save for
