@@ -5,7 +5,12 @@ import { EditorState, EditorSelection } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
-import { buildDecorations, buildMermaidWidgetDecorations, buildTableWrapRanges } from "../../src/lib/editor/markdown/decorations";
+import {
+  buildCodeBlockWrapRanges,
+  buildDecorations,
+  buildMermaidWidgetDecorations,
+  buildTableWrapRanges,
+} from "../../src/lib/editor/markdown/decorations";
 import { CheckboxWidget, EmptyCellWidget, ImageWidget, ListBulletWidget, ListMarkerWidget, MermaidWidget } from "../../src/lib/editor/markdown/widgets";
 import {
   AddColumnBandWidget,
@@ -14,7 +19,7 @@ import {
   TableColumnBarWidget,
   type TableHoverState,
 } from "../../src/lib/editor/markdown/tableHandles";
-import { markdownSourceExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
+import { markdownExtensions, markdownSourceExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
 
 const markdownCss = readFileSync(resolve(__dirname, "../../src/styles/markdown.css"), "utf-8");
 
@@ -1583,7 +1588,7 @@ describe("buildDecorations: mermaid fenced blocks", () => {
     );
   });
 
-  it("falls back to normal fenced-code decorations when the cursor is on the mermaid block", () => {
+  it("falls back to normal fenced-code decorations when the cursor is on the mermaid block, with no code-block-box wrapper (issue #199, PR #223 review round 1)", () => {
     const doc = "```mermaid\ngraph TD;\nA-->B;\n```\n\nafter";
     const state = stateFor(doc, doc.indexOf("A-->B"));
 
@@ -1598,6 +1603,17 @@ describe("buildDecorations: mermaid fenced blocks", () => {
     expect(decos.some((d) => d.isReplace && !d.class && d.from === openLine.from && d.to === openLine.to)).toBe(
       false,
     );
+    // The exclusion is structural (extractMermaidSource's CodeInfo check),
+    // not cursor/focus-gated, so this block gets no .cm-code-block-box
+    // wrapper even while its raw source is what's actually rendering —
+    // meaning these cm-code-block lines render with no wrapper ancestor to
+    // supply chrome/inset, and must carry their own (see markdown.css's
+    // .cm-code-block rule).
+    const wraps: { from: number; to: number }[] = [];
+    buildCodeBlockWrapRanges(state).between(0, state.doc.length, (from, to) => {
+      wraps.push({ from, to });
+    });
+    expect(wraps).toEqual([]);
   });
 
   it("leaves a non-mermaid fenced block completely unaffected", () => {
@@ -2118,6 +2134,43 @@ describe("markdownSourceExtensions", () => {
     expect(container.querySelector(".cm-lineNumbers")).not.toBeNull();
     view.destroy();
   });
+
+  // Issue #199: the reading-column CSS rules are scoped to `.cm-md-rendered`
+  // so they never reach this pane; confirming the marker is genuinely absent
+  // here (and present only on the rendered pane, below) is what makes that
+  // scoping decision a verified fact rather than an assumption.
+  it("does not carry the cm-md-rendered marker (reading-column rules must not reach the source view)", () => {
+    const container = document.createElement("div");
+    const view = new EditorView({
+      state: EditorState.create({ doc: "line one\nline two\n", extensions: markdownSourceExtensions("test.md") }),
+      parent: container,
+    });
+    expect(view.contentDOM.classList.contains("cm-md-rendered")).toBe(false);
+    view.destroy();
+  });
+});
+
+describe("markdownExtensions: cm-md-rendered scoping marker (issue #199)", () => {
+  it("marks the rendered pane's .cm-content with cm-md-rendered", () => {
+    const container = document.createElement("div");
+    const view = new EditorView({
+      state: EditorState.create({ doc: "prose\n", extensions: markdownExtensions("test.md") }),
+      parent: container,
+    });
+    expect(view.contentDOM.classList.contains("cm-md-rendered")).toBe(true);
+    view.destroy();
+  });
+
+  it("composes alongside cm-lineWrapping (EditorPane.svelte's own extension) rather than replacing it", () => {
+    const container = document.createElement("div");
+    const view = new EditorView({
+      state: EditorState.create({ doc: "prose\n", extensions: [markdownExtensions("test.md"), EditorView.lineWrapping] }),
+      parent: container,
+    });
+    expect(view.contentDOM.classList.contains("cm-md-rendered")).toBe(true);
+    expect(view.contentDOM.classList.contains("cm-lineWrapping")).toBe(true);
+    view.destroy();
+  });
 });
 
 describe("markdown.css: inline code and mermaid error font-family", () => {
@@ -2135,60 +2188,104 @@ describe("markdown.css: inline code and mermaid error font-family", () => {
   });
 });
 
-describe("markdown.css: code block width cap", () => {
-  // .cm-code-block's computed `width: <N>ch` (set per-block in decorations.ts)
-  // must stay capped at the pane's own width (issue #29 / #89) without
-  // reintroducing per-line scrolling (issue #135): `box-sizing: content-box`
-  // keeps the `ch` width honest against the block's own padding/border, and
-  // neither `overflow-x` nor `max-width` are set on the block itself anymore
-  // — a too-wide line now overflows the shared document-level scroller instead.
-  it(".cm-code-block uses content-box sizing and does not trap its own overflow", () => {
-    const body = ruleBodyFor(".cm-code-block");
-    expect(body).toMatch(/box-sizing:\s*content-box/);
-    expect(body).not.toMatch(/max-width/);
-    expect(body).not.toMatch(/overflow-x/);
-    expect(body).toMatch(/white-space:\s*pre/);
+describe("markdown.css: code block width cap (issue #199, revised per PR #223 review round 1)", () => {
+  // `.cm-code-block`'s computed `width: <N>ch` (set per-block in
+  // decorations.ts) is capped by its `.cm-code-block-box` wrapper
+  // (`EditorView.blockWrappers`, `buildCodeBlockWrapRanges`) whenever one is
+  // present: `overflow-x: auto` on the wrapper is what actually traps a
+  // too-wide line's overflow instead of letting it inflate `.cm-content` and
+  // make the whole editor sideways-scrollable (the reported bug).
+  it(".cm-code-block-box caps at the shared reading column, traps overflow, and carries chrome", () => {
+    const body = ruleBodyFor(".cm-content.cm-md-rendered .cm-code-block-box");
+    expect(body).toMatch(/max-width:\s*min\(var\(--atrium-prose-max-width\),\s*100cqw\)/);
+    expect(body).toMatch(/margin-inline-start:\s*max\(0px,\s*\(100cqw\s*-\s*var\(--atrium-prose-max-width\)\)\s*\/\s*2\)/);
+    expect(body).not.toMatch(/margin-inline:\s*auto/);
+    expect(body).toMatch(/overflow-x:\s*auto/);
+    expect(body).toMatch(/background/);
+    expect(body).toMatch(/border-left/);
+    expect(body).toMatch(/padding:\s*0\s*0\.6em/);
   });
 
-  it(".cm-code-block's padding beats CodeMirror's own .cm-line padding via !important", () => {
+  // Round 1 review must-fix: a mermaid-tagged fence with the cursor inside
+  // it renders as plain `.cm-code-block` lines with no `.cm-code-block-box`
+  // wrapper at all (`buildCodeBlockWrapRanges` structurally excludes it), so
+  // the base rule must carry its own chrome/inset as a fallback — losing it
+  // entirely regressed the shipped Mermaid feature (#67, #82) past the
+  // plan's accepted "no width cap" residual gap. It still has no `max-width`
+  // of its own (that residual gap is accepted), since an unwrapped line has
+  // no wrapper to trap its own overflow in.
+  it(".cm-code-block keeps its own chrome/inset as a fallback for the unwrapped (mermaid-under-cursor) case, with no width cap of its own", () => {
     const body = ruleBodyFor(".cm-code-block");
+    expect(body).toMatch(/background/);
+    expect(body).toMatch(/border-left/);
     expect(body).toMatch(/padding:\s*0\s*0\.6em\s*!important/);
+    expect(body).toMatch(/white-space:\s*pre/);
+    expect(body).toMatch(/margin-inline-start:\s*max\(0px,\s*\(100cqw\s*-\s*var\(--atrium-prose-max-width\)\)\s*\/\s*2\)/);
+    expect(body).not.toMatch(/box-sizing/);
+    // Not `/max-width/` bare — the var(--atrium-prose-max-width) reference
+    // inside the margin-inline-start expression above contains that
+    // substring without being a max-width declaration itself.
+    expect(body).not.toMatch(/(?:^|\s)max-width:/);
+    expect(body).not.toMatch(/overflow-x/);
+  });
+
+  // The override that keeps a *wrapped* code block from double-painting
+  // chrome the wrapper already supplies once. A two-class selector, so it
+  // outranks the base one-class `.cm-code-block` rule regardless of
+  // stylesheet load order.
+  it(".cm-code-block-box .cm-code-block neutralizes the base rule's chrome/inset for a wrapped line", () => {
+    const body = ruleBodyFor(".cm-code-block-box .cm-code-block");
+    expect(body).toMatch(/background:\s*none/);
+    expect(body).toMatch(/border-left:\s*0/);
+    expect(body).toMatch(/padding:\s*0\s*!important/);
+    expect(body).toMatch(/margin-inline-start:\s*0/);
   });
 });
 
-describe("markdown.css: prose line wrap width (issue #147)", () => {
+describe("markdown.css: prose line wrap width (issue #147, revised for #199)", () => {
   // `.cm-content` has to stay exactly as wide as its widest line for
   // CodeMirror's `inView`/viewport tracking to work (the #146-revert
   // incident), so a wide code-block line dragging `.cm-content` out to its
   // own width can't be fixed by constraining `.cm-content` directly. Instead
-  // `.cm-scroller` becomes a size container and prose lines (only) are
-  // capped to its inline size via `cqw`, independent of how wide the
-  // scrollable content grows.
+  // `.cm-scroller` becomes a size container and every block-level element —
+  // prose lines included — caps to its inline size via `cqw`, independent of
+  // how wide the scrollable content grows.
   it(".cm-scroller establishes an inline-size container", () => {
     expect(ruleBodyFor(".cm-scroller")).toMatch(/container-type:\s*inline-size/);
   });
 
-  it("caps wrapping prose lines to the container's width and pins them via sticky positioning", () => {
+  it("caps wrapping prose lines to the shared reading column via an explicit inset, not sticky positioning", () => {
     const body = ruleBodyFor(
-      ".cm-content.cm-lineWrapping .cm-line:not(.cm-code-block):not(.cm-table-row):not(.cm-table-header-row):not(.cm-table-delimiter-line)",
+      ".cm-content.cm-md-rendered.cm-lineWrapping .cm-line:not(.cm-code-block):not(.cm-table-row):not(.cm-table-header-row):not(.cm-table-delimiter-line)",
     );
-    expect(body).toMatch(/position:\s*sticky/);
-    expect(body).toMatch(/left:\s*0/);
-    expect(body).toMatch(/width:\s*100cqw/);
+    expect(body).toMatch(/max-width:\s*min\(var\(--atrium-prose-max-width\),\s*100cqw\)/);
+    expect(body).toMatch(/margin-inline-start:\s*max\(0px,\s*\(100cqw\s*-\s*var\(--atrium-prose-max-width\)\)\s*\/\s*2\)/);
+    expect(body).toMatch(/margin-inline-end:\s*auto/);
+    // Dropped entirely (issue #199): with every block-level element sharing
+    // one column, there's no horizontal scroll left for a sticky prose line
+    // to survive.
+    expect(body).not.toMatch(/position:\s*sticky/);
+    expect(body).not.toMatch(/left:\s*0/);
+    expect(body).not.toMatch(/(?:^|[^-])width:\s*100cqw/);
   });
 });
 
-describe("markdown.css: table wrap/border redesign (issue #201 phase 1)", () => {
+describe("markdown.css: table wrap/border redesign (issue #201 phase 1, revised for #199)", () => {
   // `.cm-table-box` (the `EditorView.blockWrappers` wrapper `buildTableWrapRanges`
   // provides) is what carries the table's own width cap now — `max-width`,
   // never a bare `width`, since `width` is a *preferred* width CSS's auto
   // table-layout algorithm stretches every column out to fill, padding even
-  // a short table out to the full pane.
-  it(".cm-table-box caps at the pane's width via max-width, never a bare width, and anchors phase 2's overlays", () => {
-    const body = ruleBodyFor(".cm-table-box");
+  // a short table out to the full column. The cap is now the same shared
+  // reading column every other block-level element uses, with an explicit
+  // column inset (not `margin-inline: auto`, which would mis-center a table
+  // narrower than the column instead of aligning its left edge to it).
+  it(".cm-table-box caps at the shared reading column via max-width, never a bare width, with an explicit inset, and anchors phase 2's overlays", () => {
+    const body = ruleBodyFor(".cm-content.cm-md-rendered .cm-table-box");
     expect(body).toMatch(/display:\s*table/);
-    expect(body).toMatch(/max-width:\s*100cqw/);
-    expect(body).not.toMatch(/(?:^|[^-])width:/);
+    expect(body).toMatch(/max-width:\s*min\(var\(--atrium-prose-max-width\),\s*100cqw\)/);
+    expect(body).toMatch(/margin-inline-start:\s*max\(0px,\s*\(100cqw\s*-\s*var\(--atrium-prose-max-width\)\)\s*\/\s*2\)/);
+    expect(body).not.toMatch(/margin-inline:\s*auto/);
+    expect(body).not.toMatch(/(?:^|[^-])width:\s*100cqw/);
     expect(body).toMatch(/position:\s*relative/);
     expect(body).toMatch(/border-top/);
     expect(body).toMatch(/border-left/);
@@ -2204,6 +2301,46 @@ describe("markdown.css: table wrap/border redesign (issue #201 phase 1)", () => 
 
   it(".cm-table-cell keeps a defensive (currently redundant) overflow-wrap declaration", () => {
     expect(ruleBodyFor(".cm-table-cell")).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+});
+
+describe("markdown.css: mermaid diagram width cap (issue #199)", () => {
+  // `.cm-mermaid-diagram`'s `overflow-x: auto` was previously a no-op — its
+  // box always matched its own content width. Adding the same shared
+  // reading-column `max-width`/inset every other block-level selector gets
+  // turns it into a real cap, closing the same unconstrained-width defect
+  // code blocks had.
+  it(".cm-mermaid-diagram caps at the shared reading column via the same max-width/inset as code blocks and tables", () => {
+    const body = ruleBodyFor(".cm-content.cm-md-rendered .cm-mermaid-diagram");
+    expect(body).toMatch(/max-width:\s*min\(var\(--atrium-prose-max-width\),\s*100cqw\)/);
+    expect(body).toMatch(/margin-inline-start:\s*max\(0px,\s*\(100cqw\s*-\s*var\(--atrium-prose-max-width\)\)\s*\/\s*2\)/);
+    expect(body).toMatch(/overflow-x:\s*auto/);
+  });
+});
+
+describe("markdown.css: reading-column rules are scoped to the rendered pane only (issue #199)", () => {
+  // Each of the four shared-column selectors must compound `.cm-md-rendered`
+  // directly onto `.cm-content` (the element `EditorView.contentAttributes`
+  // actually marks, the same mechanism `cm-lineWrapping` itself uses) —
+  // never a leading descendant combinator, which would match zero elements
+  // in either pane. A plain rule-text assertion (`ruleBodyFor` already
+  // proves the selector text is present) can't tell a correct compound
+  // selector from a broken leading-descendant one on its own, so this
+  // asserts the exact compound fragment with no whitespace between the two
+  // classes.
+  it.each([
+    ".cm-content.cm-md-rendered.cm-lineWrapping .cm-line:not(.cm-code-block):not(.cm-table-row):not(.cm-table-header-row):not(.cm-table-delimiter-line)",
+    ".cm-content.cm-md-rendered .cm-code-block-box",
+    ".cm-content.cm-md-rendered .cm-table-box",
+    ".cm-content.cm-md-rendered .cm-mermaid-diagram",
+  ])("%s compounds .cm-md-rendered directly onto .cm-content", (selector) => {
+    // `ruleBodyFor` escapes `selector` literally (including the exact
+    // ".cm-content.cm-md-rendered" fragment with no whitespace between the
+    // two classes) and throws if no rule matches it verbatim — the
+    // per-selector proof itself, not a whole-file regex that would pass
+    // identically for all four cases as long as any one rule anywhere used
+    // the compound form.
+    expect(() => ruleBodyFor(selector)).not.toThrow();
   });
 });
 
@@ -2273,5 +2410,96 @@ describe("buildTableWrapRanges", () => {
   it("produces no wrapper at all for a document with no table", () => {
     const state = stateFor("plain text, no table here\n", 0);
     expect(collectWraps(state)).toEqual([]);
+  });
+});
+
+describe("buildCodeBlockWrapRanges (issue #199)", () => {
+  function codeBlockLineStartRanges(state: EditorState): { from: number; to: number }[] {
+    const out: { from: number; to: number }[] = [];
+    syntaxTree(state).iterate({
+      enter(ref) {
+        if (ref.name === "FencedCode" || ref.name === "CodeBlock") {
+          out.push({ from: state.doc.lineAt(ref.from).from, to: ref.to });
+          return false;
+        }
+      },
+    });
+    return out;
+  }
+
+  function collectCodeBlockWraps(state: EditorState): { from: number; to: number }[] {
+    const out: { from: number; to: number }[] = [];
+    buildCodeBlockWrapRanges(state).between(0, state.doc.length, (from, to) => {
+      out.push({ from, to });
+    });
+    return out;
+  }
+
+  it("wraps a fenced code block spanning its own full node range", () => {
+    const doc = "prose\n\n```js\nconst x = 1;\n```\n\nmore prose";
+    const state = stateFor(doc, 0);
+    expect(collectCodeBlockWraps(state)).toEqual(codeBlockLineStartRanges(state));
+  });
+
+  it("wraps an indented code block", () => {
+    const doc = "prose\n\n    def legacy():\n        return True\n\nmore";
+    const state = stateFor(doc, 0);
+    const wraps = collectCodeBlockWraps(state);
+    expect(wraps).toEqual(codeBlockLineStartRanges(state));
+    expect(wraps).toHaveLength(1);
+  });
+
+  it("gives two fenced blocks in one document two independent wrappers", () => {
+    const doc = "```js\nconst a = 1;\n```\n```py\nb = 2\n```\n\nafter";
+    const state = stateFor(doc, doc.indexOf("after"));
+    const wraps = collectCodeBlockWraps(state);
+    expect(wraps).toEqual(codeBlockLineStartRanges(state));
+    expect(wraps).toHaveLength(2);
+  });
+
+  it("wraps a fenced code block nested inside a blockquote, starting at the physical line start", () => {
+    const doc = "> ```js\n> const x = 1;\n> ```\n";
+    const state = stateFor(doc, doc.length);
+    const wraps = collectCodeBlockWraps(state);
+    expect(wraps).toEqual(codeBlockLineStartRanges(state));
+    expect(wraps[0].from).toBe(0);
+  });
+
+  it("wraps a fenced code block nested inside a list item, starting at the physical line start", () => {
+    const doc = "- item\n\n  ```js\n  const x = 1;\n  ```\n";
+    const state = stateFor(doc, doc.length);
+    const wraps = collectCodeBlockWraps(state);
+    expect(wraps).toEqual(codeBlockLineStartRanges(state));
+    const fenceLine = state.doc.line(3); // "  ```js"
+    expect(wraps[0].from).toBe(fenceLine.from);
+  });
+
+  it("gives a mermaid-tagged fence no wrapper at all, regardless of cursor/focus state", () => {
+    const doc = "prose\n\n```mermaid\ngraph TD;\nA-->B;\n```\n\nmore prose";
+    // Cursor inside the block, focused — mermaidWidgetSource (cursor/focus
+    // gated) would treat this as raw fenced-code, but the wrapper exclusion
+    // is purely structural (extractMermaidSource), so it must still exclude
+    // this block.
+    const state = stateFor(doc, doc.indexOf("graph TD"));
+    expect(collectCodeBlockWraps(state)).toEqual([]);
+  });
+
+  it("gives a mermaid-tagged fence (uppercase, extra whitespace) no wrapper either", () => {
+    const doc = "```MERMAID  \ngraph TD;\nA-->B;\n```\n";
+    const state = stateFor(doc, 0);
+    expect(collectCodeBlockWraps(state)).toEqual([]);
+  });
+
+  it("still wraps a non-mermaid fenced block alongside an excluded mermaid one", () => {
+    const doc = "```js\nconst x = 1;\n```\n\n```mermaid\ngraph TD;\nA-->B;\n```\n";
+    const state = stateFor(doc, 0);
+    const wraps = collectCodeBlockWraps(state);
+    expect(wraps).toHaveLength(1);
+    expect(wraps[0]).toEqual({ from: 0, to: state.doc.line(3).to });
+  });
+
+  it("produces no wrapper at all for a document with no code block", () => {
+    const state = stateFor("plain text, no code block here\n", 0);
+    expect(collectCodeBlockWraps(state)).toEqual([]);
   });
 });

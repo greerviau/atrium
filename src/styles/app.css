@@ -40,6 +40,14 @@
   --atrium-mono-font:
     ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
 
+  /* Shared reading-column width for rendered markdown: prose, code blocks,
+     tables, and Mermaid diagrams all cap to this same value (markdown.css),
+     so the whole document reads as one consistent column with a single left
+     edge (issue #199) instead of prose centering narrower than code/tables.
+     `ch` (not `px`) so the column scales with the user's font size/zoom
+     (#70) rather than staying visually fixed as text size changes. */
+  --atrium-prose-max-width: 65ch;
+
   --atrium-icon-folder: #90a4c4;
   --atrium-icon-markdown: #8a8f98;
   --atrium-icon-javascript: #e8c547;

@@ -16,23 +16,38 @@
   container-type: inline-size;
 }
 
-/* Caps a prose line's wrap width to the pane instead of the runaway
-   `.cm-content` box (see the container-query comment above). Scoped to
-   `.cm-lineWrapping` panes only (markdown; code panes never wrap) and
-   excludes code-block and table-row lines: a code block is meant to stay a
-   coherent, scrollable unit at its own width, and a table row's own width
-   cap comes from `.cm-table-box` (below) rather than this per-line
-   mechanism — `width`/`position: sticky` on a `display: table-row` line
-   wouldn't do anything useful, since a table row isn't the box that needs
-   capping. `position: sticky; left: 0` (no `top`) tracks only the
-   scroller's horizontal scroll position, keeping the line visible at the
-   left edge instead of scrolling out of view when the user scrolls right to
-   see a wide code block elsewhere in the document. */
-.cm-content.cm-lineWrapping
+/* Caps every block-level element in a *rendered* markdown pane — prose
+   lines, code blocks, tables, and Mermaid diagrams alike — to the same
+   shared reading column (issue #199), so the whole document reads as one
+   consistent column with a single left edge instead of prose centering
+   narrower than code/tables (or, before this rule existed, a wide code
+   block or Mermaid diagram inflating `.cm-content` and making the whole
+   editor sideways-scrollable). `min(var(--atrium-prose-max-width), 100cqw)`
+   resolves against `.cm-scroller`'s own container-query width (the
+   `container-type: inline-size` ancestor above), so the column degrades to
+   the pane's own width once the pane is narrower than the cap — the same
+   mechanism that lets `100cqw` alone cap a box to the pane below.
+   `margin-inline-start`/`margin-inline-end` (an explicit column inset,
+   not `margin-inline: auto`) is what every one of the four selectors below
+   uses to align to the same left edge regardless of whether the box is
+   fill-available (a prose line, `.cm-code-block-box`, `.cm-mermaid-diagram`)
+   or shrink-to-fit (`.cm-table-box`, `display: table`) — `margin-inline:
+   auto` would instead *center* a shrink-to-fit box narrower than the
+   column, misaligning it against the other three.
+
+   All four are scoped to `.cm-md-rendered` (a content-attribute marker
+   `livePreviewPlugin.ts` adds only to the rendered pane, the same mechanism
+   `EditorView.lineWrapping` itself uses for `cm-lineWrapping`) so none of
+   this reaches the raw markdown source view, which has no decoration
+   classes to exclude against and would otherwise match every line. The
+   marker lands on `.cm-content` itself, not an ancestor, so it must be
+   compounded directly onto `.cm-content` — never written as a leading
+   descendant selector, which would match nothing in either pane. */
+.cm-content.cm-md-rendered.cm-lineWrapping
   .cm-line:not(.cm-code-block):not(.cm-table-row):not(.cm-table-header-row):not(.cm-table-delimiter-line) {
-  position: sticky;
-  left: 0;
-  width: 100cqw;
+  max-width: min(var(--atrium-prose-max-width), 100cqw);
+  margin-inline-start: max(0px, (100cqw - var(--atrium-prose-max-width)) / 2);
+  margin-inline-end: auto;
 }
 
 .cm-heading-1 { font-size: 1.8em; font-weight: 700; }
@@ -76,21 +91,29 @@
    `display: table-row` children inside it gets grouped into that box's
    anonymous `display: table` layout automatically — no per-row `<table>`
    markup needed beyond the wrapper element itself. `max-width` (not
-   `width`) caps the box at the pane's own visible width, resolved via the
-   `container-type: inline-size` ancestor above, while still letting the
-   table shrink to its content when that's narrower — `width` would instead
-   be a *preferred* width that CSS's auto table-layout algorithm stretches
-   every table's columns out to fill, padding a short table out to the full
-   pane regardless of its content. `position: relative` gives phase 2's
-   handles/bands a positioned ancestor to anchor to. `border-top`/
-   `border-left` supply the table's own top and left edges; the existing
-   per-cell `border-right` and per-row `border-bottom` below already supply
-   the right/bottom edges (including the outer ones, via the last column/row),
-   so no edge is doubled. */
-.cm-table-box {
+   `width`) caps the box at the shared reading column (see the prose-line
+   rule's own comment above for why `min(var(--atrium-prose-max-width),
+   100cqw)`, resolved via the `container-type: inline-size` ancestor above),
+   while still letting the table shrink to its content when that's narrower
+   — `width` would instead be a *preferred* width that CSS's auto
+   table-layout algorithm stretches every table's columns out to fill,
+   padding a short table out to the full column regardless of its content.
+   Because a `display: table` box is shrink-to-fit, the column inset is an
+   explicit `margin-inline-start`/`margin-inline-end` rather than
+   `margin-inline: auto` — auto margins would *center* a table narrower than
+   the column instead of aligning its left edge to the column's own left
+   edge, same reasoning as the prose-line rule above. `position: relative`
+   gives phase 2's handles/bands a positioned ancestor to anchor to.
+   `border-top`/`border-left` supply the table's own top and left edges; the
+   existing per-cell `border-right` and per-row `border-bottom` below
+   already supply the right/bottom edges (including the outer ones, via the
+   last column/row), so no edge is doubled. */
+.cm-content.cm-md-rendered .cm-table-box {
   display: table;
   table-layout: auto;
-  max-width: 100cqw;
+  max-width: min(var(--atrium-prose-max-width), 100cqw);
+  margin-inline-start: max(0px, (100cqw - var(--atrium-prose-max-width)) / 2);
+  margin-inline-end: auto;
   position: relative;
   border-top: 1px solid var(--atrium-border);
   border-left: 1px solid var(--atrium-border);
@@ -256,16 +279,88 @@
   width: 8px;
 }
 
+/* `EditorView.blockWrappers` (`buildCodeBlockWrapRanges` in decorations.ts)
+   wraps every non-mermaid fenced/indented code block's own lines in a real
+   `<div class="cm-code-block-box scrollbar-autohide">`, mirroring
+   `.cm-table-box` above. `max-width` plus the same column inset caps the
+   box at the shared reading column, and `overflow-x: auto` is what actually
+   traps a too-wide `.cm-code-block` line's overflow inside this box instead
+   of letting it inflate `.cm-content` (the reported bug, issue #199) — a
+   plain block-level div is fill-available, not shrink-to-fit like
+   `.cm-table-box`, so `max-width` alone makes it *fill* the column rather
+   than shrink to its content, which is what lets even a short block paint a
+   full-column-width chrome band, matching Obsidian/Zed's fenced-code
+   rendering (`.cm-code-block` below carries the same chrome/inset as its
+   own defensive default — see its own comment — but the wrapper is what a
+   *wrapped* line's chrome/inset actually renders from, since the
+   `.cm-code-block-box .cm-code-block` override neutralizes the line's own
+   copy whenever a wrapper is present). Because `app.css` sets a
+   global `* { box-sizing: border-box }`, this padding/border sit *inside*
+   the wrapper's own `max-width` rather than adding to it, so the wrapper's
+   own chrome can never leak extra scroll range past the column cap. The
+   wrapper reuses the app's existing `.scrollbar-autohide` treatment
+   (app.css) via its own class list rather than duplicating those
+   declarations here — its `:hover` reveal applies, though the active-scroll
+   `data-scrolling` toggle (`scrollbarAutoHide.ts`) doesn't run against a
+   CodeMirror-owned element, a real but narrow gap. `position: relative`
+   isn't needed here — unlike `.cm-table-box`, nothing anchors to this
+   wrapper. */
+.cm-content.cm-md-rendered .cm-code-block-box {
+  max-width: min(var(--atrium-prose-max-width), 100cqw);
+  margin-inline-start: max(0px, (100cqw - var(--atrium-prose-max-width)) / 2);
+  margin-inline-end: auto;
+  overflow-x: auto;
+  background: var(--atrium-code-bg);
+  border-left: 3px solid var(--atrium-border);
+  padding: 0 0.6em;
+}
+
 /* Same specificity problem as `.cm-table-row`/`.cm-table-delimiter-line`
    above: `!important` is required to beat CodeMirror's own `.cm-line {
    padding: 0 2px 0 6px }`, which — as a two-class selector — outranks a
-   bare `.cm-code-block` regardless of stylesheet load order. */
+   bare `.cm-code-block` regardless of stylesheet load order.
+
+   Keeps its own chrome and column inset (not just relying on
+   `.cm-code-block-box` above) because a mermaid-tagged fence with the
+   cursor inside it renders as plain `.cm-code-block` lines with no wrapper
+   at all — `buildCodeBlockWrapRanges` deliberately excludes it (see its own
+   doc comment), so a line in that state has no `.cm-code-block-box`
+   ancestor to supply background/border/inset. Without this rule's own
+   copies, that state would render with no chrome at all (the editor is
+   entirely monospace, so the background band + left border *is* a code
+   block's whole visual identity) and no inset (snapping to `.cm-content`'s
+   far-left edge while surrounding prose sits inset by the column's own
+   margin) — a regression on the shipped Mermaid feature (#67, #82) well
+   past the plan's accepted residual gap for this case (no width cap, not
+   no chrome/alignment). `box-sizing: content-box` stays dropped: with the
+   global `border-box` reset (app.css), padding sits inside the block's own
+   `<N>ch` inline width regardless of box-sizing keyword. No `max-width` of
+   its own — the accepted residual gap is exactly "no width cap" for this
+   one case, since capping an unwrapped line has nowhere to trap its own
+   overflow the way `.cm-code-block-box`'s `overflow-x: auto` does. */
 .cm-code-block {
   background: var(--atrium-code-bg);
   border-left: 3px solid var(--atrium-border);
   padding: 0 0.6em !important;
   white-space: pre;
-  box-sizing: content-box;
+  margin-inline-start: max(0px, (100cqw - var(--atrium-prose-max-width)) / 2);
+}
+
+/* Neutralizes the base `.cm-code-block` rule above for a *wrapped* line —
+   the common case, every code block except a mermaid fence under the
+   cursor — since `.cm-code-block-box` already supplies that same chrome
+   and inset once, on the shared wrapper box; letting the line also paint
+   its own copy would double the background/border and shift the inset by
+   the line's own margin on top of the wrapper's. `.cm-code-block-box
+   .cm-code-block` is a two-class selector, so it outranks the base
+   one-class `.cm-code-block` rule regardless of load order; `padding: 0
+   !important` still needs `!important` to beat CodeMirror's own two-class
+   `.cm-line` padding rule the same way the base rule's `!important` does. */
+.cm-code-block-box .cm-code-block {
+  background: none;
+  border-left: 0;
+  padding: 0 !important;
+  margin-inline-start: 0;
 }
 
 .cm-blockquote {
@@ -274,14 +369,17 @@
 }
 
 /* Block-level widget replacing a `mermaid` fenced code block. `text-align:
-   center` centers the rendered <svg>. A diagram wider than the pane isn't
-   clipped or wrapped — like a long code line or table row above, it scrolls
-   via CodeMirror's own `.cm-scroller { overflow-x: auto }`, not a container
-   of its own; `overflow-x: auto` here is a no-op today (this box's width
-   always matches its content) kept as a defensive fallback in case that
-   ever stops being true. */
-.cm-mermaid-diagram {
+   center` centers the rendered <svg>. `max-width` plus the same shared
+   column inset as `.cm-code-block-box`/`.cm-table-box` above caps the
+   diagram at the reading column, which is what turns `overflow-x: auto`
+   from an inert fallback into a real cap — the same unconstrained-width
+   defect code blocks had (issue #199), just not yet reported as its own
+   bug since diagrams are typically narrower than a wide code sample. */
+.cm-content.cm-md-rendered .cm-mermaid-diagram {
   display: block;
+  max-width: min(var(--atrium-prose-max-width), 100cqw);
+  margin-inline-start: max(0px, (100cqw - var(--atrium-prose-max-width)) / 2);
+  margin-inline-end: auto;
   overflow-x: auto;
   padding: 0.6em;
   text-align: center;
