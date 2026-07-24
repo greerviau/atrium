@@ -138,3 +138,51 @@ describe("handleScrollSettleMousedown: Part 2 (issue #161)", () => {
     expect(seenTypes).toEqual(["mousedown"]);
   });
 });
+
+describe("handleScrollSettleMousedown: focuses synchronously before deferring (issue #183)", () => {
+  it("focuses an unfocused pane synchronously, inside the original mousedown, before deferring", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const frame = stubAnimationFrame();
+    const focusSpy = vi.spyOn(v, "focus");
+    v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+
+    expect(v.hasFocus).toBe(false);
+    const event = dispatchMousedownOn(target, 5, 5);
+    handleScrollSettleMousedown(event, v);
+
+    // Called synchronously by the handler itself, not only after the deferred replay fires.
+    expect(focusSpy).toHaveBeenCalledTimes(1);
+
+    frame.flush();
+  });
+
+  it("does not call focus again when the pane already has focus", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const frame = stubAnimationFrame();
+    v.contentDOM.focus();
+    expect(v.hasFocus).toBe(true);
+
+    const focusSpy = vi.spyOn(v, "focus");
+    v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+    const event = dispatchMousedownOn(target, 5, 5);
+    handleScrollSettleMousedown(event, v);
+
+    expect(focusSpy).not.toHaveBeenCalled();
+
+    frame.flush();
+  });
+
+  it("does not call focus when the mousedown is not deferred at all", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const focusSpy = vi.spyOn(v, "focus");
+
+    // No recent wheel event, so this mousedown passes through untouched.
+    const event = dispatchMousedownOn(target);
+    handleScrollSettleMousedown(event, v);
+
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+});

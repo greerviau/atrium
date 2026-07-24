@@ -254,6 +254,17 @@ export function handleScrollSettleMousedown(event: MouseEvent, view: EditorView)
   if (sinceWheel >= RECENT_SCROLL_WINDOW_MS) {
     return false;
   }
+  // A not-yet-focused pane's first click normally focuses it via CM's own
+  // `mustFocus` branch, synchronously, inside this same trusted mousedown.
+  // Deferring the whole mousedown to the next frame (below) would leave that
+  // focus call to run there too, against the replayed *synthetic* event —
+  // outside the original trusted user-gesture stack the browser's
+  // scroll-preserving focus behavior relies on. Focusing here, still inside
+  // the real gesture, keeps that guarantee; the replay then sees the pane
+  // already focused and skips CM's own focus branch entirely.
+  if (!view.hasFocus) {
+    view.focus();
+  }
   replayMousedownNextFrame(view, event, event.target ?? view.contentDOM);
   return true;
 }
