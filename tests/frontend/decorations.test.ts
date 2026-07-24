@@ -99,14 +99,21 @@ describe("buildDecorations: emphasis and strong", () => {
     expect(replaces.length).toBeGreaterThanOrEqual(4);
   });
 
-  it("keeps emphasis/strong styled and reveals delimiters when the cursor is on their line", () => {
-    const doc = "plain *em* and **strong** text\nsecond line";
+  it("keeps emphasis styled and reveals its delimiters when the cursor is inside it", () => {
+    const doc = "plain *em* text\nsecond line";
     const state = stateFor(doc, doc.indexOf("em"));
     const decos = collect(state);
     expect(decos.some((d) => d.class === "cm-em")).toBe(true);
-    expect(decos.some((d) => d.class === "cm-strong")).toBe(true);
     expect(decos.some((d) => d.isReplace && !d.class)).toBe(false);
     expect(state.doc.toString()).toContain("*em*");
+  });
+
+  it("keeps strong styled and reveals its delimiters when the cursor is inside it", () => {
+    const doc = "plain **strong** text\nsecond line";
+    const state = stateFor(doc, doc.indexOf("strong"));
+    const decos = collect(state);
+    expect(decos.some((d) => d.class === "cm-strong")).toBe(true);
+    expect(decos.some((d) => d.isReplace && !d.class)).toBe(false);
     expect(state.doc.toString()).toContain("**strong**");
   });
 });
@@ -238,6 +245,100 @@ describe("buildDecorations: nested/composited inline constructs under the cursor
     expect(decos.some((d) => d.class === "cm-strong")).toBe(true);
     expect(decos.some((d) => d.class === "cm-em")).toBe(true);
     expect(decos.some((d) => d.isReplace && !d.class)).toBe(false);
+  });
+});
+
+describe("buildDecorations: sibling inline constructs on one line", () => {
+  it("reveals only the construct the cursor is in, not a sibling construct on the same line", () => {
+    const doc = "Some *italic* and **bold** text";
+    const state = stateFor(doc, doc.indexOf("italic"));
+    const decos = collect(state);
+
+    const emDeco = decos.find((d) => d.class === "cm-em");
+    expect(emDeco).toBeTruthy();
+    const emStart = doc.indexOf("*italic*");
+    expect(decos.some((d) => d.isReplace && !d.class && d.from >= emStart && d.to <= emStart + 8)).toBe(false);
+
+    const strongStart = doc.indexOf("**bold**");
+    const strongEnd = strongStart + "**bold**".length;
+    expect(
+      decos.some((d) => d.isReplace && !d.class && d.from >= strongStart && d.to <= strongEnd),
+    ).toBe(true);
+  });
+
+  it("reveals only inline code, not a sibling bold construct on the same line", () => {
+    const doc = "Some `code` and **bold** text";
+    const state = stateFor(doc, doc.indexOf("code"));
+    const decos = collect(state);
+
+    expect(decos.some((d) => d.class === "cm-inline-code")).toBe(true);
+    const codeStart = doc.indexOf("`code`");
+    expect(decos.some((d) => d.isReplace && !d.class && d.from >= codeStart && d.to <= codeStart + 6)).toBe(false);
+
+    const strongStart = doc.indexOf("**bold**");
+    const strongEnd = strongStart + "**bold**".length;
+    expect(
+      decos.some((d) => d.isReplace && !d.class && d.from >= strongStart && d.to <= strongEnd),
+    ).toBe(true);
+  });
+
+  it("still renders a sibling link when the cursor is in an adjacent italic construct", () => {
+    const doc = "See *this* and [a link](url) too";
+    const state = stateFor(doc, doc.indexOf("this"));
+    const decos = collect(state);
+
+    const linkDeco = decos.find((d) => d.class === "cm-link");
+    expect(linkDeco).toBeTruthy();
+    expect(state.doc.sliceString(linkDeco!.from, linkDeco!.to)).toBe("a link");
+
+    expect(decos.some((d) => d.class === "cm-em")).toBe(true);
+    const emStart = doc.indexOf("*this*");
+    expect(decos.some((d) => d.isReplace && !d.class && d.from >= emStart && d.to <= emStart + 6)).toBe(false);
+  });
+
+  it("still fully un-renders the link when the cursor is inside its own text", () => {
+    const doc = "See *this* and [a link](url) too";
+    const state = stateFor(doc, doc.indexOf("a link"));
+    const decos = collect(state);
+
+    expect(decos.some((d) => d.class === "cm-link")).toBe(false);
+    expect(state.doc.toString()).toContain("[a link](url)");
+  });
+
+  it("isn't order-dependent: reveals only the second construct when the cursor is in it", () => {
+    const doc = "Some *italic* and **bold** text";
+    const state = stateFor(doc, doc.indexOf("bold"));
+    const decos = collect(state);
+
+    const strongStart = doc.indexOf("**bold**");
+    const strongEnd = strongStart + "**bold**".length;
+    expect(
+      decos.some((d) => d.isReplace && !d.class && d.from >= strongStart && d.to <= strongEnd),
+    ).toBe(false);
+
+    const emStart = doc.indexOf("*italic*");
+    expect(decos.some((d) => d.isReplace && !d.class && d.from >= emStart && d.to <= emStart + 8)).toBe(true);
+  });
+
+  it("keeps a sibling escape hidden when the cursor is in a bold construct on the same line", () => {
+    const doc = "Some \\*escaped\\* and **bold** text";
+    const state = stateFor(doc, doc.indexOf("bold"));
+    const decos = collect(state);
+
+    const firstBackslash = doc.indexOf("\\");
+    const secondBackslash = doc.indexOf("\\", firstBackslash + 1);
+    expect(
+      decos.some((d) => d.isReplace && !d.class && d.from === firstBackslash && d.to === firstBackslash + 1),
+    ).toBe(true);
+    expect(
+      decos.some((d) => d.isReplace && !d.class && d.from === secondBackslash && d.to === secondBackslash + 1),
+    ).toBe(true);
+
+    const strongStart = doc.indexOf("**bold**");
+    const strongEnd = strongStart + "**bold**".length;
+    expect(
+      decos.some((d) => d.isReplace && !d.class && d.from >= strongStart && d.to <= strongEnd),
+    ).toBe(false);
   });
 });
 

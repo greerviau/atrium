@@ -41,11 +41,12 @@ const SETEXT_HEADING_LEVELS: Record<string, 1 | 2> = {
  *
  * Line-granular, which is correct for a paragraph or heading (the line and
  * the thing being edited are the same unit) but wrong for a node that may
- * live inside a table cell, since a table row is one line shared by several
- * independent cells — a node that can appear inside a `TableCell` should
- * gate through `isRevealTarget` instead, which narrows to the enclosing
- * cell when there is one and falls back to this line-granular check
- * otherwise.
+ * share its line with another independent markup-bearing construct — a
+ * table cell sharing a row with sibling cells, or an inline construct
+ * (emphasis, strong, inline code, a link, ...) sharing a paragraph line with
+ * sibling constructs — a node in either position should gate through
+ * `isRevealTarget` instead, which narrows to the enclosing cell when there
+ * is one, otherwise to the node's own span.
  */
 function isUnderCursor(state: EditorState, from: number, to: number, hasFocus: boolean): boolean {
   if (!hasFocus) return false;
@@ -74,21 +75,21 @@ function enclosingTableCellRange(node: SyntaxNode): { from: number; to: number }
 }
 
 /**
- * Reveal-gate for a node that may live inside a table cell: narrows to the
- * enclosing cell's own range when there is one, instead of `isUnderCursor`'s
- * whole-physical-line check — a table row is one line shared by several
- * independent cells, so gating a cell's inline markdown reveal on the whole
- * line reveals a sibling cell's markup whenever the cursor sits anywhere
- * else on that row. Falls through to `isUnderCursor` unchanged for a node
- * outside any table, so paragraph/heading behavior is untouched.
+ * Reveal-gate for an inline construct that may share its physical line with
+ * an unrelated sibling construct — a table cell sharing a row with sibling
+ * cells, or an inline span (emphasis, strong, inline code, a link, ...)
+ * sharing a paragraph line with sibling spans. Narrows to the enclosing
+ * table cell's own range when there is one, otherwise to the node's own
+ * `[from, to)` range, instead of `isUnderCursor`'s whole-physical-line
+ * check — comparing against the whole line would also reveal a sibling
+ * cell's or sibling span's markup whenever the cursor sits anywhere else on
+ * that shared line.
  */
 function isRevealTarget(state: EditorState, node: SyntaxNode, hasFocus: boolean): boolean {
+  if (!hasFocus) return false;
   const cell = enclosingTableCellRange(node);
-  if (cell) {
-    if (!hasFocus) return false;
-    return state.selection.ranges.some((r) => r.from <= cell.to && r.to >= cell.from);
-  }
-  return isUnderCursor(state, node.from, node.to, hasFocus);
+  const range = cell ?? node;
+  return state.selection.ranges.some((r) => r.from <= range.to && r.to >= range.from);
 }
 
 function decorateHeading(
@@ -159,10 +160,12 @@ function decorateSetextHeading(
  * delimiter runs (found by `markTypeName`) are hidden unless the node is a
  * reveal target (matches the fenced-code/table precedent), in which case
  * they're left visible inside the still-styled span. Gated through
- * `isRevealTarget` rather than `isUnderCursor` directly, since this node may
- * sit inside a table cell — reveal then narrows to that cell instead of the
- * whole row, so the cursor sitting in a sibling cell on the same row
- * doesn't also reveal this one's delimiters.
+ * `isRevealTarget` rather than `isUnderCursor` directly, since this node's
+ * own span — not its whole physical line — is what should be compared
+ * against the cursor: a paragraph line commonly holds several independent
+ * inline constructs, and (as for a table cell sharing a row with sibling
+ * cells) the cursor sitting in a sibling construct on the same line
+ * shouldn't also reveal this one's delimiters.
  */
 function decorateWrapped(
   state: EditorState,
@@ -192,7 +195,7 @@ function decorateWrapped(
  * by CommonMark-escapable punctuation, table cells included, since GFM
  * table cells get full standard inline parsing). Hiding just the backslash
  * leaves the escaped character to render as plain text, matching GFM's
- * escaping rule. Gated through `isRevealTarget` for the same table-cell-scoped
+ * escaping rule. Gated through `isRevealTarget` for the same node-span-scoped
  * reveal behavior as `decorateWrapped`.
  */
 function decorateEscape(state: EditorState, node: SyntaxNode, out: Range<Decoration>[], hasFocus: boolean): void {
