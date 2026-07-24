@@ -67,6 +67,7 @@ describe("SearchOverlay", () => {
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("disables native browser autocomplete/spellcheck suggestions on the query input", async () => {
@@ -79,6 +80,56 @@ describe("SearchOverlay", () => {
     expect(input.getAttribute("autocorrect")).toBe("off");
     expect(input.getAttribute("autocapitalize")).toBe("off");
     expect(input.getAttribute("spellcheck")).toBe("false");
+  });
+
+  // `jsdom` (this test environment) already honors the bare `autofocus`
+  // attribute on element insertion, so asserting on `document.activeElement`
+  // alone would pass even without the imperative `.focus()`/`.select()`
+  // calls the fix adds — giving false confidence against the real WebKit
+  // failure mode the issue reports. Spying on
+  // `HTMLInputElement.prototype.focus`/`.select()` instead asserts the
+  // imperative call itself fired, which is what the fix actually adds.
+  it("imperatively focuses and selects the query input on a fresh open in content mode", async () => {
+    const focusSpy = vi.spyOn(HTMLInputElement.prototype, "focus");
+    const selectSpy = vi.spyOn(HTMLInputElement.prototype, "select");
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+    await screen.findByPlaceholderText(PLACEHOLDER);
+
+    expect(focusSpy).toHaveBeenCalled();
+    expect(selectSpy).toHaveBeenCalled();
+  });
+
+  it("imperatively focuses and selects the query input on a fresh open in files mode", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
+    const focusSpy = vi.spyOn(HTMLInputElement.prototype, "focus");
+    const selectSpy = vi.spyOn(HTMLInputElement.prototype, "select");
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await screen.findByPlaceholderText(FILES_PLACEHOLDER);
+
+    expect(focusSpy).toHaveBeenCalled();
+    expect(selectSpy).toHaveBeenCalled();
+  });
+
+  it("imperatively focuses and selects the files-mode input when switching modes while already open", async () => {
+    vi.mocked(commands.searchWorkspace).mockResolvedValue(results([]));
+    vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+    await screen.findByPlaceholderText(PLACEHOLDER);
+
+    const focusSpy = vi.spyOn(HTMLInputElement.prototype, "focus");
+    const selectSpy = vi.spyOn(HTMLInputElement.prototype, "select");
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await screen.findByPlaceholderText(FILES_PLACEHOLDER);
+
+    expect(focusSpy).toHaveBeenCalled();
+    expect(selectSpy).toHaveBeenCalled();
   });
 
   it("does not render the panel until the overlay is opened", async () => {

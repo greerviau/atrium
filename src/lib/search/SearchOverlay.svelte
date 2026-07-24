@@ -70,10 +70,11 @@
     if (isOpen && (!previousOpen || storeMode !== previousMode)) {
       resetState();
       mode = storeMode;
-    } else if (isOpen && previousOpen && storeMode === previousMode) {
+    }
+    if (isOpen) {
       inputEl?.focus();
       inputEl?.select();
-    } else if (!isOpen && previousOpen && debounceTimer) {
+    } else if (previousOpen && debounceTimer) {
       clearTimeout(debounceTimer);
     }
 
@@ -337,13 +338,11 @@
       tabindex="-1"
     >
       <div class="search-input-row">
-        <!-- svelte-ignore a11y_autofocus -->
         <input
           bind:this={inputEl}
           bind:value={query}
           onkeydown={onInputKeydown}
           placeholder={mode === "content" ? "Search across the project…" : "Go to file…"}
-          autofocus
           autocomplete="off"
           autocorrect="off"
           autocapitalize="off"
