@@ -173,17 +173,22 @@
   background: var(--atrium-text-muted);
 }
 
-/* Sits in the left margin, outside `.cm-table-box`'s own left border — an
-   inline widget at a row's own line-start position, with no `top` of its
-   own so CSS's static-position fallback places it at that row's vertical
-   band for free (see the plan's "Phase 2" design for why this holds inside
-   `display: table-row` internals). `.cm-table-box`'s own `position:
-   relative` (markdown.css, above) is what `left` resolves against. */
+/* Sits in the left margin, outside `.cm-table-box`'s own left border.
+   `top`/`height` are set by `tableGeometryMeasurePlugin`'s DOM-measured
+   write phase (never by CSS): a `height: 100%` here would resolve against
+   `.cm-table-box`'s own *total* height (the nearest positioned ancestor for
+   a percentage height), not this row's own height, so every handle past
+   the first would end up both oversized and mispositioned. `height: 1.4em`
+   is only a pre-measurement fallback (briefly visible before the first
+   `requestMeasure` write), sized to an ordinary line's height. `.cm-table-box`'s
+   own `position: relative` (markdown.css, above) is what `left`/`top`
+   resolve against. */
 .cm-table-row-handle {
   position: absolute;
   left: -22px;
+  top: 0;
   width: 18px;
-  height: 100%;
+  height: 1.4em;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -191,7 +196,7 @@
 }
 
 /* Floats above the table, outside `.cm-table-box`'s own top border.
-   `left`/`width` are set by `tableColumnBarMeasurePlugin`'s DOM-measured
+   `left`/`width` are set by `tableGeometryMeasurePlugin`'s DOM-measured
    write phase (never by CSS), so this rule intentionally has no `left`/
    `width` of its own. */
 .cm-table-col-bar {

@@ -792,12 +792,17 @@ function decorateTableRow(
   tableFrom: number,
   rowIndex: number,
   hover: TableHoverState,
+  selection: TableHoverState,
   out: Range<Decoration>[],
 ): void {
   const rowClass = isHeader ? `${CLASS.tableRow} ${CLASS.tableHeaderRow}` : CLASS.tableRow;
   out.push(Decoration.line({ class: rowClass }).range(state.doc.lineAt(node.from).from));
 
-  const rowSelected = hover.table === tableFrom && hover.row === rowIndex;
+  // A pinned selection and a hover can be two independent, simultaneously
+  // active targets (e.g. row 1 selected via an earlier click, column 3
+  // currently hovered) — either one matching is enough to highlight.
+  const rowHighlighted =
+    (hover.table === tableFrom && hover.row === rowIndex) || (selection.table === tableFrom && selection.row === rowIndex);
 
   let prevEnd = state.doc.lineAt(node.from).from;
   let column = 0;
@@ -814,10 +819,12 @@ function decorateTableRow(
     } else if (alignment[column] === "right") {
       classes.push(CLASS.tableAlignRight);
     }
-    if (rowSelected) {
+    if (rowHighlighted) {
       classes.push(CLASS.tableRowSelected);
     }
-    if (hover.table === tableFrom && hover.col === column) {
+    const colHighlighted =
+      (hover.table === tableFrom && hover.col === column) || (selection.table === tableFrom && selection.col === column);
+    if (colHighlighted) {
       classes.push(CLASS.tableColSelected);
     }
     if (slot.to > slot.from) {
@@ -837,7 +844,7 @@ function decorateTableRow(
  * Row-handle widgets use `side: -1000` so they always sort before every
  * column-bar widget anchored at the same header-row position; column bars
  * use their own column index (0, 1, 2, ...) so their left-to-right DOM
- * order always matches column order — `tableColumnBarMeasurePlugin`'s write
+ * order always matches column order — `tableGeometryMeasurePlugin`'s write
  * phase relies on that order to match each bar to its header cell (see its
  * own doc comment in tableHandles.ts). The add-row/add-column bands sort
  * last; their own relative DOM order doesn't matter since neither is
@@ -867,7 +874,13 @@ const ADD_COLUMN_BAND_SIDE = 9001;
  * table's lifetime within one decoration pass, and the same value
  * `tableHoverField` keys hover/selection state on.
  */
-function decorateTable(state: EditorState, node: SyntaxNode, hover: TableHoverState, out: Range<Decoration>[]): void {
+function decorateTable(
+  state: EditorState,
+  node: SyntaxNode,
+  hover: TableHoverState,
+  selection: TableHoverState,
+  out: Range<Decoration>[],
+): void {
   const delimiterNode = node.getChild("TableDelimiter");
   const alignment = delimiterNode
     ? parseColumnAlignment(state.doc.sliceString(delimiterNode.from, delimiterNode.to))
@@ -878,7 +891,7 @@ function decorateTable(state: EditorState, node: SyntaxNode, hover: TableHoverSt
   let child = node.firstChild;
   while (child) {
     if (child.type.name === "TableHeader") {
-      decorateTableRow(state, child, alignment, true, tableFrom, rowIndex, hover, out);
+      decorateTableRow(state, child, alignment, true, tableFrom, rowIndex, hover, selection, out);
       const headerLineStart = state.doc.lineAt(child.from).from;
       out.push(
         Decoration.widget({ widget: new RowHandleWidget(tableFrom, rowIndex), side: ROW_HANDLE_SIDE }).range(
@@ -902,7 +915,7 @@ function decorateTable(state: EditorState, node: SyntaxNode, hover: TableHoverSt
       );
       rowIndex++;
     } else if (child.type.name === "TableRow") {
-      decorateTableRow(state, child, alignment, false, tableFrom, rowIndex, hover, out);
+      decorateTableRow(state, child, alignment, false, tableFrom, rowIndex, hover, selection, out);
       const rowLineStart = state.doc.lineAt(child.from).from;
       out.push(
         Decoration.widget({ widget: new RowHandleWidget(tableFrom, rowIndex), side: ROW_HANDLE_SIDE }).range(
@@ -1075,6 +1088,7 @@ export function buildDecorations(
   documentPath: string,
   hasFocus: boolean,
   hover: TableHoverState = NO_TABLE_HOVER,
+  selection: TableHoverState = NO_TABLE_HOVER,
 ): DecorationSet {
   const decorations: Range<Decoration>[] = [];
   const tree = syntaxTree(state);
@@ -1121,7 +1135,7 @@ export function buildDecorations(
           // reaches the switch below and gets decorated the same way it
           // would inside a paragraph; TableHeader/TableRow/TableCell/
           // TableDelimiter have no case there, so revisiting them is a no-op.
-          decorateTable(state, ref.node, hover, decorations);
+          decorateTable(state, ref.node, hover, selection, decorations);
           return;
         }
 

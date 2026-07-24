@@ -62,8 +62,14 @@ function findTableFrom(state: EditorState): number {
   return found;
 }
 
-function collect(state: EditorState, documentPath = "test.md", hasFocus = true, hover?: TableHoverState): CollectedDecoration[] {
-  const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], documentPath, hasFocus, hover);
+function collect(
+  state: EditorState,
+  documentPath = "test.md",
+  hasFocus = true,
+  hover?: TableHoverState,
+  selection?: TableHoverState,
+): CollectedDecoration[] {
+  const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], documentPath, hasFocus, hover, selection);
   const out: CollectedDecoration[] = [];
   decorations.between(0, state.doc.length, (from, to, deco) => {
     out.push({
@@ -1120,6 +1126,30 @@ describe("buildDecorations: table geometry widgets (issue #201 phase 2)", () => 
     const decos = collect(state);
     expect(decos.some((d) => d.class?.split(" ").includes("cm-table-row-selected"))).toBe(false);
     expect(decos.some((d) => d.class?.split(" ").includes("cm-table-col-selected"))).toBe(false);
+  });
+
+  // A pinned selection and a hover are independent, simultaneously active
+  // targets — clicking a row (pinning it) and then hovering a different
+  // column should highlight both at once, not have one clobber the other.
+  it("highlights a pinned row selection and a separately hovered column at the same time", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n";
+    const state = stateFor(doc, doc.length);
+    const table = findTableFrom(state);
+    const decos = collect(state, "test.md", true, { table, row: null, col: 1 }, { table, row: 1, col: null });
+
+    const row1Line = state.doc.line(3); // "1 | 2" — the pinned row
+    const row2Line = state.doc.line(4); // "3 | 4" — untouched
+    const row1Cells = decos.filter((d) => d.from >= row1Line.from && d.to <= row1Line.to && d.class?.split(" ").includes("cm-table-cell"));
+    const row2Cells = decos.filter((d) => d.from >= row2Line.from && d.to <= row2Line.to && d.class?.split(" ").includes("cm-table-cell"));
+
+    // Every cell in the pinned row is row-selected.
+    expect(row1Cells.every((d) => d.class?.split(" ").includes("cm-table-row-selected"))).toBe(true);
+    // Column 1 (the "B"/second column) is col-selected in both rows, via hover.
+    expect(row1Cells[1].class?.split(" ")).toContain("cm-table-col-selected");
+    expect(row2Cells[1].class?.split(" ")).toContain("cm-table-col-selected");
+    // Column 0 in row 2 gets neither class.
+    expect(row2Cells[0].class?.split(" ")).not.toContain("cm-table-row-selected");
+    expect(row2Cells[0].class?.split(" ")).not.toContain("cm-table-col-selected");
   });
 });
 
