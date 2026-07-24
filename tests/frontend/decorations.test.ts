@@ -7,6 +7,13 @@ import { EditorView } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 import { buildDecorations, buildMermaidWidgetDecorations, buildTableWrapRanges } from "../../src/lib/editor/markdown/decorations";
 import { CheckboxWidget, EmptyCellWidget, ImageWidget, ListBulletWidget, ListMarkerWidget, MermaidWidget } from "../../src/lib/editor/markdown/widgets";
+import {
+  AddColumnBandWidget,
+  AddRowBandWidget,
+  RowHandleWidget,
+  TableColumnBarWidget,
+  type TableHoverState,
+} from "../../src/lib/editor/markdown/tableHandles";
 import { markdownSourceExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
 
 const markdownCss = readFileSync(resolve(__dirname, "../../src/styles/markdown.css"), "utf-8");
@@ -41,8 +48,22 @@ interface CollectedDecoration {
   tableGap?: boolean;
 }
 
-function collect(state: EditorState, documentPath = "test.md", hasFocus = true): CollectedDecoration[] {
-  const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], documentPath, hasFocus);
+/** The first `Table` syntax node's own `from` — the identity key `tableHoverField` uses. */
+function findTableFrom(state: EditorState): number {
+  let found = -1;
+  syntaxTree(state).iterate({
+    enter(ref) {
+      if (ref.name === "Table" && found === -1) {
+        found = ref.from;
+      }
+    },
+  });
+  if (found === -1) throw new Error("expected a table in the document");
+  return found;
+}
+
+function collect(state: EditorState, documentPath = "test.md", hasFocus = true, hover?: TableHoverState): CollectedDecoration[] {
+  const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], documentPath, hasFocus, hover);
   const out: CollectedDecoration[] = [];
   decorations.between(0, state.doc.length, (from, to, deco) => {
     out.push({
@@ -997,6 +1018,108 @@ describe("buildDecorations: tables", () => {
     const linkDeco = decos.find((d) => d.class === "cm-link");
     expect(linkDeco).toBeTruthy();
     expect(state.doc.sliceString(linkDeco!.from, linkDeco!.to)).toBe("site");
+  });
+});
+
+describe("buildDecorations: table geometry widgets (issue #201 phase 2)", () => {
+  function widgetsOfType<T>(state: EditorState, ctor: new (...args: never[]) => T, hover?: TableHoverState): T[] {
+    const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], "test.md", true, hover);
+    const found: T[] = [];
+    decorations.between(0, state.doc.length, (_from, _to, deco) => {
+      if (deco.spec.widget instanceof ctor) {
+        found.push(deco.spec.widget);
+      }
+    });
+    return found;
+  }
+
+  const TWO_TABLE_DOC =
+    "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n\nSome text.\n\n| C | D |\n| --- | --- |\n| 5 | 6 |\n";
+
+  it("emits one RowHandleWidget per row (header included), keyed on the table's own from", () => {
+    const doc = "| Name | Role |\n| --- | --- |\n| Alice | Engineer |\n| Bob | Designer |\n";
+    const state = stateFor(doc, doc.length);
+    const handles = widgetsOfType(state, RowHandleWidget);
+    expect(handles).toHaveLength(3);
+    expect(handles.map((h) => h.row)).toEqual([0, 1, 2]);
+    expect(new Set(handles.map((h) => h.table)).size).toBe(1);
+  });
+
+  it("emits exactly one TableColumnBarWidget per column, matching columnCount even with an empty header cell", () => {
+    const doc = "| A |  | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n";
+    const state = stateFor(doc, doc.length);
+    const bars = widgetsOfType(state, TableColumnBarWidget);
+    expect(bars).toHaveLength(3);
+    expect(bars.map((b) => b.column)).toEqual([0, 1, 2]);
+  });
+
+  it("emits exactly one add-row and one add-column band widget per table", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+    const state = stateFor(doc, doc.length);
+    expect(widgetsOfType(state, AddRowBandWidget)).toHaveLength(1);
+    expect(widgetsOfType(state, AddColumnBandWidget)).toHaveLength(1);
+  });
+
+  it("gives independent row-handle sets to two tables in one document, each keyed on its own table", () => {
+    const state = stateFor(TWO_TABLE_DOC, TWO_TABLE_DOC.length);
+    const handles = widgetsOfType(state, RowHandleWidget);
+    // 3 rows in the first table + 2 rows in the second.
+    expect(handles).toHaveLength(5);
+    const tables = new Set(handles.map((h) => h.table));
+    expect(tables.size).toBe(2);
+  });
+
+  it("applies cm-table-row-selected to every cell in the hovered row, and no other row", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n";
+    const state = stateFor(doc, doc.length);
+    const table = findTableFrom(state);
+    const decos = collect(state, "test.md", true, { table, row: 1, col: null });
+    const bodyLine1 = state.doc.line(3);
+    const bodyLine2 = state.doc.line(4);
+    const row1Cells = decos.filter((d) => d.from >= bodyLine1.from && d.to <= bodyLine1.to && d.class?.split(" ").includes("cm-table-cell"));
+    const row2Cells = decos.filter((d) => d.from >= bodyLine2.from && d.to <= bodyLine2.to && d.class?.split(" ").includes("cm-table-cell"));
+    expect(row1Cells.length).toBeGreaterThan(0);
+    expect(row1Cells.every((d) => d.class?.split(" ").includes("cm-table-row-selected"))).toBe(true);
+    expect(row2Cells.some((d) => d.class?.split(" ").includes("cm-table-row-selected"))).toBe(false);
+  });
+
+  it("applies cm-table-col-selected to every cell in the hovered column, including an empty-cell placeholder", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 ||\n";
+    const state = stateFor(doc, doc.length);
+    const table = findTableFrom(state);
+    const decos = collect(state, "test.md", true, { table, row: null, col: 1 });
+    // Column 1's body cell is the zero-width placeholder — no `class` on its
+    // own decoration spec, so check the widget's own held classes instead.
+    const placeholder = decos.find((d) => d.widget instanceof EmptyCellWidget);
+    expect(placeholder).toBeTruthy();
+    const widget = placeholder!.widget as EmptyCellWidget;
+    expect(widget.classes.split(" ")).toContain("cm-table-col-selected");
+    // Column 0 (unselected) must not pick up the class.
+    const columnZeroCell = decos.find((d) => d.class?.split(" ").includes("cm-table-cell") && state.doc.sliceString(d.from, d.to) === "1");
+    expect(columnZeroCell!.class?.split(" ")).not.toContain("cm-table-col-selected");
+  });
+
+  // Regression coverage for round 3's must-fix 2: the hover field's `table`
+  // key is what stops one table's hover from bleeding into another table
+  // sharing the same row/column index.
+  it("does not cross-highlight a second table sharing the same row index", () => {
+    const state = stateFor(TWO_TABLE_DOC, TWO_TABLE_DOC.length);
+    const firstTableFrom = 0;
+    const decos = collect(state, "test.md", true, { table: firstTableFrom, row: 1, col: null });
+    const secondTableBodyLine = state.doc.line(10); // "| 5 | 6 |" in the second table
+    const secondTableCells = decos.filter(
+      (d) => d.from >= secondTableBodyLine.from && d.to <= secondTableBodyLine.to && d.class?.split(" ").includes("cm-table-cell"),
+    );
+    expect(secondTableCells.length).toBeGreaterThan(0);
+    expect(secondTableCells.some((d) => d.class?.split(" ").includes("cm-table-row-selected"))).toBe(false);
+  });
+
+  it("applies no highlight class at all when hover is NO_TABLE_HOVER (the default)", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+    const state = stateFor(doc, doc.length);
+    const decos = collect(state);
+    expect(decos.some((d) => d.class?.split(" ").includes("cm-table-row-selected"))).toBe(false);
+    expect(decos.some((d) => d.class?.split(" ").includes("cm-table-col-selected"))).toBe(false);
   });
 });
 
