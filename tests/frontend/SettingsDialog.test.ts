@@ -321,7 +321,7 @@ describe("SettingsDialog", () => {
       expect(screen.getByText("Dock Position")).toBeTruthy();
     });
 
-    it("auto-expands a matched section that was collapsed", async () => {
+    it("auto-expands a matched section that was collapsed, and a click during search can collapse it again", async () => {
       settingsOverlay.set({ open: true });
       const { container } = render(SettingsDialog);
       await tick();
@@ -337,6 +337,54 @@ describe("SettingsDialog", () => {
 
       expect(header.getAttribute("aria-expanded")).toBe("true");
       expect(container.querySelector(".dropdown-trigger")).not.toBeNull();
+
+      // Clicking the auto-expanded header while searching used to be a
+      // no-op; it now visibly collapses the section.
+      await fireEvent.click(header);
+      await tick();
+      expect(header.getAttribute("aria-expanded")).toBe("false");
+      expect(container.querySelector(".dropdown-trigger")).toBeNull();
+
+      // Clicking again re-expands it: a genuine toggle, not a one-shot
+      // escape from the forced-expanded state.
+      await fireEvent.click(header);
+      await tick();
+      expect(header.getAttribute("aria-expanded")).toBe("true");
+      expect(container.querySelector(".dropdown-trigger")).not.toBeNull();
+
+      // Clearing the query restores the pre-search state (manually
+      // collapsed), proving the search override never leaked into the
+      // persisted `expandedSections`.
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "" } });
+      await tick();
+      expect(header.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("resets search overrides once the query clears, so a later search auto-expands again", async () => {
+      settingsOverlay.set({ open: true });
+      const { container } = render(SettingsDialog);
+      await tick();
+      await selectCategory("Appearance");
+
+      const searchInput = screen.getByLabelText("Search settings");
+      await fireEvent.input(searchInput, { target: { value: "theme" } });
+      await tick();
+      const header = container.querySelector(".settings-section-header") as HTMLElement;
+      expect(header.getAttribute("aria-expanded")).toBe("true");
+
+      await fireEvent.click(header);
+      await tick();
+      expect(header.getAttribute("aria-expanded")).toBe("false");
+
+      await fireEvent.input(searchInput, { target: { value: "" } });
+      await tick();
+
+      // A different query that also matches the Theme section (via the
+      // "color" keyword synonym rather than "theme" itself).
+      await fireEvent.input(searchInput, { target: { value: "color" } });
+      await tick();
+
+      expect(header.getAttribute("aria-expanded")).toBe("true");
     });
 
     it("shows an empty state when nothing matches", async () => {
