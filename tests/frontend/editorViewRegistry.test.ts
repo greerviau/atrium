@@ -3,6 +3,7 @@ import { tick } from "svelte";
 import { render, cleanup } from "@testing-library/svelte";
 import { EditorView } from "@codemirror/view";
 import { undo } from "@codemirror/commands";
+import { completionStatus } from "@codemirror/autocomplete";
 import EditorPane from "../../src/lib/editor/EditorPane.svelte";
 import { tabsState, type Tab } from "../../src/lib/stores/tabs";
 import { focusedEditorPaneId, editorPaneTree } from "../../src/lib/stores/editorPanes";
@@ -232,5 +233,31 @@ describe("editorViewRegistry: content sync between split panes showing the same 
     const undoHandledInA = undo(viewA);
     expect(undoHandledInA).toBe(true);
     expect(viewA.state.doc.toString()).toBe("original\n");
+  });
+
+  it("a mirrored keystroke does not activate autocompletion in an unfocused sibling", async () => {
+    seedTab("original\n");
+    editorPaneTree.set(twoPaneSplit());
+    focusedEditorPaneId.set(PANE_A);
+
+    const { container: containerA } = render(EditorPane, { filePath: PATH, paneId: PANE_A });
+    const { container: containerB } = render(EditorPane, { filePath: PATH, paneId: PANE_B });
+    await tick();
+
+    const viewA = findView(containerA);
+    const viewB = findView(containerB);
+
+    // A genuinely-typed keystroke in A (userEvent: "input.type", the same
+    // classification autocompletion() itself checks for) must not be
+    // forwarded as typed input into B: B has no focus gate of its own to
+    // rely on, so a forwarded userEvent would start a completion query, and
+    // pop a tooltip, in a pane the user isn't even looking at.
+    viewA.dispatch({
+      changes: { from: 0, to: 0, insert: "al" },
+      userEvent: "input.type",
+    });
+
+    expect(viewB.state.doc.toString()).toBe("aloriginal\n");
+    expect(completionStatus(viewB.state)).toBeNull();
   });
 });

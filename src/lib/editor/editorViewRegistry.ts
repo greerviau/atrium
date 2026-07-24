@@ -42,14 +42,22 @@ function broadcastChange(path: string, sourceView: EditorView, tr: Transaction):
   // Snapshot before iterating: dispatching into a sibling can synchronously
   // trigger its own teardown (e.g. a reconciliation effect it runs in
   // response), which would otherwise mutate `views` mid-iteration.
+  //
+  // Deliberately does not carry over `tr.userEvent`: `@codemirror/autocomplete`
+  // activates a completion query purely on `tr.isUserEvent("input.type")`, with
+  // no focus gate anywhere in that package, so forwarding the source
+  // transaction's own `userEvent` would start a completion query — and pop a
+  // tooltip — in every unfocused sibling view of the same file on every
+  // keystroke. Leaving the mirrored dispatch's `userEvent` unset avoids that
+  // misclassification; nothing else in this codebase reads `userEvent` or
+  // calls `isUserEvent`.
+  const spec: TransactionSpec = {
+    changes: tr.changes,
+    annotations: [syncAnnotation.of(true), Transaction.addToHistory.of(false)],
+  };
   for (const view of [...views]) {
     if (view === sourceView) continue;
-    const spec: TransactionSpec = {
-      changes: tr.changes,
-      annotations: [syncAnnotation.of(true), Transaction.addToHistory.of(false)],
-    };
-    const userEvent = tr.annotation(Transaction.userEvent);
-    view.dispatch(userEvent ? { ...spec, userEvent } : spec);
+    view.dispatch(spec);
   }
 }
 

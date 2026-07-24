@@ -336,8 +336,10 @@
   onDestroy(() => {
     cancelMinimapIdle();
     detachScrollbarAutoHide?.();
-    unregisterView(filePath, view);
-    view?.destroy();
+    if (view) {
+      unregisterView(filePath, view);
+      view.destroy();
+    }
     if ($tabsState.activeTabPath === null) {
       clearCursorPosition();
     }
