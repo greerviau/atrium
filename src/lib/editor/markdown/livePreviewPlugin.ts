@@ -7,6 +7,13 @@ import { syntaxTree } from "@codemirror/language";
 import { buildDecorations, buildMermaidWidgetDecorations, buildTableGapAtomicRanges, buildTableWrapRanges } from "./decorations";
 import { handleLinkClick } from "./widgets";
 import { tableNavigationKeymap } from "./tableEdit";
+import {
+  clearTableSelectionOnClickElsewhere,
+  tableGeometryMeasurePlugin,
+  tableHoverField,
+  tableSelectionField,
+  tableSelectionKeymap,
+} from "./tableHandles";
 
 /**
  * Tracks whether the editor's `contentDOM` currently has DOM focus, driven
@@ -65,6 +72,10 @@ const focusTrackingHandlers = EditorView.domEventHandlers({
  * the viewport, selection, or focus, since a `BlockWrapper`'s range is a
  * structural property of the table itself, not of what's currently
  * revealed.
+ *
+ * Also rebuilds decorations on a `tableHoverField`/`tableSelectionField`
+ * change, so hovering or clicking a table row/column handle applies its
+ * highlight class the same update it's dispatched in.
  */
 function livePreviewPlugin(documentPath: string) {
   const plugin = ViewPlugin.fromClass(
@@ -73,17 +84,28 @@ function livePreviewPlugin(documentPath: string) {
       tableWraps: RangeSet<BlockWrapper>;
 
       constructor(view: EditorView) {
-        this.decorations = buildDecorations(view.state, view.visibleRanges, documentPath, view.state.field(editorFocusField));
+        this.decorations = buildDecorations(
+          view.state,
+          view.visibleRanges,
+          documentPath,
+          view.state.field(editorFocusField),
+          view.state.field(tableHoverField),
+          view.state.field(tableSelectionField),
+        );
         this.tableWraps = buildTableWrapRanges(view.state);
       }
 
       update(update: ViewUpdate) {
         const focusChanged = update.startState.field(editorFocusField) !== update.state.field(editorFocusField);
+        const hoverChanged = update.startState.field(tableHoverField) !== update.state.field(tableHoverField);
+        const selectionChanged = update.startState.field(tableSelectionField) !== update.state.field(tableSelectionField);
         if (
           update.docChanged ||
           update.selectionSet ||
           update.viewportChanged ||
           focusChanged ||
+          hoverChanged ||
+          selectionChanged ||
           syntaxTree(update.startState) !== syntaxTree(update.state)
         ) {
           this.decorations = buildDecorations(
@@ -91,6 +113,8 @@ function livePreviewPlugin(documentPath: string) {
             update.view.visibleRanges,
             documentPath,
             update.state.field(editorFocusField),
+            update.state.field(tableHoverField),
+            update.state.field(tableSelectionField),
           );
         }
         if (update.docChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
@@ -199,28 +223,33 @@ const linkClickHandler = EditorView.domEventHandlers({
  * value), but keeping `editorFocusField` first for both is simplest to
  * reason about.
  *
- * `tableNavigationKeymap` is wrapped in `Prec.highest`, not a plain
- * `keymap.of(...)`: `EditorPane.svelte` puts `baseExtensions()` — whose own
- * keymap already binds `Tab` (`indentWithTab`) and `Enter`
- * (`insertNewlineAndIndent`, via `defaultKeymap`) — *before* this extension
- * set in its top-level `extensions` array. Two `keymap.of(...)` calls at the
- * same precedence are tried in the order they appear in the flattened
- * extension tree, so without `Prec.highest` here, `baseExtensions()`'s
- * bindings would always win and `tableNavigationKeymap` would never run.
- * `Prec.highest` is safe (not just convenient) precisely because every
- * binding in `tableNavigationKeymap` already self-gates on the cursor being
- * inside a table and falls through (returns `false`) everywhere else, so
- * outranking the generic keymap never changes behavior outside a table.
+ * `tableNavigationKeymap`/`tableSelectionKeymap` are merged into one
+ * `keymap.of(...)` wrapped in `Prec.highest`, not a plain `keymap.of(...)`:
+ * `EditorPane.svelte` puts `baseExtensions()` — whose own keymap already
+ * binds `Tab` (`indentWithTab`) and `Enter` (`insertNewlineAndIndent`, via
+ * `defaultKeymap`) — *before* this extension set in its top-level
+ * `extensions` array. Two `keymap.of(...)` calls at the same precedence are
+ * tried in the order they appear in the flattened extension tree, so
+ * without `Prec.highest` here, `baseExtensions()`'s bindings would always
+ * win and neither table keymap would ever run. `Prec.highest` is safe (not
+ * just convenient) precisely because every binding in both self-gates
+ * (on the cursor being inside a table, or on a selection actually being
+ * pinned) and falls through (returns `false`) otherwise, so outranking the
+ * generic keymap never changes behavior outside those cases.
  */
 export function markdownExtensions(documentPath: string): Extension[] {
   return [
     markdown({ base: markdownLanguage, codeLanguages: languages }),
     editorFocusField,
+    tableHoverField,
+    tableSelectionField,
     focusTrackingHandlers,
     livePreviewPlugin(documentPath),
     mermaidWidgetField,
+    tableGeometryMeasurePlugin,
+    clearTableSelectionOnClickElsewhere,
     linkClickHandler,
-    Prec.highest(keymap.of(tableNavigationKeymap)),
+    Prec.highest(keymap.of([...tableNavigationKeymap, ...tableSelectionKeymap])),
   ];
 }
 
