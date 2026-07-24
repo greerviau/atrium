@@ -6,7 +6,13 @@ import { movePath } from "./contextMenu";
 /** Path of the explorer row currently in a pointer-driven drag, or null. */
 export const draggingPath = writable<string | null>(null);
 
-/** Directory the pointer currently resolves to as a valid drop target, or null. */
+/**
+ * Directory the pointer currently resolves to as a valid drop target, or
+ * null. Written both by the pointer-driven move gesture below (`onMove`)
+ * and by `App.svelte`'s `onDragDropEvent` handler for a native OS
+ * (Finder-style) drag, so `FileTreeNode.svelte`'s highlight looks identical
+ * regardless of which drag source is in flight.
+ */
 export const dragOverTargetDir = writable<string | null>(null);
 
 const DRAG_THRESHOLD_PX = 4;
