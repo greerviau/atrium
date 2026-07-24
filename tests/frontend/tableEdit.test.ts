@@ -8,9 +8,11 @@ import {
   insertRow,
   deleteRow,
   moveRow,
+  duplicateRow,
   insertColumn,
   deleteColumn,
   moveColumn,
+  duplicateColumn,
   tableNavigationKeymap,
   type TableEditContext,
 } from "../../src/lib/editor/markdown/tableEdit";
@@ -211,6 +213,59 @@ describe("moveRow", () => {
   });
 });
 
+describe("duplicateRow", () => {
+  it("is null on the delimiter", () => {
+    expect(specAt(BASIC, BASIC.indexOf("-----"), (s, c) => duplicateRow(s, c))).toBeNull();
+  });
+
+  it("duplicates a body row immediately below itself, verbatim", () => {
+    expect(apply(BASIC, BASIC.indexOf("Alice"), (s, c) => duplicateRow(s, c))).toBe(
+      "| Name  | Role     |\n| ----- | -------- |\n| Alice | Engineer |\n| Alice | Engineer |\n| Bob   | Designer |\n",
+    );
+  });
+
+  it("duplicates the last body row when it's also the last line of the document", () => {
+    const doc = "| Name  | Role     |\n| ----- | -------- |\n| Alice | Engineer |\n| Bob   | Designer |";
+    expect(apply(doc, doc.indexOf("Bob"), (s, c) => duplicateRow(s, c))).toBe(
+      "| Name  | Role     |\n| ----- | -------- |\n| Alice | Engineer |\n| Bob   | Designer |\n| Bob   | Designer |",
+    );
+  });
+
+  it("duplicates the header row as the new first body row below the delimiter, per the resolved open question", () => {
+    expect(apply(BASIC, BASIC.indexOf("Name"), (s, c) => duplicateRow(s, c))).toBe(
+      "| Name  | Role     |\n| ----- | -------- |\n| Name  | Role     |\n| Alice | Engineer |\n| Bob   | Designer |\n",
+    );
+  });
+
+  it("preserves a blockquote's leading marker on the duplicated row", () => {
+    const doc = "> | A | B |\n> | --- | --- |\n> | 1 | 2 |\n";
+    expect(apply(doc, doc.indexOf("1"), (s, c) => duplicateRow(s, c))).toBe(
+      "> | A | B |\n> | --- | --- |\n> | 1 | 2 |\n> | 1 | 2 |\n",
+    );
+  });
+
+  it("preserves a list item's leading indentation on the duplicated row", () => {
+    const doc = "- item\n\n  | A | B |\n  | --- | --- |\n  | 1 | 2 |\n";
+    expect(apply(doc, doc.indexOf("| 1") + 2, (s, c) => duplicateRow(s, c))).toBe(
+      "- item\n\n  | A | B |\n  | --- | --- |\n  | 1 | 2 |\n  | 1 | 2 |\n",
+    );
+  });
+
+  it("duplicates a row with an empty cell verbatim", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 |  |\n";
+    expect(apply(doc, doc.indexOf("1"), (s, c) => duplicateRow(s, c))).toBe(
+      "| A | B |\n| --- | --- |\n| 1 |  |\n| 1 |  |\n",
+    );
+  });
+
+  it("duplicates the only body row in a single-column, two-row table", () => {
+    const doc = "| Name  |\n| ----- |\n| Alice |\n";
+    expect(apply(doc, doc.indexOf("Alice"), (s, c) => duplicateRow(s, c))).toBe(
+      "| Name  |\n| ----- |\n| Alice |\n| Alice |\n",
+    );
+  });
+});
+
 describe("insertColumn", () => {
   it("inserts a left-aligned empty column at the leftmost edge, across every row and the delimiter", () => {
     expect(apply(BASIC, BASIC.indexOf("Name"), (s, c) => insertColumn(s, c, "left"))).toBe(
@@ -343,6 +398,61 @@ describe("moveColumn", () => {
   });
 });
 
+describe("duplicateColumn", () => {
+  it("duplicates a column's content and alignment immediately to its right, across every row and the delimiter", () => {
+    const doc = "| A | B | C |\n| --- | :---: | ---: |\n| 1 | 2 | 3 |\n";
+    expect(apply(doc, doc.indexOf("B"), (s, c) => duplicateColumn(s, c))).toBe(
+      "| A | B | B | C |\n| --- | :---: | :---: | ---: |\n| 1 | 2 | 2 | 3 |\n",
+    );
+  });
+
+  it("duplicates the leftmost column", () => {
+    expect(apply(BASIC, BASIC.indexOf("Name"), (s, c) => duplicateColumn(s, c))).toBe(
+      "| Name | Name  | Role     |\n| ----- | ----- | -------- |\n| Alice | Alice | Engineer |\n| Bob | Bob   | Designer |\n",
+    );
+  });
+
+  it("duplicates the rightmost column", () => {
+    expect(apply(BASIC, BASIC.indexOf("Role"), (s, c) => duplicateColumn(s, c))).toBe(
+      "| Name  | Role | Role     |\n| ----- | -------- | -------- |\n| Alice | Engineer | Engineer |\n| Bob   | Designer | Designer |\n",
+    );
+  });
+
+  it("gives identical results whether resolved from the delimiter row or the header", () => {
+    const fromHeader = apply(BASIC, BASIC.indexOf("Role"), (s, c) => duplicateColumn(s, c));
+    const fromDelimiter = apply(BASIC, BASIC.indexOf("--------"), (s, c) => duplicateColumn(s, c));
+    expect(fromDelimiter).toBe(fromHeader);
+  });
+
+  it("duplicates a genuinely empty cell as another empty cell", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 |  |\n";
+    expect(apply(doc, doc.indexOf("A"), (s, c) => duplicateColumn(s, c))).toBe(
+      "| A | A | B |\n| --- | --- | --- |\n| 1 | 1 |  |\n",
+    );
+  });
+
+  it("leaves a short row's own already-implicit-empty tail untouched", () => {
+    const doc = "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n| 4 |\n";
+    expect(apply(doc, doc.indexOf("C"), (s, c) => duplicateColumn(s, c))).toBe(
+      "| A | B | C | C |\n| --- | --- | --- | --- |\n| 1 | 2 | 3 | 3 |\n| 4 |\n",
+    );
+  });
+
+  it("duplicates the only column in a single-column table", () => {
+    const doc = "| Name  |\n| ----- |\n| Alice |\n";
+    expect(apply(doc, doc.indexOf("Alice"), (s, c) => duplicateColumn(s, c))).toBe(
+      "| Name | Name  |\n| ----- | ----- |\n| Alice | Alice |\n",
+    );
+  });
+
+  it("leaves a bold cell's own content intact when it's the one being duplicated", () => {
+    const doc = "| A | B |\n| --- | --- |\n| **bold** | plain |\n";
+    expect(apply(doc, doc.indexOf("**bold**"), (s, c) => duplicateColumn(s, c))).toBe(
+      "| A | A | B |\n| --- | --- | --- |\n| **bold** | **bold** | plain |\n",
+    );
+  });
+});
+
 // GFM lets a body row have fewer cells than the header — missing trailing
 // cells are implicitly empty (a common shape: a row mid-typed, or pasted
 // short). Every column command must handle a row this short reaching for a
@@ -395,17 +505,25 @@ describe("ragged rows (a body row shorter than the header)", () => {
     expect(fromB).toBe("| A | C | B |\n| --- | --- | --- |\n| 1 | 3 | 2 |\n| 4 |\n");
   });
 
-  it("none of the six commands throw when resolved from the header of a table containing a short row", () => {
+  it("none of the eight commands throw when resolved from the header of a table containing a short row", () => {
     const ctx = ctxAt(RAGGED, RAGGED.indexOf("A"));
     const state = stateFor(RAGGED);
     expect(() => insertRow(state, ctx, "below")).not.toThrow();
     expect(() => deleteRow(state, ctx)).not.toThrow();
     expect(() => moveRow(state, ctx, "down")).not.toThrow();
+    expect(() => duplicateRow(state, ctx)).not.toThrow();
     expect(() => insertColumn(state, ctx, "left")).not.toThrow();
     expect(() => insertColumn(state, ctx, "right")).not.toThrow();
     expect(() => deleteColumn(state, ctx)).not.toThrow();
     expect(() => moveColumn(state, ctx, "left")).not.toThrow();
     expect(() => moveColumn(state, ctx, "right")).not.toThrow();
+    expect(() => duplicateColumn(state, ctx)).not.toThrow();
+  });
+
+  it("duplicateColumn past a short row's own last cell leaves that row untouched", () => {
+    expect(apply(RAGGED, RAGGED.indexOf("C"), (s, c) => duplicateColumn(s, c))).toBe(
+      "| A | B | C | C |\n| --- | --- | --- | --- |\n| 1 | 2 | 3 | 3 |\n| 4 |\n",
+    );
   });
 });
 

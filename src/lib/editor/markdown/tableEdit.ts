@@ -236,6 +236,51 @@ export function moveRow(state: EditorState, ctx: TableEditContext, dir: "up" | "
 }
 
 /**
+ * Inserts `rowText` as a whole new physical line immediately after
+ * `lineNumber`, mirroring `insertRowAfterLine`'s two placement shapes (a
+ * real next line to insert before, vs. appending after the document's last
+ * line) but without `insertRowAfterLine`'s empty-row-text/cursor-placement
+ * assumptions — `rowText` is already a complete row (e.g. a duplicated
+ * row's own existing text), and the caller doesn't need a specific cursor
+ * placement for it.
+ */
+function insertRowTextAfterLine(state: EditorState, lineNumber: number, rowText: string): TransactionSpec {
+  const line = state.doc.line(lineNumber);
+  if (lineNumber < state.doc.lines) {
+    const nextLineFrom = state.doc.line(lineNumber + 1).from;
+    return { changes: { from: nextLineFrom, insert: rowText + "\n" } };
+  }
+  return { changes: { from: line.to, insert: "\n" + rowText } };
+}
+
+/**
+ * Inserts a copy of the target row's own full line text immediately below
+ * it — `null` only for the delimiter (duplicating the alignment row makes no
+ * sense; `deleteRow`'s header/delimiter restriction is otherwise unchanged,
+ * but `duplicateRow` allows a `header` target, per the resolved "should the
+ * header row be duplicable" open question). A `header` target inserts the
+ * copy immediately below the delimiter as the new first body row — the same
+ * insertion point `insertRow(..., "below")` already uses when targeting the
+ * header — rather than duplicating the header line in place, since a second
+ * header row would break the table's own GFM structure.
+ */
+export function duplicateRow(state: EditorState, ctx: TableEditContext): TransactionSpec | null {
+  if (ctx.rowKind === "delimiter") {
+    return null;
+  }
+  const rowLine = state.doc.lineAt(ctx.row.from);
+  const rowText = state.doc.sliceString(rowLine.from, rowLine.to);
+  if (ctx.rowKind === "header") {
+    const delimiterNode = ctx.table.getChild("TableDelimiter");
+    if (!delimiterNode) {
+      return null;
+    }
+    return insertRowTextAfterLine(state, state.doc.lineAt(delimiterNode.from).number, rowText);
+  }
+  return insertRowTextAfterLine(state, rowLine.number, rowText);
+}
+
+/**
  * The insertion offset/text for one row's column-splice, shared by every
  * row (header, body, and — via `collectDelimiterSegments`'s same-shaped
  * ranges — the delimiter). `content` is `""` for a real row's freshly
@@ -294,6 +339,46 @@ export function insertColumn(state: EditorState, ctx: TableEditContext, where: "
   const delimiterChange = columnInsertionChange(collectDelimiterSegments(state, delimiterNode), ctx.column, where, "---");
   if (delimiterChange) {
     changes.push(delimiterChange);
+  }
+
+  return { changes };
+}
+
+/**
+ * Splices a copy of column `ctx.column`'s own text into every row (and the
+ * delimiter's own alignment segment) immediately to its right, in one
+ * transaction — the column-splice equivalent of `duplicateRow`, reusing
+ * `columnInsertionChange`'s splice shape with each row's own existing text
+ * (rather than an empty string) as the inserted content, so the duplicate
+ * starts out identical to its source, alignment included. A row that
+ * doesn't reach column `ctx.column` at all (a short row — see
+ * `columnInsertionChange`'s own doc comment) has nothing to duplicate and is
+ * left untouched, the same short-row allowance `insertColumn` makes.
+ */
+export function duplicateColumn(state: EditorState, ctx: TableEditContext): TransactionSpec | null {
+  const delimiterNode = ctx.table.getChild("TableDelimiter");
+  if (!delimiterNode) {
+    return null;
+  }
+
+  const changes = ctx.rows
+    .map((row) => {
+      const ranges = collectCellSlots(row);
+      if (ranges.length <= ctx.column) {
+        return null;
+      }
+      const content = state.doc.sliceString(ranges[ctx.column].from, ranges[ctx.column].to);
+      return columnInsertionChange(ranges, ctx.column, "right", content);
+    })
+    .filter((change): change is { from: number; insert: string } => change !== null);
+
+  const delimiterRanges = collectDelimiterSegments(state, delimiterNode);
+  if (delimiterRanges.length > ctx.column) {
+    const delimiterContent = state.doc.sliceString(delimiterRanges[ctx.column].from, delimiterRanges[ctx.column].to);
+    const delimiterChange = columnInsertionChange(delimiterRanges, ctx.column, "right", delimiterContent);
+    if (delimiterChange) {
+      changes.push(delimiterChange);
+    }
   }
 
   return { changes };
