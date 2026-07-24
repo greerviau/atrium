@@ -19,7 +19,7 @@
   import { insertPathsAtScreenPoint } from "./lib/terminal/terminalDropTargets";
   import { resolveExplorerDropTargetDir } from "./lib/explorer/explorerDropTargets";
   import { importPathsInto } from "./lib/explorer/importExternalPaths";
-  import { dragOverTargetDir } from "./lib/explorer/explorerDrag";
+  import { dragOverTargetDir, draggingPath } from "./lib/explorer/explorerDrag";
   import { workspaceTakePendingOpen, appConfirmClose } from "./lib/ipc/commands";
   import { initMenuBar } from "./lib/shell/MenuBar";
   import {
@@ -490,7 +490,14 @@
       }
       insertPathsAtScreenPoint(event.paths, logical.x, logical.y);
     });
-    window.addEventListener("blur", () => setDragOverTargetDir(null));
+    // Only self-heals a stale OS-drag highlight, gated on draggingPath so it
+    // never clears an in-flight internal pointer-drag's target: that gesture
+    // owns dragOverTargetDir until its own pointerup/pointercancel, and
+    // committing it reads whatever the store holds at that moment (see
+    // explorerDrag.ts's `end()`).
+    window.addEventListener("blur", () => {
+      if (get(draggingPath) === null) setDragOverTargetDir(null);
+    });
     void onCloseRequested(() => {
       const dirty = $tabsState.tabs.filter((t) => t.isDirty);
       if (dirty.length === 0) {

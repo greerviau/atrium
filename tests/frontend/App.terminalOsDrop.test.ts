@@ -9,7 +9,7 @@ import { terminalVisible } from "../../src/lib/stores/layout";
 import * as terminalDropTargets from "../../src/lib/terminal/terminalDropTargets";
 import * as explorerDropTargets from "../../src/lib/explorer/explorerDropTargets";
 import * as importExternalPaths from "../../src/lib/explorer/importExternalPaths";
-import { dragOverTargetDir } from "../../src/lib/explorer/explorerDrag";
+import { dragOverTargetDir, draggingPath } from "../../src/lib/explorer/explorerDrag";
 import type { DragDropEvent } from "@tauri-apps/api/webview";
 
 // App's two heaviest leaf components, stubbed the same way
@@ -74,6 +74,7 @@ describe("App OS-level file drop wiring", () => {
     capturedDragDropHandler = undefined;
     vi.mocked(explorerDropTargets.resolveExplorerDropTargetDir).mockReturnValue(null);
     dragOverTargetDir.set(null);
+    draggingPath.set(null);
   });
 
   afterEach(() => {
@@ -208,7 +209,7 @@ describe("App OS-level file drop wiring", () => {
     expect(get(dragOverTargetDir)).toBeNull();
   });
 
-  it("clears a stale dragOverTargetDir when the window loses focus mid-drag", async () => {
+  it("clears a stale dragOverTargetDir when the window loses focus mid-OS-drag", async () => {
     vi.mocked(explorerDropTargets.resolveExplorerDropTargetDir).mockReturnValue("/projects/demo/src");
     render(App);
     await tick();
@@ -219,5 +220,19 @@ describe("App OS-level file drop wiring", () => {
     window.dispatchEvent(new Event("blur"));
 
     expect(get(dragOverTargetDir)).toBeNull();
+  });
+
+  it("does not clear dragOverTargetDir on blur while an internal pointer-drag is in flight", async () => {
+    render(App);
+    await tick();
+
+    draggingPath.set("/projects/demo/src/foo.ts");
+    dragOverTargetDir.set("/projects/demo/src");
+
+    window.dispatchEvent(new Event("blur"));
+
+    expect(get(dragOverTargetDir)).toBe("/projects/demo/src");
+
+    draggingPath.set(null);
   });
 });
