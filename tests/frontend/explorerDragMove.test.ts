@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { tick } from "svelte";
+import { get } from "svelte/store";
 import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import FileTree from "../../src/lib/explorer/FileTree.svelte";
-import { loadRoot, loadChildren } from "../../src/lib/stores/fileTree";
-import { draggingPath } from "../../src/lib/explorer/explorerDrag";
-import { EXPLORER_PATH_DRAG_TYPE } from "../../src/lib/util/dragDropTypes";
+import { loadRoot, loadChildren, fileTree, type TreeNode } from "../../src/lib/stores/fileTree";
+import { draggingPath, dragOverTargetDir } from "../../src/lib/explorer/explorerDrag";
+import { editingPath } from "../../src/lib/explorer/inlineEdit";
 import * as commands from "../../src/lib/ipc/commands";
 import type { DirEntry } from "../../src/lib/ipc/commands";
 
@@ -32,21 +34,6 @@ function fileEntry(path: string): DirEntry {
   return { name: path.split("/").pop()!, path, isDir: false, isSymlink: false };
 }
 
-// Standing in for a real `DataTransfer` (jsdom implements no drag-and-drop),
-// following terminalDragDrop.test.ts's own convention.
-function dataTransferStub(payload: Record<string, string> = {}): DataTransfer {
-  const store = { ...payload };
-  return {
-    setData: vi.fn((format: string, data: string) => {
-      store[format] = data;
-    }),
-    getData: (format: string) => store[format] ?? "",
-    types: Object.keys(store),
-    effectAllowed: "none",
-    dropEffect: "none",
-  } as unknown as DataTransfer;
-}
-
 /** Loads the root plus an expanded `src/nested` subtree, then renders the tree. */
 async function renderExpandedTree() {
   vi.mocked(commands.fsListDir).mockImplementation(async (_workspaceId, path) => {
@@ -59,14 +46,74 @@ async function renderExpandedTree() {
   return render(FileTree);
 }
 
-/** Fires a real dragstart on `sourcePath`'s row, exercising FileTreeNode's own draggingPath wiring. */
-async function dragStartOn(container: HTMLElement, sourcePath: string): Promise<void> {
-  const row = container.querySelector(`.row[data-path="${sourcePath}"]`)!;
-  await fireEvent.dragStart(row, { dataTransfer: dataTransferStub() });
-}
-
 function rowFor(container: HTMLElement, path: string): HTMLElement {
   return container.querySelector(`.row[data-path="${path}"]`)!;
+}
+
+function isExpanded(path: string): boolean | undefined {
+  function find(node: TreeNode | null | undefined): boolean | undefined {
+    if (!node) return undefined;
+    if (node.entry.path === path) return node.expanded;
+    for (const child of node.children ?? []) {
+      const found = find(child);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  return find(get(fileTree).root);
+}
+
+/**
+ * jsdom implements no `PointerEvent` constructor carrying real coordinates,
+ * so pointer gestures are driven through plain bubbling `Event`s stamped
+ * with the fields `explorerDrag.ts` reads — the same convention
+ * `tableHandles.test.ts` uses for its own pointer-driven drag
+ * (`tableHandles.test.ts:536`).
+ */
+function pointerEvt(
+  type: string,
+  opts: { clientX?: number; clientY?: number; pointerId?: number; button?: number; buttons?: number } = {},
+): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "button", { value: opts.button ?? 0, configurable: true });
+  Object.defineProperty(event, "buttons", { value: opts.buttons ?? 1, configurable: true });
+  Object.defineProperty(event, "pointerId", { value: opts.pointerId ?? 1, configurable: true });
+  Object.defineProperty(event, "clientX", { value: opts.clientX ?? 0, configurable: true });
+  Object.defineProperty(event, "clientY", { value: opts.clientY ?? 0, configurable: true });
+  return event;
+}
+
+/**
+ * Fixed clientY "slot" per row, plus one for empty space below the rows.
+ * jsdom implements no layout, so `document.elementFromPoint` (what
+ * `resolveExplorerDropTargetDir` hit-tests with) must be stubbed the same
+ * way `explorerDropTargets.test.ts` already does — with a coordinate-to-row
+ * map rather than one fixed return value, since several cases below need
+ * different rows to resolve at different coordinates in the same test.
+ */
+const Y = { root: 10, src: 30, srcHover: 36, nested: 50, lib: 70, readme: 90, empty: 500 };
+
+function stubDropTargets(container: HTMLElement): void {
+  const byY = new Map<number, Element | null>([
+    [Y.root, rowFor(container, ROOT)],
+    [Y.src, rowFor(container, SRC)],
+    [Y.srcHover, rowFor(container, SRC)], // still hovering SRC's own row, past the click threshold
+    [Y.nested, rowFor(container, NESTED)],
+    [Y.lib, rowFor(container, LIB)],
+    [Y.readme, rowFor(container, README)],
+    [Y.empty, container.querySelector(".file-tree")],
+  ]);
+  document.elementFromPoint = vi.fn((_x: number, y: number) => byY.get(y) ?? null);
+}
+
+/** Starts a drag on `row` at `fromY` and moves it past the threshold to `toY`. */
+function dragTo(row: HTMLElement, fromY: number, toY: number, pointerId = 1): void {
+  row.dispatchEvent(pointerEvt("pointerdown", { clientX: 0, clientY: fromY, pointerId }));
+  window.dispatchEvent(pointerEvt("pointermove", { clientX: 0, clientY: toY, pointerId }));
+}
+
+function pointerUp(atY: number, pointerId = 1): Promise<boolean> {
+  return fireEvent(window, pointerEvt("pointerup", { clientX: 0, clientY: atY, pointerId }));
 }
 
 describe("explorer drag-move", () => {
@@ -74,133 +121,218 @@ describe("explorer drag-move", () => {
     vi.mocked(commands.fsListDir).mockReset();
     vi.mocked(commands.fsRename).mockReset();
     draggingPath.set(null);
+    dragOverTargetDir.set(null);
+    editingPath.set(null);
+    // jsdom implements neither method at all.
+    HTMLElement.prototype.setPointerCapture = vi.fn();
+    HTMLElement.prototype.releasePointerCapture = vi.fn();
   });
 
   afterEach(() => {
     cleanup();
     draggingPath.set(null);
+    dragOverTargetDir.set(null);
+    editingPath.set(null);
   });
 
-  it("shows the move affordance when dragging a directory row over another directory row", async () => {
+  it("highlights the target row while dragging, and moves into it on pointerup, refreshing both directories' listings", async () => {
     const { container } = await renderExpandedTree();
-    await dragStartOn(container, SRC);
-
-    const target = rowFor(container, LIB);
-    const dataTransfer = dataTransferStub({ [EXPLORER_PATH_DRAG_TYPE]: SRC });
-    const dragOverEvent = await fireEvent.dragOver(target, { dataTransfer });
-
-    expect(dragOverEvent).toBe(false); // fireEvent returns false when defaultPrevented
-    expect(dataTransfer.dropEffect).toBe("move");
-    expect(target.classList.contains("drop-target-active")).toBe(true);
-  });
-
-  it("moves a directory into another directory on drop, refreshing both directories' listings", async () => {
-    const { container } = await renderExpandedTree();
-    await dragStartOn(container, SRC);
+    stubDropTargets(container);
     vi.mocked(commands.fsListDir).mockClear();
 
-    const target = rowFor(container, LIB);
-    const dataTransfer = dataTransferStub({ [EXPLORER_PATH_DRAG_TYPE]: SRC });
-    const dropEvent = await fireEvent.drop(target, { dataTransfer });
+    dragTo(rowFor(container, SRC), Y.src, Y.lib);
+    await tick();
 
-    expect(dropEvent).toBe(false); // fireEvent.drop returns false when defaultPrevented
+    expect(get(dragOverTargetDir)).toBe(LIB);
+    expect(rowFor(container, LIB).classList.contains("drop-target-active")).toBe(true);
+
+    await pointerUp(Y.lib);
+
+    await vi.waitFor(() => expect(commands.fsRename).toHaveBeenCalled());
     expect(commands.fsRename).toHaveBeenCalledWith("local", SRC, `${LIB}/src`);
-    expect(commands.fsListDir).toHaveBeenCalledWith("local", ROOT); // src's old parent
+    await vi.waitFor(() => expect(commands.fsListDir).toHaveBeenCalledWith("local", ROOT)); // src's old parent
     expect(commands.fsListDir).toHaveBeenCalledWith("local", LIB); // the new parent
   });
 
-  it("refuses to drop a directory onto itself", async () => {
+  it("does not start a drag (or move anything) when the pointer never crosses the threshold, and the row's click still toggles it", async () => {
     const { container } = await renderExpandedTree();
-    await dragStartOn(container, SRC);
+    stubDropTargets(container);
 
-    const target = rowFor(container, SRC);
-    const overDataTransfer = dataTransferStub({ [EXPLORER_PATH_DRAG_TYPE]: SRC });
-    const dragOverEvent = await fireEvent.dragOver(target, { dataTransfer: overDataTransfer });
-    expect(dragOverEvent).toBe(true); // not prevented
-    expect(target.classList.contains("drop-target-active")).toBe(false);
+    const srcRow = rowFor(container, SRC);
+    srcRow.dispatchEvent(pointerEvt("pointerdown", { clientX: 0, clientY: Y.src, pointerId: 1 }));
+    window.dispatchEvent(pointerEvt("pointermove", { clientX: 0, clientY: Y.src + 1, pointerId: 1 }));
+    await pointerUp(Y.src + 1);
 
-    // A forced drop (bypassing the dragover gate) must still refuse.
-    const dropDataTransfer = dataTransferStub({ [EXPLORER_PATH_DRAG_TYPE]: SRC });
-    await fireEvent.drop(target, { dataTransfer: dropDataTransfer });
+    expect(commands.fsRename).not.toHaveBeenCalled();
+    expect(get(draggingPath)).toBeNull();
+    expect(isExpanded(SRC)).toBe(true);
+
+    await fireEvent.click(srcRow);
+
+    expect(isExpanded(SRC)).toBe(false);
+  });
+
+  it("shows no highlight and performs no move when dragged onto its own row", async () => {
+    const { container } = await renderExpandedTree();
+    stubDropTargets(container);
+
+    dragTo(rowFor(container, SRC), Y.src, Y.srcHover);
+    expect(get(draggingPath)).toBe(SRC); // the gesture did cross the drag threshold
+    expect(get(dragOverTargetDir)).toBeNull();
+
+    await pointerUp(Y.srcHover);
     expect(commands.fsRename).not.toHaveBeenCalled();
   });
 
-  it("refuses to drop a directory onto its own descendant", async () => {
+  it("shows no highlight and performs no move when dragged onto its own descendant", async () => {
     const { container } = await renderExpandedTree();
-    await dragStartOn(container, SRC);
+    stubDropTargets(container);
 
-    const target = rowFor(container, NESTED);
-    const overDataTransfer = dataTransferStub({ [EXPLORER_PATH_DRAG_TYPE]: SRC });
-    const dragOverEvent = await fireEvent.dragOver(target, { dataTransfer: overDataTransfer });
-    expect(dragOverEvent).toBe(true); // not prevented
-    expect(target.classList.contains("drop-target-active")).toBe(false);
+    dragTo(rowFor(container, SRC), Y.src, Y.nested);
+    expect(get(dragOverTargetDir)).toBeNull();
 
-    const dropDataTransfer = dataTransferStub({ [EXPLORER_PATH_DRAG_TYPE]: SRC });
-    await fireEvent.drop(target, { dataTransfer: dropDataTransfer });
+    await pointerUp(Y.nested);
     expect(commands.fsRename).not.toHaveBeenCalled();
   });
 
-  it("refuses to drop onto a file row", async () => {
+  it("shows no highlight and performs no move when dragged onto its current parent", async () => {
     const { container } = await renderExpandedTree();
-    await dragStartOn(container, SRC);
+    stubDropTargets(container);
 
-    const target = rowFor(container, README);
-    const overDataTransfer = dataTransferStub({ [EXPLORER_PATH_DRAG_TYPE]: SRC });
-    await fireEvent.dragOver(target, { dataTransfer: overDataTransfer });
-    expect(target.classList.contains("drop-target-active")).toBe(false);
+    dragTo(rowFor(container, SRC), Y.src, Y.root);
+    expect(get(dragOverTargetDir)).toBeNull();
 
-    const dropDataTransfer = dataTransferStub({ [EXPLORER_PATH_DRAG_TYPE]: SRC });
-    await fireEvent.drop(target, { dataTransfer: dropDataTransfer });
+    await pointerUp(Y.root);
     expect(commands.fsRename).not.toHaveBeenCalled();
+  });
+
+  it("resolves a drop onto a file row to that file's parent directory", async () => {
+    const { container } = await renderExpandedTree();
+    stubDropTargets(container);
+    vi.mocked(commands.fsListDir).mockClear();
+
+    // NESTED's own parent is SRC, so dropping it on README (parent: ROOT) is
+    // a genuinely different, valid target — unlike dragging SRC itself onto
+    // README, which would also resolve to ROOT but be rejected as a same-
+    // parent no-op.
+    dragTo(rowFor(container, NESTED), Y.nested, Y.readme);
+    expect(get(dragOverTargetDir)).toBe(ROOT);
+
+    await pointerUp(Y.readme);
+
+    await vi.waitFor(() => expect(commands.fsRename).toHaveBeenCalled());
+    expect(commands.fsRename).toHaveBeenCalledWith("local", NESTED, `${ROOT}/nested`);
   });
 
   it("moves a row to the workspace root when dropped on empty space below the rows", async () => {
     const { container } = await renderExpandedTree();
-    await dragStartOn(container, NESTED);
+    stubDropTargets(container);
     vi.mocked(commands.fsListDir).mockClear();
 
-    const emptyArea = container.querySelector(".file-tree")!;
-    const dataTransfer = dataTransferStub({ [EXPLORER_PATH_DRAG_TYPE]: NESTED });
-    const dropEvent = await fireEvent.drop(emptyArea, { dataTransfer });
+    dragTo(rowFor(container, NESTED), Y.nested, Y.empty);
+    expect(get(dragOverTargetDir)).toBe(ROOT);
 
-    expect(dropEvent).toBe(false);
+    await pointerUp(Y.empty);
+
+    await vi.waitFor(() => expect(commands.fsRename).toHaveBeenCalled());
     expect(commands.fsRename).toHaveBeenCalledWith("local", NESTED, `${ROOT}/nested`);
-    expect(commands.fsListDir).toHaveBeenCalledWith("local", SRC); // nested's old parent
+    await vi.waitFor(() => expect(commands.fsListDir).toHaveBeenCalledWith("local", SRC)); // nested's old parent
     expect(commands.fsListDir).toHaveBeenCalledWith("local", ROOT); // the workspace root
-  });
-
-  it("does not fall through to a root-level move when dropped over an invalid nested row", async () => {
-    const { container } = await renderExpandedTree();
-    await dragStartOn(container, SRC);
-
-    // Dropping src onto its own descendant is rejected by the row's own
-    // guard (no preventDefault), so the event bubbles unprevented up to the
-    // tree container — which must recognize it landed inside a row and not
-    // reinterpret it as an empty-space drop onto the workspace root.
-    const target = rowFor(container, NESTED);
-    const dataTransfer = dataTransferStub({ [EXPLORER_PATH_DRAG_TYPE]: SRC });
-    await fireEvent.drop(target, { dataTransfer });
-
-    expect(commands.fsRename).not.toHaveBeenCalledWith("local", SRC, expect.stringContaining(ROOT));
   });
 
   it("fails silently on a destination collision, without refreshing either directory", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const { container } = await renderExpandedTree();
-    await dragStartOn(container, SRC);
+    stubDropTargets(container);
     vi.mocked(commands.fsRename).mockRejectedValue({
       code: "ALREADY_EXISTS",
       message: `${LIB}/src`,
     });
     vi.mocked(commands.fsListDir).mockClear();
 
-    const target = rowFor(container, LIB);
-    const dataTransfer = dataTransferStub({ [EXPLORER_PATH_DRAG_TYPE]: SRC });
-    await fireEvent.drop(target, { dataTransfer });
+    dragTo(rowFor(container, SRC), Y.src, Y.lib);
+    await pointerUp(Y.lib);
 
     await vi.waitFor(() => expect(consoleError).toHaveBeenCalled());
     expect(commands.fsListDir).not.toHaveBeenCalled();
 
     consoleError.mockRestore();
+  });
+
+  it("a plain click with no pointer movement at all still toggles a directory's expansion — the exact interaction #189 reported breaking", async () => {
+    const { container } = await renderExpandedTree();
+
+    expect(isExpanded(SRC)).toBe(true);
+    await fireEvent.click(rowFor(container, SRC));
+    expect(isExpanded(SRC)).toBe(false);
+  });
+
+  it("still opens/toggles normally on a later plain click on the drag source, after an earlier drag released over a different row", async () => {
+    const { container } = await renderExpandedTree();
+    stubDropTargets(container);
+
+    dragTo(rowFor(container, SRC), Y.src, Y.lib);
+    await pointerUp(Y.lib);
+    await vi.waitFor(() => expect(commands.fsRename).toHaveBeenCalled());
+
+    // A later, unrelated interaction with the same row the drag started
+    // from: no movement, so this is a plain click, not a drag.
+    const srcRow = rowFor(container, SRC);
+    expect(isExpanded(SRC)).toBe(true);
+    srcRow.dispatchEvent(pointerEvt("pointerdown", { clientX: 0, clientY: Y.src, pointerId: 2 }));
+    await fireEvent(window, pointerEvt("pointerup", { clientX: 0, clientY: Y.src, pointerId: 2 }));
+    await fireEvent.click(srcRow);
+
+    expect(isExpanded(SRC)).toBe(false);
+  });
+
+  it("performs no move on pointercancel after crossing the threshold, and a later unrelated pointer gesture performs no move either", async () => {
+    const { container } = await renderExpandedTree();
+    stubDropTargets(container);
+
+    dragTo(rowFor(container, SRC), Y.src, Y.lib);
+    expect(get(draggingPath)).toBe(SRC);
+
+    await fireEvent(window, pointerEvt("pointercancel", { clientX: 0, clientY: Y.lib, pointerId: 1 }));
+
+    expect(commands.fsRename).not.toHaveBeenCalled();
+    expect(get(draggingPath)).toBeNull();
+    expect(get(dragOverTargetDir)).toBeNull();
+
+    // The cancelled gesture's own listeners must be fully torn down: an
+    // unrelated move/up pair (no matching pointerdown ever started it) must
+    // not resurrect a move.
+    window.dispatchEvent(pointerEvt("pointermove", { clientX: 0, clientY: Y.readme, pointerId: 1 }));
+    await fireEvent(window, pointerEvt("pointerup", { clientX: 0, clientY: Y.readme, pointerId: 1 }));
+
+    expect(commands.fsRename).not.toHaveBeenCalled();
+  });
+
+  it("commits an in-flight inline rename when a different row receives a pointerdown, without the row suppressing the browser's own blur-on-focus-shift default action", async () => {
+    const { container, findByText } = await renderExpandedTree();
+    await fireEvent.contextMenu(rowFor(container, README));
+    await fireEvent.click(await findByText("Rename"));
+    await tick();
+
+    const input = container.querySelector("input") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "renamed.txt" } });
+
+    const otherRow = rowFor(container, LIB);
+    const pointerDown = pointerEvt("pointerdown", { clientX: 0, clientY: Y.lib, pointerId: 1 });
+    otherRow.dispatchEvent(pointerDown);
+    // must-not-preventDefault is what lets the browser's own default action
+    // (focusing `otherRow`, which blurs the still-focused rename input) run
+    // at all; jsdom's synthetic `Event` dispatch doesn't replicate that
+    // default action itself, so it's driven explicitly here.
+    expect(pointerDown.defaultPrevented).toBe(false);
+    otherRow.focus();
+
+    await vi.waitFor(() =>
+      expect(commands.fsRename).toHaveBeenCalledWith("local", README, `${ROOT}/renamed.txt`),
+    );
+
+    // Close out the gesture the pointerdown above started (never moved or
+    // released), so its window-level listeners don't leak into later tests.
+    await fireEvent(window, pointerEvt("pointerup", { clientX: 0, clientY: Y.lib, pointerId: 1 }));
   });
 });

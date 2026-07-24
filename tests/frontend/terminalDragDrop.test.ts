@@ -1,9 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { tick } from "svelte";
 import { render, fireEvent, cleanup } from "@testing-library/svelte";
-import FileTreeNode from "../../src/lib/explorer/FileTreeNode.svelte";
 import TerminalPane from "../../src/lib/terminal/TerminalPane.svelte";
-import type { TreeNode } from "../../src/lib/stores/fileTree";
 import { EXPLORER_PATH_DRAG_TYPE } from "../../src/lib/util/dragDropTypes";
 import * as commands from "../../src/lib/ipc/commands";
 
@@ -54,20 +52,6 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function makeNode(overrides: Partial<TreeNode["entry"]> = {}): TreeNode {
-  return {
-    entry: {
-      name: "file.txt",
-      path: "/workspace/file.txt",
-      isDir: false,
-      isSymlink: false,
-      ...overrides,
-    },
-    expanded: false,
-    children: undefined,
-  };
-}
-
 function dataTransferStub(payload: Record<string, string> = {}): DataTransfer {
   const store = { ...payload };
   return {
@@ -94,36 +78,14 @@ async function enableBracketedPasteMode(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+// The explorer row no longer produces EXPLORER_PATH_DRAG_TYPE: its drag
+// source was rebuilt on Pointer Events (issue #189), which HTML5 dragstart
+// has no equivalent for. That leaves this drop-side feature broken (no
+// producer reaches it in the packaged app), tracked separately as issue
+// #220. The cases below exercise TerminalPane's own drop handling in
+// isolation (an explorer row never appears here), which remains correct and
+// unaffected by that gap.
 describe("explorer-to-terminal drag and drop", () => {
-  it("makes a file row a drag source that puts its path on the private drag type, not text/plain", async () => {
-    const node = makeNode();
-    const { container } = render(FileTreeNode, { node });
-
-    const row = container.querySelector(".row")!;
-    expect(row.getAttribute("draggable")).toBe("true");
-
-    const dataTransfer = dataTransferStub();
-    await fireEvent.dragStart(row, { dataTransfer });
-
-    expect(dataTransfer.setData).toHaveBeenCalledWith(EXPLORER_PATH_DRAG_TYPE, "/workspace/file.txt");
-    // Never text/plain: that generic type is also read by CodeMirror's own
-    // drop handler, which would insert the path into an open editor buffer.
-    expect(dataTransfer.setData).not.toHaveBeenCalledWith("text/plain", expect.anything());
-  });
-
-  it("makes a directory row a drag source too", async () => {
-    const node = makeNode({ name: "src", path: "/workspace/src", isDir: true });
-    const { container } = render(FileTreeNode, { node });
-
-    const row = container.querySelector(".row")!;
-    expect(row.getAttribute("draggable")).toBe("true");
-
-    const dataTransfer = dataTransferStub();
-    await fireEvent.dragStart(row, { dataTransfer });
-
-    expect(dataTransfer.setData).toHaveBeenCalledWith(EXPLORER_PATH_DRAG_TYPE, "/workspace/src");
-  });
-
   it("dragover accepts the app's private path type and shows the copy affordance", async () => {
     const { container } = await renderReadyTerminalPane();
 
