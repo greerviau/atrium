@@ -289,8 +289,12 @@
    plain block-level div is fill-available, not shrink-to-fit like
    `.cm-table-box`, so `max-width` alone makes it *fill* the column rather
    than shrink to its content, which is what lets even a short block paint a
-   full-column-width chrome band (moved here from `.cm-code-block` below,
-   matching Obsidian/Zed's fenced-code rendering). Because `app.css` sets a
+   full-column-width chrome band, matching Obsidian/Zed's fenced-code
+   rendering (`.cm-code-block` below carries the same chrome/inset as its
+   own defensive default — see its own comment — but the wrapper is what a
+   *wrapped* line's chrome/inset actually renders from, since the
+   `.cm-code-block-box .cm-code-block` override neutralizes the line's own
+   copy whenever a wrapper is present). Because `app.css` sets a
    global `* { box-sizing: border-box }`, this padding/border sit *inside*
    the wrapper's own `max-width` rather than adding to it, so the wrapper's
    own chrome can never leak extra scroll range past the column cap. The
@@ -314,18 +318,49 @@
 /* Same specificity problem as `.cm-table-row`/`.cm-table-delimiter-line`
    above: `!important` is required to beat CodeMirror's own `.cm-line {
    padding: 0 2px 0 6px }`, which — as a two-class selector — outranks a
-   bare `.cm-code-block` regardless of stylesheet load order. The chrome
-   this rule used to carry (background, border-left, padding) has moved to
-   `.cm-code-block-box` above, so this line only zeroes out CodeMirror's own
-   base padding — not merely omitting a declaration, since that base padding
-   would otherwise re-apply and, combined with the block's own `<N>ch`
-   inline width, pad every line out past the wrapper's clipped box.
-   `box-sizing: content-box` is dropped as inert now that there's no
-   padding/border left on the line itself for it to protect the `ch` width
-   against. */
+   bare `.cm-code-block` regardless of stylesheet load order.
+
+   Keeps its own chrome and column inset (not just relying on
+   `.cm-code-block-box` above) because a mermaid-tagged fence with the
+   cursor inside it renders as plain `.cm-code-block` lines with no wrapper
+   at all — `buildCodeBlockWrapRanges` deliberately excludes it (see its own
+   doc comment), so a line in that state has no `.cm-code-block-box`
+   ancestor to supply background/border/inset. Without this rule's own
+   copies, that state would render with no chrome at all (the editor is
+   entirely monospace, so the background band + left border *is* a code
+   block's whole visual identity) and no inset (snapping to `.cm-content`'s
+   far-left edge while surrounding prose sits inset by the column's own
+   margin) — a regression on the shipped Mermaid feature (#67, #82) well
+   past the plan's accepted residual gap for this case (no width cap, not
+   no chrome/alignment). `box-sizing: content-box` stays dropped: with the
+   global `border-box` reset (app.css), padding sits inside the block's own
+   `<N>ch` inline width regardless of box-sizing keyword. No `max-width` of
+   its own — the accepted residual gap is exactly "no width cap" for this
+   one case, since capping an unwrapped line has nowhere to trap its own
+   overflow the way `.cm-code-block-box`'s `overflow-x: auto` does. */
 .cm-code-block {
-  padding: 0 !important;
+  background: var(--atrium-code-bg);
+  border-left: 3px solid var(--atrium-border);
+  padding: 0 0.6em !important;
   white-space: pre;
+  margin-inline-start: max(0px, (100cqw - var(--atrium-prose-max-width)) / 2);
+}
+
+/* Neutralizes the base `.cm-code-block` rule above for a *wrapped* line —
+   the common case, every code block except a mermaid fence under the
+   cursor — since `.cm-code-block-box` already supplies that same chrome
+   and inset once, on the shared wrapper box; letting the line also paint
+   its own copy would double the background/border and shift the inset by
+   the line's own margin on top of the wrapper's. `.cm-code-block-box
+   .cm-code-block` is a two-class selector, so it outranks the base
+   one-class `.cm-code-block` rule regardless of load order; `padding: 0
+   !important` still needs `!important` to beat CodeMirror's own two-class
+   `.cm-line` padding rule the same way the base rule's `!important` does. */
+.cm-code-block-box .cm-code-block {
+  background: none;
+  border-left: 0;
+  padding: 0 !important;
+  margin-inline-start: 0;
 }
 
 .cm-blockquote {

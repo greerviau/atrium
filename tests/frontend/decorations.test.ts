@@ -1588,7 +1588,7 @@ describe("buildDecorations: mermaid fenced blocks", () => {
     );
   });
 
-  it("falls back to normal fenced-code decorations when the cursor is on the mermaid block", () => {
+  it("falls back to normal fenced-code decorations when the cursor is on the mermaid block, with no code-block-box wrapper (issue #199, PR #223 review round 1)", () => {
     const doc = "```mermaid\ngraph TD;\nA-->B;\n```\n\nafter";
     const state = stateFor(doc, doc.indexOf("A-->B"));
 
@@ -1603,6 +1603,17 @@ describe("buildDecorations: mermaid fenced blocks", () => {
     expect(decos.some((d) => d.isReplace && !d.class && d.from === openLine.from && d.to === openLine.to)).toBe(
       false,
     );
+    // The exclusion is structural (extractMermaidSource's CodeInfo check),
+    // not cursor/focus-gated, so this block gets no .cm-code-block-box
+    // wrapper even while its raw source is what's actually rendering —
+    // meaning these cm-code-block lines render with no wrapper ancestor to
+    // supply chrome/inset, and must carry their own (see markdown.css's
+    // .cm-code-block rule).
+    const wraps: { from: number; to: number }[] = [];
+    buildCodeBlockWrapRanges(state).between(0, state.doc.length, (from, to) => {
+      wraps.push({ from, to });
+    });
+    expect(wraps).toEqual([]);
   });
 
   it("leaves a non-mermaid fenced block completely unaffected", () => {
@@ -2177,16 +2188,14 @@ describe("markdown.css: inline code and mermaid error font-family", () => {
   });
 });
 
-describe("markdown.css: code block width cap (issue #199)", () => {
+describe("markdown.css: code block width cap (issue #199, revised per PR #223 review round 1)", () => {
   // `.cm-code-block`'s computed `width: <N>ch` (set per-block in
-  // decorations.ts) is now capped by its `.cm-code-block-box` wrapper
-  // (`EditorView.blockWrappers`, `buildCodeBlockWrapRanges`), not by the line
-  // itself: `overflow-x: auto` on the wrapper is what actually traps a
+  // decorations.ts) is capped by its `.cm-code-block-box` wrapper
+  // (`EditorView.blockWrappers`, `buildCodeBlockWrapRanges`) whenever one is
+  // present: `overflow-x: auto` on the wrapper is what actually traps a
   // too-wide line's overflow instead of letting it inflate `.cm-content` and
-  // make the whole editor sideways-scrollable (the reported bug). The line
-  // itself no longer needs `box-sizing: content-box` protection now that its
-  // own padding/border have moved to the wrapper.
-  it(".cm-code-block-box caps at the shared reading column, traps overflow, and carries the moved chrome", () => {
+  // make the whole editor sideways-scrollable (the reported bug).
+  it(".cm-code-block-box caps at the shared reading column, traps overflow, and carries chrome", () => {
     const body = ruleBodyFor(".cm-content.cm-md-rendered .cm-code-block-box");
     expect(body).toMatch(/max-width:\s*min\(var\(--atrium-prose-max-width\),\s*100cqw\)/);
     expect(body).toMatch(/margin-inline-start:\s*max\(0px,\s*\(100cqw\s*-\s*var\(--atrium-prose-max-width\)\)\s*\/\s*2\)/);
@@ -2197,15 +2206,39 @@ describe("markdown.css: code block width cap (issue #199)", () => {
     expect(body).toMatch(/padding:\s*0\s*0\.6em/);
   });
 
-  it(".cm-code-block no longer carries chrome, has no width cap of its own, and zeroes CodeMirror's base padding", () => {
+  // Round 1 review must-fix: a mermaid-tagged fence with the cursor inside
+  // it renders as plain `.cm-code-block` lines with no `.cm-code-block-box`
+  // wrapper at all (`buildCodeBlockWrapRanges` structurally excludes it), so
+  // the base rule must carry its own chrome/inset as a fallback — losing it
+  // entirely regressed the shipped Mermaid feature (#67, #82) past the
+  // plan's accepted "no width cap" residual gap. It still has no `max-width`
+  // of its own (that residual gap is accepted), since an unwrapped line has
+  // no wrapper to trap its own overflow in.
+  it(".cm-code-block keeps its own chrome/inset as a fallback for the unwrapped (mermaid-under-cursor) case, with no width cap of its own", () => {
     const body = ruleBodyFor(".cm-code-block");
-    expect(body).not.toMatch(/box-sizing/);
-    expect(body).not.toMatch(/background/);
-    expect(body).not.toMatch(/border-left/);
-    expect(body).not.toMatch(/max-width/);
-    expect(body).not.toMatch(/overflow-x/);
+    expect(body).toMatch(/background/);
+    expect(body).toMatch(/border-left/);
+    expect(body).toMatch(/padding:\s*0\s*0\.6em\s*!important/);
     expect(body).toMatch(/white-space:\s*pre/);
+    expect(body).toMatch(/margin-inline-start:\s*max\(0px,\s*\(100cqw\s*-\s*var\(--atrium-prose-max-width\)\)\s*\/\s*2\)/);
+    expect(body).not.toMatch(/box-sizing/);
+    // Not `/max-width/` bare — the var(--atrium-prose-max-width) reference
+    // inside the margin-inline-start expression above contains that
+    // substring without being a max-width declaration itself.
+    expect(body).not.toMatch(/(?:^|\s)max-width:/);
+    expect(body).not.toMatch(/overflow-x/);
+  });
+
+  // The override that keeps a *wrapped* code block from double-painting
+  // chrome the wrapper already supplies once. A two-class selector, so it
+  // outranks the base one-class `.cm-code-block` rule regardless of
+  // stylesheet load order.
+  it(".cm-code-block-box .cm-code-block neutralizes the base rule's chrome/inset for a wrapped line", () => {
+    const body = ruleBodyFor(".cm-code-block-box .cm-code-block");
+    expect(body).toMatch(/background:\s*none/);
+    expect(body).toMatch(/border-left:\s*0/);
     expect(body).toMatch(/padding:\s*0\s*!important/);
+    expect(body).toMatch(/margin-inline-start:\s*0/);
   });
 });
 
@@ -2301,8 +2334,13 @@ describe("markdown.css: reading-column rules are scoped to the rendered pane onl
     ".cm-content.cm-md-rendered .cm-table-box",
     ".cm-content.cm-md-rendered .cm-mermaid-diagram",
   ])("%s compounds .cm-md-rendered directly onto .cm-content", (selector) => {
+    // `ruleBodyFor` escapes `selector` literally (including the exact
+    // ".cm-content.cm-md-rendered" fragment with no whitespace between the
+    // two classes) and throws if no rule matches it verbatim — the
+    // per-selector proof itself, not a whole-file regex that would pass
+    // identically for all four cases as long as any one rule anywhere used
+    // the compound form.
     expect(() => ruleBodyFor(selector)).not.toThrow();
-    expect(markdownCss).toMatch(/\.cm-content\.cm-md-rendered\b/);
   });
 });
 
