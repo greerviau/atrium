@@ -177,8 +177,25 @@ function attachHandleInteractions(el: HTMLElement, view: EditorView, target: Tab
  * started at, since that's exactly the stale-anchor bug the plan's "Identity
  * tracking across steps" note warns about), and on each `pointermove`,
  * compare the pointer's coordinate against the *other* handles' own
- * currently-rendered positions (`measureRects`, always re-queried fresh —
- * never cached — since a swap can itself change row heights/column widths).
+ * currently-rendered positions (`measureRectsByIndex`, always re-queried
+ * fresh — never cached — since a swap can itself change row heights/column
+ * widths).
+ *
+ * Neighbours are looked up by their own stamped `data-table-handle-row`/
+ * `-col` index (`indexDatasetKey`), never by position in the rendered DOM
+ * list — CodeMirror only builds `.cm-table-row-handle` elements for rows in
+ * its current viewport, so on a table taller than the viewport the
+ * *document* row index `current` tracks and the *render-order* position in
+ * a `querySelectorAll` result diverge the moment any row above the table
+ * (or above the viewport) isn't rendered. Indexing positionally there either
+ * silently no-ops (the neighbour "at that position" doesn't exist) or,
+ * worse, resolves to the wrong row entirely (the position happens to hold a
+ * different, further-away row) — reordering the wrong pair with no error.
+ * Looking a neighbour up by its own index and treating a missing lookup as
+ * "no step available" (rather than falling back to whatever the DOM
+ * position holds) keeps a drag that scrolls past the rendered edge inert
+ * instead of silently wrong.
+ *
  * `window`-level listeners (matching `EditorPaneSplit.svelte`'s own
  * `startDragResizer` pattern) mean the gesture keeps tracking the pointer
  * correctly even though the handle DOM element under the cursor is reused
@@ -199,10 +216,11 @@ function attachDragReorder(options: {
   initial: number;
   pointerCoord: (event: PointerEvent) => number;
   handleSelector: string;
+  indexDatasetKey: "tableHandleRow" | "tableHandleCol";
   rectCoords: (rect: DOMRect) => { start: number; end: number };
   attemptStep: (state: EditorState, table: number, current: number, dir: "before" | "after") => { spec: TransactionSpec | null; next: number };
 }): void {
-  const { el, view, table, initial, pointerCoord, handleSelector, rectCoords } = options;
+  const { el, view, table, initial, pointerCoord, handleSelector, indexDatasetKey, rectCoords } = options;
   el.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) {
       return;
@@ -210,12 +228,20 @@ function attachDragReorder(options: {
     event.preventDefault();
     let current = initial;
 
-    function measureRects(): DOMRect[] {
+    function measureRectsByIndex(): Map<number, DOMRect> {
       const box = el.closest<HTMLElement>(".cm-table-box");
+      const out = new Map<number, DOMRect>();
       if (!box) {
-        return [];
+        return out;
       }
-      return Array.from(box.querySelectorAll<HTMLElement>(handleSelector)).map((h) => h.getBoundingClientRect());
+      for (const handle of Array.from(box.querySelectorAll<HTMLElement>(handleSelector))) {
+        const raw = handle.dataset[indexDatasetKey];
+        const idx = raw === undefined ? NaN : Number(raw);
+        if (Number.isFinite(idx)) {
+          out.set(idx, handle.getBoundingClientRect());
+        }
+      }
+      return out;
     }
 
     function attemptStep(dir: "before" | "after"): boolean {
@@ -233,9 +259,9 @@ function attachDragReorder(options: {
       let moved = true;
       while (moved) {
         moved = false;
-        const rects = measureRects();
-        const prevRect = rects[current - 1];
-        const nextRect = rects[current + 1];
+        const rectsByIndex = measureRectsByIndex();
+        const prevRect = rectsByIndex.get(current - 1);
+        const nextRect = rectsByIndex.get(current + 1);
         if (prevRect) {
           const { start, end } = rectCoords(prevRect);
           if (pos < (start + end) / 2 && attemptStep("before")) {
@@ -270,6 +296,7 @@ function attachRowDrag(el: HTMLElement, view: EditorView, table: number, initial
     initial: initialRow,
     pointerCoord: (e) => e.clientY,
     handleSelector: ".cm-table-row-handle",
+    indexDatasetKey: "tableHandleRow",
     rectCoords: (rect) => ({ start: rect.top, end: rect.bottom }),
     attemptStep: (state, tableFrom, row, dir) => {
       const ctx = rowHandleContext(state, tableFrom, row);
@@ -290,6 +317,7 @@ function attachColumnDrag(el: HTMLElement, view: EditorView, table: number, init
     initial: initialColumn,
     pointerCoord: (e) => e.clientX,
     handleSelector: ".cm-table-col-bar",
+    indexDatasetKey: "tableHandleCol",
     rectCoords: (rect) => ({ start: rect.left, end: rect.right }),
     attemptStep: (state, tableFrom, column, dir) => {
       const ctx = columnBarContext(state, tableFrom, column);

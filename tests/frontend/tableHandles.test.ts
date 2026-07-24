@@ -657,4 +657,61 @@ describe("drag-to-reposition (phase 4)", () => {
     expect(view.state.doc.toString()).toBe(afterFirstDrag);
     view.destroy();
   });
+
+  // Must-fix regression: on a table taller than the rendered viewport,
+  // CodeMirror only builds .cm-table-row-handle elements for rows in its
+  // current viewport (confirmed here: after scrolling, the rendered set is
+  // row 0 plus a contiguous run around row 165-166, not every row 0-400) —
+  // so a neighbour must be looked up by its own stamped row index, never by
+  // its position in that (non-contiguous, viewport-scoped) rendered list.
+  // Indexing positionally there either finds nothing (a false no-op) or,
+  // worse, resolves to whatever row happens to sit at that position in the
+  // rendered array — silently swapping the wrong pair.
+  it("drags the correct adjacent row even when only a scrolled-to subset of a large table is rendered", () => {
+    let doc = "| Name | Role |\n| --- | --- |\n";
+    for (let i = 0; i < 400; i++) {
+      doc += `| Row${i} | Val${i} |\n`;
+    }
+    const view = makeView(doc);
+    const targetLine = view.state.doc.line(202);
+    view.dispatch({ effects: EditorView.scrollIntoView(targetLine.from, { y: "center" }) });
+
+    const handlesByRow = new Map<number, HTMLElement>();
+    for (const h of Array.from(view.dom.querySelectorAll<HTMLElement>(".cm-table-row-handle"))) {
+      const idx = Number(h.dataset.tableHandleRow);
+      if (Number.isFinite(idx)) {
+        handlesByRow.set(idx, h);
+      }
+    }
+    // Confirms the premise: a large, mostly-off-viewport gap exists between
+    // the header (row 0) and the scrolled-to region, and rows 165/166 (the
+    // pair this test drags) are both actually rendered.
+    expect(handlesByRow.has(5)).toBe(false);
+    expect(handlesByRow.has(165)).toBe(true);
+    expect(handlesByRow.has(166)).toBe(true);
+
+    let y = 0;
+    for (const idx of [...handlesByRow.keys()].sort((a, b) => a - b)) {
+      mockRect(handlesByRow.get(idx)!, y, y + 20);
+      y += 20;
+    }
+
+    const handle165 = handlesByRow.get(165)!;
+    const rect166 = handlesByRow.get(166)!.getBoundingClientRect();
+
+    handle165.dispatchEvent(pointerCoordEvent("pointerdown", "clientY", 10));
+    window.dispatchEvent(pointerCoordEvent("pointermove", "clientY", rect166.bottom - 1));
+    window.dispatchEvent(pointerCoordEvent("pointerup", "clientY", rect166.bottom - 1));
+
+    // Row index 165 is document line 167 ("Row164"); row index 166 is line
+    // 168 ("Row165") — header (line 1) + delimiter (line 2) + rowIndex - 1.
+    expect(view.state.doc.line(167).text).toBe("| Row165 | Val165 |");
+    expect(view.state.doc.line(168).text).toBe("| Row164 | Val164 |");
+    // Nothing outside the swapped pair moved.
+    expect(view.state.doc.line(166).text).toBe("| Row163 | Val163 |");
+    expect(view.state.doc.line(169).text).toBe("| Row166 | Val166 |");
+    expect(view.state.doc.line(10).text).toBe("| Row7 | Val7 |");
+
+    view.destroy();
+  });
 });
