@@ -105,7 +105,12 @@ describe("EditorPanel", () => {
     await fireEvent.click(container.querySelector('button[aria-label="Split editor"]')!);
 
     const items = [...container.querySelectorAll('[role="menuitem"]')];
-    expect(items.map((el) => el.textContent)).toEqual(["Split Up", "Split Down", "Split Left", "Split Right"]);
+    expect(items.map((el) => el.textContent)).toEqual([
+      "Split Up⌥⌘↑",
+      "Split Down⌥⌘↓",
+      "Split Left⌥⌘←",
+      "Split Right⌥⌘→",
+    ]);
 
     await fireEvent.click(items[3]);
     expect(onSplit).toHaveBeenCalledWith("right");

@@ -66,7 +66,7 @@ describe("KeyboardShortcutsDialog", () => {
     render(KeyboardShortcutsDialog);
     await tick();
 
-    for (const group of ["General", "File", "Edit", "View", "Terminal"]) {
+    for (const group of ["General", "File", "Edit", "View", "Explorer", "Terminal"]) {
       expect(screen.getByText(group)).toBeTruthy();
     }
 
@@ -79,17 +79,28 @@ describe("KeyboardShortcutsDialog", () => {
       "Go to File",
       "Toggle File Explorer",
       "Toggle Terminal",
-      "Split Terminal",
+      "Split Up",
+      "Split Down",
+      "Split Left",
+      "Split Right",
+      "Split Terminal (alias for Split Right)",
       "Zoom In",
       "Zoom Out",
       "Reset Zoom",
+      "New File",
+      "New Folder",
+      "Rename",
+      "Delete",
+      "Reveal in Finder",
       "Insert Newline Without Submitting",
     ];
     for (const label of labels) {
       expect(screen.getByText(label)).toBeTruthy();
     }
 
-    // Otherwise-undiscoverable: no menu entry backs this one (see spec §2.2).
+    // Otherwise-undiscoverable: no menu entry backs any of these (§ Gap 1a/1b).
     expect(screen.getByText("⇧⏎")).toBeTruthy();
+    expect(screen.getByText("⌘N")).toBeTruthy();
+    expect(screen.getByText("F2")).toBeTruthy();
   });
 });

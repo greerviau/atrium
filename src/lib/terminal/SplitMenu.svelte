@@ -1,13 +1,18 @@
 <script lang="ts">
   import ContextMenu from "../ui/ContextMenu.svelte";
   import { tooltip } from "../ui/tooltip";
+  import { SHORTCUT_LABELS } from "../shell/shortcutLabels";
   import type { SplitDirection } from "./paneTree";
 
   /**
    * A single split button whose dropdown offers all four split directions.
    * Manages its own open/closed state and its own outside-click listener
    * (scoped to this instance's own root element) rather than a shared store,
-   * since there can be many of these mounted at once — one per panel.
+   * since there can be many of these mounted at once — one per panel. Each
+   * direction also carries its ⌥⌘-arrow keyboard shortcut, routed through
+   * `App.svelte`'s `splitFocusedSurface` rather than a button click; Split
+   * Right additionally has a pre-existing, terminal-only ⌘\ alias that isn't
+   * shown here since it isn't this menu item's own accelerator.
    */
   let { onSplit }: { onSplit: (direction: SplitDirection) => void } = $props();
 
@@ -51,10 +56,10 @@
   </button>
   {#if open}
     <ContextMenu anchorEl={buttonEl}>
-      <button role="menuitem" onclick={() => choose("up")}>Split Up</button>
-      <button role="menuitem" onclick={() => choose("down")}>Split Down</button>
-      <button role="menuitem" onclick={() => choose("left")}>Split Left</button>
-      <button role="menuitem" onclick={() => choose("right")}>Split Right</button>
+      <button role="menuitem" onclick={() => choose("up")}>Split Up<kbd class="shortcut-hint">{SHORTCUT_LABELS.splitUp}</kbd></button>
+      <button role="menuitem" onclick={() => choose("down")}>Split Down<kbd class="shortcut-hint">{SHORTCUT_LABELS.splitDown}</kbd></button>
+      <button role="menuitem" onclick={() => choose("left")}>Split Left<kbd class="shortcut-hint">{SHORTCUT_LABELS.splitLeft}</kbd></button>
+      <button role="menuitem" onclick={() => choose("right")}>Split Right<kbd class="shortcut-hint">{SHORTCUT_LABELS.splitRight}</kbd></button>
     </ContextMenu>
   {/if}
 </div>
