@@ -235,4 +235,104 @@ describe("EditorPane: table context menu", () => {
     await openMenuAt(container, raggedTable.indexOf("A"));
     expect(menuItem(container, "Insert Row Below").disabled).toBe(false);
   });
+
+  it("dispatches the expected doc change when Duplicate Row is clicked", async () => {
+    seedMarkdownTab(BASIC_TABLE);
+    const { container } = render(EditorPane, { filePath: MD_PATH, paneId: "pane-1" });
+    await tick();
+
+    const view = await openMenuAt(container, BASIC_TABLE.indexOf("Alice"));
+    await fireEvent.click(menuItem(container, "Duplicate Row"));
+
+    expect(view.state.doc.toString()).toBe(
+      "| Name  | Role     |\n| ----- | -------- |\n| Alice | Engineer |\n| Alice | Engineer |\n| Bob   | Designer |\n",
+    );
+  });
+
+  it("dispatches the expected doc change when Duplicate Column is clicked", async () => {
+    seedMarkdownTab(BASIC_TABLE);
+    const { container } = render(EditorPane, { filePath: MD_PATH, paneId: "pane-1" });
+    await tick();
+
+    const view = await openMenuAt(container, BASIC_TABLE.indexOf("Name"));
+    await fireEvent.click(menuItem(container, "Duplicate Column"));
+
+    expect(view.state.doc.toString()).toBe(
+      "| Name | Name  | Role     |\n| ----- | ----- | -------- |\n| Alice | Alice | Engineer |\n| Bob | Bob   | Designer |\n",
+    );
+  });
+});
+
+describe("EditorPane: table context menu — triggered from a handle (phase 3)", () => {
+  beforeEach(() => {
+    vi.mocked(clipboardManager.readText).mockReset().mockResolvedValue("");
+    vi.mocked(reveal.revealInFinder).mockReset().mockResolvedValue(undefined);
+    vi.mocked(commands.fsWriteFile).mockClear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    tabsState.set({ tabs: [], activeTabPath: null });
+  });
+
+  it("opens the table menu from a right-click on a row handle, matching that row's own context", async () => {
+    seedMarkdownTab(BASIC_TABLE);
+    const { container } = render(EditorPane, { filePath: MD_PATH, paneId: "pane-1" });
+    await tick();
+
+    const handles = container.querySelectorAll(".cm-table-row-handle");
+    expect(handles).toHaveLength(3); // header + 2 body rows
+    await fireEvent.contextMenu(handles[1]); // "Alice" — first body row
+
+    expect(menuItem(container, "Insert Row Above").disabled).toBe(false);
+    expect(menuItem(container, "Move Row Up").disabled).toBe(true); // first body row
+    expect(menuItem(container, "Move Row Down").disabled).toBe(false);
+  });
+
+  it("opens the table menu from a right-click on a column bar, matching that column's own context", async () => {
+    seedMarkdownTab(BASIC_TABLE);
+    const { container } = render(EditorPane, { filePath: MD_PATH, paneId: "pane-1" });
+    await tick();
+
+    const bars = container.querySelectorAll(".cm-table-col-bar");
+    expect(bars).toHaveLength(2);
+    await fireEvent.contextMenu(bars[1]); // "Role" — rightmost column
+
+    expect(menuItem(container, "Move Column Left").disabled).toBe(false);
+    expect(menuItem(container, "Move Column Right").disabled).toBe(true);
+  });
+
+  it("dispatches Duplicate Row from a handle-triggered menu", async () => {
+    seedMarkdownTab(BASIC_TABLE);
+    const { container } = render(EditorPane, { filePath: MD_PATH, paneId: "pane-1" });
+    await tick();
+    const view = findView(container);
+
+    const handles = container.querySelectorAll(".cm-table-row-handle");
+    await fireEvent.contextMenu(handles[0]); // header
+    await fireEvent.click(menuItem(container, "Duplicate Row"));
+
+    expect(view.state.doc.toString()).toBe(
+      "| Name  | Role     |\n| ----- | -------- |\n| Name  | Role     |\n| Alice | Engineer |\n| Bob   | Designer |\n",
+    );
+  });
+
+  // The handle carries its own row/column identity precisely because a
+  // handle sits outside the table's text flow, where a right-click's screen
+  // coordinates don't reliably resolve back to the row/column it visually
+  // represents — this proves that identity wins even when posAtCoords would
+  // have resolved somewhere else entirely.
+  it("prefers the handle's own stamped identity over posAtCoords", async () => {
+    seedMarkdownTab(BASIC_TABLE);
+    const { container } = render(EditorPane, { filePath: MD_PATH, paneId: "pane-1" });
+    await tick();
+    const view = findView(container);
+    vi.spyOn(view, "posAtCoords").mockReturnValue(BASIC_TABLE.indexOf("Name"));
+
+    const handles = container.querySelectorAll(".cm-table-row-handle");
+    await fireEvent.contextMenu(handles[2]); // "Bob" — last body row
+
+    expect(menuItem(container, "Move Row Down").disabled).toBe(true); // last row, not header
+    expect(menuItem(container, "Insert Row Above").disabled).toBe(false); // header would disable this
+  });
 });

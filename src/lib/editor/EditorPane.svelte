@@ -28,11 +28,14 @@
     insertRow,
     deleteRow,
     moveRow,
+    duplicateRow,
     insertColumn,
     deleteColumn,
     moveColumn,
+    duplicateColumn,
     type TableEditContext,
   } from "./markdown/tableEdit";
+  import { tableContextFromHandleElement } from "./markdown/tableHandles";
   import { codeExtensions } from "./codeExtensions";
   import { setCursorPosition, clearCursorPosition, type CursorPosition } from "../stores/editorStatus";
   import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
@@ -179,16 +182,23 @@
     }
   }
 
+  // A right-click on a row/column handle is resolved from the handle's own
+  // stamped identity first — a handle sits outside the table's text flow
+  // (in the margin, or above the table entirely), so posAtCoords at its
+  // actual screen position doesn't reliably map back to the row/column it
+  // represents the way it does for an ordinary in-cell click.
   function onContextMenu(event: MouseEvent): void {
     if (!view) return;
     event.preventDefault();
-    const pos = safePosAtCoords(view, { x: event.clientX, y: event.clientY });
+    const target = event.target as HTMLElement | null;
+    const handleContext = target ? tableContextFromHandleElement(view.state, target) : null;
+    const pos = handleContext ? null : safePosAtCoords(view, { x: event.clientX, y: event.clientY });
     menu = {
       x: event.clientX,
       y: event.clientY,
       hasSelection: !view.state.selection.main.empty,
       pasteDisabled: true,
-      tableContext: pos !== null ? findTableContext(view.state, pos) : null,
+      tableContext: handleContext ?? (pos !== null ? findTableContext(view.state, pos) : null),
     };
     void refreshPasteAvailability();
   }
@@ -524,12 +534,14 @@
       <button role="menuitem" disabled={!deleteRow(view.state, ctx)} onclick={() => doTableEdit(deleteRow(view.state, ctx))}>Delete Row</button>
       <button role="menuitem" disabled={!moveRow(view.state, ctx, "up")} onclick={() => doTableEdit(moveRow(view.state, ctx, "up"))}>Move Row Up</button>
       <button role="menuitem" disabled={!moveRow(view.state, ctx, "down")} onclick={() => doTableEdit(moveRow(view.state, ctx, "down"))}>Move Row Down</button>
+      <button role="menuitem" disabled={!duplicateRow(view.state, ctx)} onclick={() => doTableEdit(duplicateRow(view.state, ctx))}>Duplicate Row</button>
       <div class="menu-separator" role="separator"></div>
       <button role="menuitem" disabled={!insertColumn(view.state, ctx, "left")} onclick={() => doTableEdit(insertColumn(view.state, ctx, "left"))}>Insert Column Left</button>
       <button role="menuitem" disabled={!insertColumn(view.state, ctx, "right")} onclick={() => doTableEdit(insertColumn(view.state, ctx, "right"))}>Insert Column Right</button>
       <button role="menuitem" disabled={!deleteColumn(view.state, ctx)} onclick={() => doTableEdit(deleteColumn(view.state, ctx))}>Delete Column</button>
       <button role="menuitem" disabled={!moveColumn(view.state, ctx, "left")} onclick={() => doTableEdit(moveColumn(view.state, ctx, "left"))}>Move Column Left</button>
       <button role="menuitem" disabled={!moveColumn(view.state, ctx, "right")} onclick={() => doTableEdit(moveColumn(view.state, ctx, "right"))}>Move Column Right</button>
+      <button role="menuitem" disabled={!duplicateColumn(view.state, ctx)} onclick={() => doTableEdit(duplicateColumn(view.state, ctx))}>Duplicate Column</button>
     {/if}
     <div class="menu-separator" role="separator"></div>
     <button role="menuitem" onclick={doSave}>Save</button>

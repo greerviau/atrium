@@ -4,6 +4,7 @@ import { EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import type { KeyBinding, ViewUpdate } from "@codemirror/view";
 import { findTableContext, insertColumn, insertRow } from "./tableEdit";
 import type { TableEditContext } from "./tableEdit";
+import { collectCellSlots } from "./decorations";
 import { tooltip } from "../../ui/tooltip";
 
 /**
@@ -130,14 +131,26 @@ function createHandleGlyph(): HTMLElement {
 }
 
 /**
- * Wires the pointerenter/pointerleave/click trio every handle shares:
- * hovering sets (and leaving clears) `tableHoverField`; clicking pins
- * `target` into `tableSelectionField` instead, so it stays highlighted
+ * Wires the pointerenter/pointerleave/click/contextmenu quartet every handle
+ * shares: hovering sets (and leaving clears) `tableHoverField`; clicking
+ * pins `target` into `tableSelectionField` instead, so it stays highlighted
  * regardless of where the pointer travels afterward (see
  * `tableSelectionField`'s own doc comment for why selection is kept
- * separate from — not merged into — hover).
+ * separate from — not merged into — hover). Also stamps `target`'s identity
+ * onto the element as `data-table-handle-*` attributes and lets a
+ * right-click bubble normally (only `preventDefault`, never
+ * `stopPropagation`) — `EditorPane.svelte`'s document-level context-menu
+ * handler reads those attributes via `tableContextFromHandleElement` before
+ * falling back to its usual coordinate-based resolution.
  */
 function attachHandleInteractions(el: HTMLElement, view: EditorView, target: TableHoverState): void {
+  el.dataset.tableHandleTable = String(target.table);
+  if (target.row !== null) {
+    el.dataset.tableHandleRow = String(target.row);
+  }
+  if (target.col !== null) {
+    el.dataset.tableHandleCol = String(target.col);
+  }
   el.addEventListener("pointerenter", () => {
     view.dispatch({ effects: setTableHover.of(target) });
   });
@@ -147,6 +160,9 @@ function attachHandleInteractions(el: HTMLElement, view: EditorView, target: Tab
   el.addEventListener("click", (event) => {
     event.preventDefault();
     view.dispatch({ effects: setTableSelection.of(target) });
+  });
+  el.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
   });
 }
 
@@ -222,26 +238,65 @@ export class TableColumnBarWidget extends WidgetType {
 }
 
 /**
- * Re-resolves the `TableEditContext` for a table's own *last* row, given
- * only the table's identity (`tableFrom`) — used by the add-row band, which
- * has no cell position of its own to resolve from. Always re-resolved
- * fresh against the current `state` (never cached) so a prior edit's line
- * shift can't leave it pointing at a stale row.
+ * Re-resolves the `TableEditContext` for row `row` (0-indexed, header
+ * included — matching `TableEditContext.rowIndex`'s own convention) of the
+ * table identified by `tableFrom`, given only that identity — used by every
+ * handle/band that has no cell position of its own to resolve from. Always
+ * re-resolved fresh against the current `state` (never cached) so a prior
+ * edit's line shift can't leave it pointing at a stale row.
+ */
+export function rowHandleContext(state: EditorState, tableFrom: number, row: number): TableEditContext | null {
+  const ctx = findTableContext(state, tableFrom);
+  if (!ctx) {
+    return null;
+  }
+  const targetRow = ctx.rows[row];
+  if (!targetRow) {
+    return null;
+  }
+  return findTableContext(state, targetRow.from);
+}
+
+/**
+ * Re-resolves the `TableEditContext` for a table's own *last* row — the
+ * add-row band's own target, which is always "append after whatever the
+ * last row currently is," not a fixed row index.
  */
 function lastRowContext(state: EditorState, tableFrom: number): TableEditContext | null {
   const ctx = findTableContext(state, tableFrom);
   if (!ctx) {
     return null;
   }
-  const lastRow = ctx.rows[ctx.rows.length - 1];
-  return findTableContext(state, lastRow.from);
+  return rowHandleContext(state, tableFrom, ctx.rows.length - 1);
+}
+
+/**
+ * Re-resolves the `TableEditContext` for column `column` (0-indexed) of the
+ * table identified by `tableFrom`, by resolving from that column's own slot
+ * in the header row (`collectCellSlots`, the same per-row column-range
+ * lookup `tableEdit.ts`'s own commands already share).
+ */
+export function columnBarContext(state: EditorState, tableFrom: number, column: number): TableEditContext | null {
+  const ctx = findTableContext(state, tableFrom);
+  if (!ctx) {
+    return null;
+  }
+  const headerRow = ctx.rows[0];
+  const slots = collectCellSlots(headerRow);
+  const slot = slots[column];
+  if (!slot) {
+    return null;
+  }
+  return findTableContext(state, slot.from);
 }
 
 /**
  * Re-resolves the `TableEditContext` for a table's own *last* column, by
  * resolving from the very end of the header row — `findTableContext`'s
  * column resolution falls back to the last column for a position past every
- * cell's own range, which a header row's own end position always is.
+ * cell's own range, which a header row's own end position always is. (Not
+ * built on `columnBarContext`: an empty table's header row has no cell
+ * slots at all to index into, but its own end position still resolves.)
  */
 function rightmostColumnContext(state: EditorState, tableFrom: number): TableEditContext | null {
   const ctx = findTableContext(state, tableFrom);
@@ -250,6 +305,36 @@ function rightmostColumnContext(state: EditorState, tableFrom: number): TableEdi
   }
   const headerRow = ctx.rows[0];
   return findTableContext(state, headerRow.to);
+}
+
+/**
+ * Resolves the `TableEditContext` a right-click on a row/column handle
+ * targets, given only the DOM element the click landed on (or bubbled
+ * through) — `EditorPane.svelte`'s own context-menu handler calls this
+ * before falling back to its usual `posAtCoords`-based resolution, since a
+ * handle sits outside the table's own text flow (in the margin, or above
+ * the table entirely) where a screen coordinate doesn't reliably map back
+ * to the row/column it visually represents. Identity is read from
+ * `data-table-handle-*` attributes `attachHandleInteractions` sets once,
+ * at `toDOM()` time — plain, inspectable DOM state, not a closure a
+ * document-level handler couldn't otherwise reach.
+ */
+export function tableContextFromHandleElement(state: EditorState, target: HTMLElement): TableEditContext | null {
+  const handleEl = target.closest<HTMLElement>(".cm-table-row-handle, .cm-table-col-bar");
+  if (!handleEl) {
+    return null;
+  }
+  const table = Number(handleEl.dataset.tableHandleTable);
+  if (!Number.isFinite(table)) {
+    return null;
+  }
+  if (handleEl.dataset.tableHandleRow !== undefined) {
+    return rowHandleContext(state, table, Number(handleEl.dataset.tableHandleRow));
+  }
+  if (handleEl.dataset.tableHandleCol !== undefined) {
+    return columnBarContext(state, table, Number(handleEl.dataset.tableHandleCol));
+  }
+  return null;
 }
 
 /**
