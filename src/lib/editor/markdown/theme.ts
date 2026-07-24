@@ -16,6 +16,7 @@ export const CLASS = {
   tableRow: "cm-table-row",
   tableHeaderRow: "cm-table-header-row",
   tableCell: "cm-table-cell",
+  tableCellNarrow: "cm-table-cell-narrow",
   tableHeaderCell: "cm-table-header-cell",
   tableDelimiterLine: "cm-table-delimiter-line",
   tableAlignCenter: "cm-table-align-center",
