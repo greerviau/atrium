@@ -38,6 +38,8 @@ The native folder-picker dialog lives outside the WebView, so the spec registers
 1. Edit `note.md`, click its tab's "×", click "Don't Save" in the confirmation dialog, and confirm the tab closes with the on-disk file unchanged.
 2. Same setup, click "Save" instead, and confirm the on-disk file now contains the edit.
 
+`specs/scrollThenClick.e2e.js` covers the rendered-markdown scroll-then-click regression (issue #183): open `long.md` (a fixture long enough to scroll), scroll the pane down, click shortly after the scroll on a pane that has never yet been clicked into, and confirm the scroll position is preserved rather than snapping back to the top. This is a real-display, real-input-timing bug that a jsdom/vitest test cannot exercise (see `tests/frontend/scrollSettleMousedown.test.ts` for the unit-level coverage of the fix's mechanics instead) — this spec is the regression guard for the actual user-visible behavior.
+
 ## Status
 
 Written against the plan but **not executed** in the environment this was developed in (no display, no system WebView libraries, no macOS). Run this suite on a real dev machine or in CI on `macos-latest` before relying on it — treat it as a starting point to verify and adjust selectors/timing against, not as already-passing.
