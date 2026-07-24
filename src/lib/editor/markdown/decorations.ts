@@ -947,17 +947,34 @@ function decorateTable(
  * actually built `.cm-line` elements for (pre-existing behavior of the
  * underlying `display: table` auto-layout, not something this changes).
  *
+ * The wrapper's own `from` is the header row's *physical line start*
+ * (`state.doc.lineAt(node.from).from`), not the `Table` node's own `from`
+ * directly — for a table nested inside a blockquote or list, `node.from`
+ * lands mid-line, right after the `>` marker or list indentation. A
+ * `BlockWrapper` only wraps a line that *starts* inside its range (per
+ * `@codemirror/view`'s own definition), so a range beginning mid-line
+ * excludes that entire line from wrapping, not just the marker portion —
+ * confirmed directly: with `node.from` as the range start, a table nested in
+ * a blockquote or list rendered its header row (and, downstream, every
+ * phase-2 widget anchored there) entirely outside `.cm-table-box`. Starting
+ * from the physical line start instead means the header row's line —
+ * marker and all — is what "starts inside the range," which is what
+ * actually gets it wrapped; every row after the header is already at or
+ * past that point, so this only changes where the range's own `from` sits,
+ * never which rows are covered.
+ *
  * Walks the whole document, pruned to `BLOCK_CONTAINER_NODES` the same way
  * `buildMermaidWidgetDecorations`/`collectLinkReferences` are, so a table
- * nested inside a blockquote or list still gets a correctly-anchored
- * wrapper without descending into unrelated inline content.
+ * nested inside a blockquote or list is reached at all without descending
+ * into unrelated inline content.
  */
 export function buildTableWrapRanges(state: EditorState): RangeSet<BlockWrapper> {
   const wrappers: Range<BlockWrapper>[] = [];
   syntaxTree(state).iterate({
     enter(ref) {
       if (ref.name === "Table") {
-        wrappers.push(BlockWrapper.create({ tagName: "div", attributes: { class: CLASS.tableBox } }).range(ref.from, ref.to));
+        const wrapperFrom = state.doc.lineAt(ref.from).from;
+        wrappers.push(BlockWrapper.create({ tagName: "div", attributes: { class: CLASS.tableBox } }).range(wrapperFrom, ref.to));
         return false;
       }
       if (ref.name !== "Document" && !BLOCK_CONTAINER_NODES.has(ref.name)) {

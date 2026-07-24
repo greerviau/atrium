@@ -2208,12 +2208,19 @@ describe("markdown.css: table wrap/border redesign (issue #201 phase 1)", () => 
 });
 
 describe("buildTableWrapRanges", () => {
-  function tableNodeRanges(state: EditorState): { from: number; to: number }[] {
+  // The wrapper's own `from` is the header row's *physical line start*, not
+  // the `Table` node's own `from` — identical for a top-level table (no
+  // leading marker), but genuinely different for one nested inside a
+  // blockquote/list, where `node.from` lands mid-line, right after the `>`
+  // marker or list indentation (round 2 must-fix: a `BlockWrapper` only
+  // wraps a line that *starts* inside its range, so a mid-line `from`
+  // excluded the entire header line from wrapping, not just the marker).
+  function tableLineStartRanges(state: EditorState): { from: number; to: number }[] {
     const out: { from: number; to: number }[] = [];
     syntaxTree(state).iterate({
       enter(ref) {
         if (ref.name === "Table") {
-          out.push({ from: ref.from, to: ref.to });
+          out.push({ from: state.doc.lineAt(ref.from).from, to: ref.to });
           return false;
         }
       },
@@ -2233,21 +2240,34 @@ describe("buildTableWrapRanges", () => {
     const doc =
       "| Name | Role |\n| --- | --- |\n| Alice | Engineer |\n| Bob | Designer |\n| Carol | Manager |\n| Dan | Analyst |\n";
     const state = stateFor(doc, doc.length);
-    expect(collectWraps(state)).toEqual(tableNodeRanges(state));
+    expect(collectWraps(state)).toEqual(tableLineStartRanges(state));
   });
 
   it("gives two tables in one document two independent wrappers", () => {
     const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\n\nSome text.\n\n| C |\n| --- |\n| 3 |\n";
     const state = stateFor(doc, doc.length);
     const wraps = collectWraps(state);
-    expect(wraps).toEqual(tableNodeRanges(state));
+    expect(wraps).toEqual(tableLineStartRanges(state));
     expect(wraps).toHaveLength(2);
   });
 
-  it("wraps a table nested inside a blockquote", () => {
+  it("wraps a table nested inside a blockquote, starting at the physical line start (not mid-line after the '> ' marker)", () => {
     const doc = "> | A | B |\n> | --- | --- |\n> | 1 | 2 |\n";
     const state = stateFor(doc, doc.length);
-    expect(collectWraps(state)).toEqual(tableNodeRanges(state));
+    const wraps = collectWraps(state);
+    expect(wraps).toEqual(tableLineStartRanges(state));
+    // The header row's own line starts at 0 ("> | A | B |"), well before the
+    // Table node's own `from` (which lands right after "> ").
+    expect(wraps[0].from).toBe(0);
+  });
+
+  it("wraps a table nested inside a list item, starting at the physical line start", () => {
+    const doc = "- item\n\n  | A | B |\n  | --- | --- |\n  | 1 | 2 |\n";
+    const state = stateFor(doc, doc.length);
+    const wraps = collectWraps(state);
+    expect(wraps).toEqual(tableLineStartRanges(state));
+    const headerLine = state.doc.line(3); // "  | A | B |"
+    expect(wraps[0].from).toBe(headerLine.from);
   });
 
   it("produces no wrapper at all for a document with no table", () => {

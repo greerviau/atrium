@@ -331,6 +331,23 @@ describe("measureTableGeometry / applyTableGeometry", () => {
   });
 });
 
+// Regression coverage for round 1's must-fix 3: a selection-only transaction
+// (e.g. the cursor moving into a header cell, revealing its raw markdown and
+// changing its rendered width) must still trigger a re-measure, even though
+// it trips none of docChanged/geometryChanged/viewportChanged.
+describe("tableGeometryMeasurePlugin schedules a measure on selectionSet/focusChanged", () => {
+  it("calls view.requestMeasure again on a selection-only dispatch", () => {
+    const view = makeView("| A | B |\n| --- | --- |\n| **Name** | 2 |\n");
+    const spy = vi.spyOn(view, "requestMeasure");
+    spy.mockClear(); // drop the initial-mount call so only this dispatch's call counts
+
+    view.dispatch({ selection: { anchor: view.state.doc.toString().indexOf("Name") } });
+
+    expect(spy).toHaveBeenCalled();
+    view.destroy();
+  });
+});
+
 describe("AddRowBandWidget / AddColumnBandWidget", () => {
   it("clicking the add-row band appends a new row after the table's current last row", () => {
     const doc = "| Name  | Role     |\n| ----- | -------- |\n| Alice | Engineer |\n| Bob   | Designer |\n";
@@ -437,6 +454,38 @@ describe("clicking a rendered handle highlights its row/column (full-pipeline)",
     for (const cell of selected) {
       expect(["1", "2"]).toContain(cell.textContent);
     }
+    view.destroy();
+  });
+});
+
+// Round 2 must-fix: buildTableWrapRanges anchored the wrapper at the Table
+// node's own `from`, which lands mid-line (right after the "> "/list marker)
+// for a nested table. A BlockWrapper only wraps a line that *starts* inside
+// its range, so that mid-line `from` excluded the header row's entire
+// physical line from the wrapper — not just the marker — leaving every
+// phase-2 widget anchored there (row handle, column bars, add-bands)
+// rendered outside .cm-table-box, where their negative left/top offsets
+// resolve against the wrong ancestor and land off-screen.
+describe("nested tables get their header cells and phase-2 widgets inside .cm-table-box", () => {
+  it("a table nested inside a blockquote", () => {
+    const view = makeView("> | A | B |\n> | --- | --- |\n> | 1 | 2 |\n");
+    const box = view.dom.querySelector(".cm-table-box");
+    expect(box).toBeTruthy();
+    expect(box!.querySelectorAll(".cm-table-header-cell")).toHaveLength(2);
+    expect(box!.querySelectorAll(".cm-table-col-bar")).toHaveLength(2);
+    expect(box!.querySelectorAll(".cm-table-row-handle")).toHaveLength(2);
+    expect(box!.querySelectorAll(".cm-table-add-row-band")).toHaveLength(1);
+    expect(box!.querySelectorAll(".cm-table-add-col-band")).toHaveLength(1);
+    view.destroy();
+  });
+
+  it("a table nested inside a list item", () => {
+    const view = makeView("- item\n\n  | A | B |\n  | --- | --- |\n  | 1 | 2 |\n");
+    const box = view.dom.querySelector(".cm-table-box");
+    expect(box).toBeTruthy();
+    expect(box!.querySelectorAll(".cm-table-header-cell")).toHaveLength(2);
+    expect(box!.querySelectorAll(".cm-table-col-bar")).toHaveLength(2);
+    expect(box!.querySelectorAll(".cm-table-row-handle")).toHaveLength(2);
     view.destroy();
   });
 });
