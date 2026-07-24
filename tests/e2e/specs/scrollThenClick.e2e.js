@@ -23,7 +23,7 @@ async function openWorkspace(root) {
 }
 
 describe("rendered markdown: scroll then click preserves scroll position (issue #183)", () => {
-  it("does not snap back to the top when clicking shortly after scrolling a freshly opened pane", async () => {
+  it("does not snap back to the top when clicking a freshly opened, scrolled pane", async () => {
     await openWorkspace(fixturesDir);
 
     const fileNode = await $("//span[@class='name' and text()='long.md']");
@@ -34,48 +34,45 @@ describe("rendered markdown: scroll then click preserves scroll position (issue 
     await heading.waitForExist({ timeout: 5000 });
 
     const scroller = await $(".cm-scroller");
-
-    // Scroll well past the fold and fire a real `wheel` event so the app's
-    // own scroll-settle tracking (`wheelTracker` in `baseExtensions.ts`)
-    // registers it, matching the reporter's steps: open the file, scroll,
-    // click — on a pane that has never yet been clicked into, the same
-    // once-per-freshly-opened-file condition issue #161 described.
-    await browser.execute((el) => {
-      el.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: 4000 }));
-      el.scrollTop = 4000;
-    }, scroller);
-
-    const scrolledTo = await browser.execute((el) => el.scrollTop, scroller);
-    expect(scrolledTo).toBeGreaterThan(1000);
-
-    // Click at a fixed viewport point inside the now-scrolled content,
-    // immediately after the wheel event, via a raw pointer action rather
-    // than `element.click()` — the latter auto-scrolls its target into view
-    // first, which would undo the scroll set up above before the click ever
-    // lands.
     const point = await browser.execute((el) => {
       const rect = el.getBoundingClientRect();
-      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
     }, scroller);
 
+    // A real native wheel scroll, matching the reporter's own steps, on a
+    // pane that has never yet been clicked into — the same
+    // once-per-freshly-opened-file condition issue #161 described.
     await browser
-      .action("pointer")
-      .move({ x: Math.round(point.x), y: Math.round(point.y), origin: "viewport" })
-      .down()
-      .up()
+      .action("wheel")
+      .scroll({ x: point.x, y: point.y, deltaX: 0, deltaY: 4000, duration: 200 })
       .perform();
+
+    let scrolledTo;
+    await browser.waitUntil(
+      async () => {
+        scrolledTo = await browser.execute((el) => el.scrollTop, scroller);
+        return scrolledTo > 1000;
+      },
+      { timeout: 5000, timeoutMsg: "expected the wheel scroll to move the pane down before clicking" },
+    );
+
+    // Click at that same viewport point via a raw pointer action rather than
+    // `element.click()`, which would auto-scroll its target into view first
+    // and undo the scroll set up above before the click ever lands.
+    await browser.action("pointer").move({ x: point.x, y: point.y, origin: "viewport" }).down().up().perform();
 
     // The regression reproduces as `scrollTop` collapsing back toward 0 (the
     // off-screen, document-start caret scrolling into view on focus) —
-    // assert the pane stays near where the click landed instead.
+    // assert the pane stays close to where it was scrolled to, not merely
+    // "somewhere past the top".
     await browser.waitUntil(
       async () => {
         const scrollTop = await browser.execute((el) => el.scrollTop, scroller);
-        return scrollTop > 500;
+        return Math.abs(scrollTop - scrolledTo) < 50;
       },
       {
         timeout: 3000,
-        timeoutMsg: "expected the pane's scroll position to be preserved after clicking, not reset to the top",
+        timeoutMsg: `expected scrollTop to stay within 50px of ${scrolledTo} after clicking, not reset toward the top`,
       },
     );
   });
