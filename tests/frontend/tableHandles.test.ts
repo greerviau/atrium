@@ -124,6 +124,23 @@ describe("RowHandleWidget", () => {
     expect(dom.querySelectorAll(".cm-table-handle-dot")).toHaveLength(6);
     view.destroy();
   });
+
+  // Must-fix regression: a right-click (opening the context menu) used to
+  // only preventDefault() without pinning tableSelectionField at all, so an
+  // earlier pin elsewhere in the table (or a different table) silently
+  // survived — the menu would resolve to the right-clicked row while a
+  // stale row stayed visually highlighted, and Delete Row (say) would then
+  // act on the menu's row while the wrong one looked selected.
+  it("pins this row into tableSelectionField on contextmenu, replacing an earlier pin elsewhere", () => {
+    const view = makeView("| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n");
+    view.dispatch({ effects: setTableSelection.of({ table: 0, row: 0, col: null }) });
+
+    const dom = new RowHandleWidget(0, 2).toDOM(view);
+    dom.dispatchEvent(pointerLikeEvent("contextmenu"));
+
+    expect(view.state.field(tableSelectionField)).toEqual({ table: 0, row: 2, col: null });
+    view.destroy();
+  });
 });
 
 describe("TableColumnBarWidget", () => {
