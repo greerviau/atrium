@@ -2,6 +2,7 @@ import { writable, get } from "svelte/store";
 import { dirOf } from "../util/path";
 import { resolveExplorerDropTargetDir } from "./explorerDropTargets";
 import { movePath } from "./contextMenu";
+import { terminalPaneAtScreenPoint, insertPathsAtScreenPoint, dragOverTerminalPane, setDragOverTerminalPane } from "../terminal/terminalDropTargets";
 
 /** Path of the explorer row currently in a pointer-driven drag, or null. */
 export const draggingPath = writable<string | null>(null);
@@ -39,11 +40,14 @@ const DRAG_THRESHOLD_PX = 4;
  * `pointerup`, `pointercancel` (OS-level gesture takeover, touch/trackpad
  * cancellation), or `lostpointercapture` (capture stolen or released by the
  * platform) — funnels through the single `end()` below, so there is no path
- * that leaves `window` listeners attached or `draggingPath`/`dragOverTargetDir`
- * stuck set with no active gesture behind them; only a genuine `pointerup`
- * with `commit: true` ever calls `movePath`. `end()` removes every listener
- * *before* releasing capture, so a `lostpointercapture` fired synchronously
- * by the release itself can't re-enter `end()`.
+ * that leaves `window` listeners attached or `draggingPath`/`dragOverTargetDir`/
+ * `dragOverTerminalPane` stuck set with no active gesture behind them (the
+ * latter is defined in `terminalDropTargets.ts` and imported here — the
+ * guarantee is about what `end()` clears, not about where the store lives);
+ * only a genuine `pointerup` with `commit: true` ever calls `movePath`.
+ * `end()` removes every listener *before* releasing capture, so a
+ * `lostpointercapture` fired synchronously by the release itself can't
+ * re-enter `end()`.
  *
  * Every handler ignores an event whose `pointerId` doesn't match the one
  * that started the gesture (`event.pointerId`, captured at call time) — with
@@ -70,6 +74,8 @@ export function beginExplorerDrag(rowEl: HTMLElement, event: PointerEvent, sourc
   const pointerId = event.pointerId;
   let dragging = false;
   let captured = false;
+  let lastX = event.clientX;
+  let lastY = event.clientY;
 
   function onMove(e: PointerEvent): void {
     if (e.pointerId !== pointerId || e.buttons === 0) return;
@@ -82,8 +88,16 @@ export function beginExplorerDrag(rowEl: HTMLElement, event: PointerEvent, sourc
       captured = true;
     }
     e.preventDefault();
-    const target = resolveExplorerDropTargetDir(e.clientX, e.clientY);
-    dragOverTargetDir.set(target && isValidMoveTarget(sourcePath, target) ? target : null);
+    lastX = e.clientX;
+    lastY = e.clientY;
+    const explorerTarget = resolveExplorerDropTargetDir(e.clientX, e.clientY);
+    if (explorerTarget !== null) {
+      dragOverTargetDir.set(isValidMoveTarget(sourcePath, explorerTarget) ? explorerTarget : null);
+      setDragOverTerminalPane(null);
+    } else {
+      dragOverTargetDir.set(null);
+      setDragOverTerminalPane(terminalPaneAtScreenPoint(e.clientX, e.clientY));
+    }
   }
 
   function end(commit: boolean): void {
@@ -93,17 +107,24 @@ export function beginExplorerDrag(rowEl: HTMLElement, event: PointerEvent, sourc
     rowEl.removeEventListener("lostpointercapture", onLostCapture);
     if (captured) rowEl.releasePointerCapture(pointerId);
     const target = get(dragOverTargetDir);
+    const overTerminal = get(dragOverTerminalPane);
     draggingPath.set(null);
     dragOverTargetDir.set(null);
-    if (commit && dragging && target) {
+    setDragOverTerminalPane(null);
+    if (!commit || !dragging) return;
+    if (target) {
       void movePath(sourcePath, target).catch((err) => {
         console.error("atrium: failed to move", sourcePath, "into", target, err);
       });
+    } else if (overTerminal) {
+      insertPathsAtScreenPoint([sourcePath], lastX, lastY);
     }
   }
 
   function onUp(e: PointerEvent): void {
     if (e.pointerId !== pointerId) return;
+    lastX = e.clientX;
+    lastY = e.clientY;
     end(true);
   }
   function onCancel(e: PointerEvent): void {
