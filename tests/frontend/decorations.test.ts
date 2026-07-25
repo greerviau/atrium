@@ -15,8 +15,11 @@ import { CheckboxWidget, EmptyCellWidget, ImageWidget, ListBulletWidget, ListMar
 import {
   AddColumnBandWidget,
   AddRowBandWidget,
+  NO_TABLE_HOVER,
   RowHandleWidget,
   TableColumnBarWidget,
+  setTableHover,
+  setTableSelection,
   type TableHoverState,
 } from "../../src/lib/editor/markdown/tableHandles";
 import { markdownExtensions, markdownSourceExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
@@ -1118,6 +1121,94 @@ describe("buildDecorations: tables", () => {
     const linkDeco = decos.find((d) => d.class === "cm-link");
     expect(linkDeco).toBeTruthy();
     expect(state.doc.sliceString(linkDeco!.from, linkDeco!.to)).toBe("site");
+  });
+});
+
+/**
+ * Regression coverage for #238: a table cell whose content is exactly one
+ * inline mark (`InlineCode`/`Emphasis`/`StrongEmphasis`) shares its own
+ * `[from, to)` range with that mark's decoration. A class-presence
+ * assertion can't see the corruption these tests target — the corrupted
+ * cell keeps every class it should have, it's just nested one level too
+ * deep in the DOM — so these render a real `EditorView` and inspect direct
+ * DOM children instead of decoration specs.
+ */
+describe("buildDecorations: mark-nesting corruption regression (issue #238)", () => {
+  function makeView(doc: string): EditorView {
+    return new EditorView({
+      state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
+      parent: document.createElement("div"),
+    });
+  }
+
+  function directTableCells(row: Element): Element[] {
+    return Array.from(row.children).filter((el) => el.classList.contains("cm-table-cell"));
+  }
+
+  it("keeps every row's cells as direct children of the row line through a hover, a pinned selection, and clearing both", () => {
+    const doc =
+      "| Status | Note |\n" +
+      "| --- | --- |\n" +
+      "| `/status` | plain |\n" +
+      "| **bold** | plain |\n" +
+      "| *em* | plain |\n" +
+      "| pre `code` | plain |\n";
+    const view = makeView(doc);
+    const table = findTableFrom(view.state);
+
+    function assertEveryRowHasTwoDirectCells(label: string): void {
+      const rows = Array.from(view.dom.querySelectorAll(".cm-table-row"));
+      expect(rows.length, label).toBeGreaterThan(0);
+      for (const row of rows) {
+        expect(directTableCells(row).length, `${label}: "${row.textContent}"`).toBe(2);
+      }
+    }
+
+    assertEveryRowHasTwoDirectCells("at rest");
+
+    view.dispatch({ effects: setTableHover.of({ table, row: null, col: 0 }) });
+    assertEveryRowHasTwoDirectCells("after hovering column 0");
+
+    view.dispatch({ effects: setTableHover.of(NO_TABLE_HOVER) });
+    assertEveryRowHasTwoDirectCells("after clearing the hover");
+
+    view.dispatch({ effects: setTableSelection.of({ table, row: null, col: 0 }) });
+    assertEveryRowHasTwoDirectCells("after pinning a selection on column 0");
+
+    view.dispatch({ effects: setTableSelection.of(NO_TABLE_HOVER) });
+    assertEveryRowHasTwoDirectCells("after clearing the selection");
+
+    view.destroy();
+  });
+
+  it("keeps the row handle, every column bar, and both add bands as direct siblings of the header cells in a table with no leading pipe", () => {
+    const doc = "A | B\n--- | ---\n1 | 2\n";
+    const view = makeView(doc);
+    const table = findTableFrom(view.state);
+
+    function assertWidgetsAreDirectChildren(label: string): void {
+      const headerRow = view.dom.querySelector(".cm-table-header-row");
+      expect(headerRow, label).toBeTruthy();
+      const children = Array.from(headerRow!.children);
+      expect(children.some((el) => el.classList.contains("cm-table-row-handle")), `${label}: row handle`).toBe(true);
+      const bars = children.filter((el) => el.classList.contains("cm-table-col-bar"));
+      expect(bars.length, `${label}: column bars`).toBe(2);
+      expect(
+        children.some((el) => el.classList.contains("cm-table-add-row-band")),
+        `${label}: add-row band`,
+      ).toBe(true);
+      expect(
+        children.some((el) => el.classList.contains("cm-table-add-col-band")),
+        `${label}: add-col band`,
+      ).toBe(true);
+    }
+
+    assertWidgetsAreDirectChildren("at rest");
+
+    view.dispatch({ effects: setTableSelection.of({ table, row: null, col: 0 }) });
+    assertWidgetsAreDirectChildren("after selecting column 0");
+
+    view.destroy();
   });
 });
 
