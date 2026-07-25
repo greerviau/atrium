@@ -86,4 +86,13 @@ describe("TitleBar", () => {
 
     expect(await findByText("No other recent projects")).toBeTruthy();
   });
+
+  it("marks the strip as a deep drag region and the switcher as an opt-out, so the dropdown never drags the window", () => {
+    workspace.set({ id: "local", root: current.path });
+
+    const { container } = render(TitleBar);
+
+    expect(container.querySelector(".title-bar")?.getAttribute("data-tauri-drag-region")).toBe("deep");
+    expect(container.querySelector(".switcher")?.getAttribute("data-tauri-drag-region")).toBe("false");
+  });
 });

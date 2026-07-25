@@ -41,7 +41,7 @@
 
 <div class="title-bar" data-tauri-drag-region="deep">
   {#if $workspace.root}
-    <div class="switcher" bind:this={rootEl}>
+    <div class="switcher" bind:this={rootEl} data-tauri-drag-region="false">
       <button
         class="switcher-btn"
         bind:this={buttonEl}
@@ -56,7 +56,7 @@
       </button>
       {#if open}
         <ContextMenu anchorEl={buttonEl}>
-          <div class="switcher-menu" data-tauri-drag-region="false">
+          <div class="switcher-menu" role="none">
             {#if otherRecents.length === 0}
               <p class="empty-state">No other recent projects</p>
             {:else}
@@ -140,9 +140,12 @@
 
   .recent-row {
     display: flex;
+    max-width: 320px;
+  }
+
+  .switcher-menu .recent-row {
     flex-direction: column;
     align-items: flex-start;
-    max-width: 320px;
   }
 
   .recent-name {
