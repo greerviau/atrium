@@ -7,10 +7,11 @@ import {
 } from "../ipc/commands";
 
 /**
- * The recent-projects list, shared between `WelcomeScreen` (the only place
- * it's shown) and the settings dialog (the only place it can be bulk-cleared)
- * so removing or clearing an entry from either surface is immediately
- * reflected on the other, rather than each keeping its own local copy.
+ * The recent-projects list, shared across `WelcomeScreen`, the title-bar
+ * project switcher, and the settings dialog (the only place it can be
+ * bulk-cleared), so removing or clearing an entry from any surface is
+ * immediately reflected on the others, rather than each keeping its own
+ * local copy.
  */
 export const recents = writable<RecentProject[]>([]);
 

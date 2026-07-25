@@ -10,6 +10,7 @@
   import KeyboardShortcutsDialog from "./lib/shell/KeyboardShortcutsDialog.svelte";
   import ErrorToast from "./lib/shell/ErrorToast.svelte";
   import StatusBar from "./lib/shell/StatusBar.svelte";
+  import TitleBar from "./lib/shell/TitleBar.svelte";
   import { workspace, openWorkspacePath } from "./lib/stores/workspace";
   import { tabsState, setActiveTab, requestCloseTab, reconcileExternalChange } from "./lib/stores/tabs";
   import { closePrompt } from "./lib/stores/closePrompt";
@@ -581,12 +582,14 @@
 <SettingsDialog />
 <KeyboardShortcutsDialog />
 <ErrorToast />
-{#if !$workspace.root}
-  <WelcomeScreen />
-{:else}
-<SearchOverlay />
-<UnsavedChangesDialog />
-<div class="app-shell">
+<div class="window">
+  <TitleBar />
+  {#if !$workspace.root}
+    <WelcomeScreen />
+  {:else}
+    <SearchOverlay />
+    <UnsavedChangesDialog />
+    <div class="app-shell">
 <main class="app">
   {#if $explorerVisible}
     <div class="explorer" style={`width: ${explorerWidth}px`}>
@@ -662,15 +665,23 @@
   </div>
 </main>
 <StatusBar />
+    </div>
+  {/if}
 </div>
-{/if}
 
 <style>
-  .app-shell {
+  .window {
     display: flex;
     flex-direction: column;
     height: 100vh;
     width: 100vw;
+    overflow: hidden;
+  }
+  .app-shell {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
   }
   .app {
