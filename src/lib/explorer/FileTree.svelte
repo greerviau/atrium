@@ -7,6 +7,8 @@
     closeContextMenu,
     openContextMenu,
     deletePath,
+    treeActionRequest,
+    type TreeActionRequest,
   } from "./contextMenu";
   import { revealInFinder } from "../ipc/reveal";
   import { editingPath, pendingCreate, settleActiveEdit } from "./inlineEdit";
@@ -14,6 +16,7 @@
   import ContextMenu from "../ui/ContextMenu.svelte";
   import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
   import { dirOf } from "../util/path";
+  import { SHORTCUT_LABELS } from "../shell/shortcutLabels";
 
   let treeEl: HTMLDivElement;
   let detach: (() => void) | undefined;
@@ -46,36 +49,29 @@
     pendingCreate.set({ parentPath: dir, isDir });
   }
 
-  async function startNewFile(): Promise<void> {
-    if (!$contextMenu) return;
-    const dir = $contextMenu.isDir ? $contextMenu.path : dirOf($contextMenu.path);
+  async function startNewFile(path: string, isDir: boolean): Promise<void> {
+    const dir = isDir ? path : dirOf(path);
     await beginCreate(dir, false);
   }
 
-  async function startNewFolder(): Promise<void> {
-    if (!$contextMenu) return;
-    const dir = $contextMenu.isDir ? $contextMenu.path : dirOf($contextMenu.path);
+  async function startNewFolder(path: string, isDir: boolean): Promise<void> {
+    const dir = isDir ? path : dirOf(path);
     await beginCreate(dir, true);
   }
 
-  function startRename(): void {
-    if (!$contextMenu) return;
-    const path = $contextMenu.path;
+  function startRename(path: string): void {
     closeContextMenu();
     settleActiveEdit();
     pendingCreate.set(null);
     editingPath.set(path);
   }
 
-  function startDelete(): void {
-    if (!$contextMenu) return;
-    deleteTarget = { path: $contextMenu.path, isDir: $contextMenu.isDir };
+  function startDelete(path: string, isDir: boolean): void {
+    deleteTarget = { path, isDir };
     closeContextMenu();
   }
 
-  async function reveal(): Promise<void> {
-    if (!$contextMenu) return;
-    const path = $contextMenu.path;
+  async function reveal(path: string): Promise<void> {
     closeContextMenu();
     await revealInFinder(path);
   }
@@ -91,6 +87,74 @@
     if (!root) return;
     openContextMenu(event, root.entry.path, true);
   }
+
+  // The root entry itself can never be renamed/deleted via keyboard either,
+  // mirroring the right-click menu's own `isRootContextMenu` exclusion
+  // (§ Approach step 1) — a request for either action against the root path
+  // is silently dropped rather than opening the confirm modal or an inline
+  // rename on the workspace folder itself.
+  function isRootPath(path: string): boolean {
+    return path === $fileTree.root?.entry.path;
+  }
+
+  // Consumes a keyboard-originated tree action (§ Approach step 1): dispatch
+  // to the same local handlers the right-click menu's own `onclick`
+  // callbacks use, now that those take `(path, isDir)` as plain parameters
+  // instead of reading them off `$contextMenu`. Clears the request back to
+  // `null` first so a repeat of the same action (e.g. pressing ⌘⌫ again
+  // after cancelling the confirm modal) re-fires the effect.
+  $effect(() => {
+    const request = $treeActionRequest;
+    if (!request) return;
+    treeActionRequest.set(null);
+    dispatchTreeAction(request);
+  });
+
+  function dispatchTreeAction(request: TreeActionRequest): void {
+    switch (request.action) {
+      case "newFile":
+        void startNewFile(request.path, request.isDir);
+        break;
+      case "newFolder":
+        void startNewFolder(request.path, request.isDir);
+        break;
+      case "rename":
+        if (!isRootPath(request.path)) startRename(request.path);
+        break;
+      case "delete":
+        if (!isRootPath(request.path)) startDelete(request.path, request.isDir);
+        break;
+      case "reveal":
+        void reveal(request.path);
+        break;
+    }
+  }
+
+  // The `.file-tree` container's own fallback for when no row holds DOM
+  // focus (mirroring `onEmptyAreaContextMenu`'s existing root fallback for a
+  // right-click on empty space): only reachable once the container itself
+  // can hold focus (see the `tabindex="-1"` below). Must ignore a bubbled
+  // `keydown` from a row that already handled its own chord — a bubbled
+  // event's `target` is still the row, never the container, even though the
+  // container's own listener also receives it (§ "Third revision" item 2).
+  function onTreeContainerKeydown(event: KeyboardEvent): void {
+    if (event.target !== treeEl) return;
+    const root = $fileTree.root;
+    if (!root) return;
+    const cmd = event.metaKey;
+    const key = event.key.toLowerCase();
+    if (cmd && !event.altKey && key === "n") {
+      event.preventDefault();
+      treeActionRequest.set({
+        action: event.shiftKey ? "newFolder" : "newFile",
+        path: root.entry.path,
+        isDir: true,
+      });
+    }
+    // F2 / ⌘⌫ / ⌥⌘R are deliberate no-ops when the container itself, rather
+    // than a row, holds focus — there is no specific entry for them to act
+    // on at the root fallback (§ Approach step 1).
+  }
 </script>
 
 <svelte:window onclick={() => closeContextMenu()} />
@@ -100,6 +164,8 @@
   class="file-tree"
   bind:this={treeEl}
   oncontextmenu={onEmptyAreaContextMenu}
+  onkeydown={onTreeContainerKeydown}
+  tabindex="-1"
 >
   {#if $fileTree.root}
     <div role="tree">
@@ -110,13 +176,13 @@
 
 {#if $contextMenu}
   <ContextMenu x={$contextMenu.x} y={$contextMenu.y}>
-    <button role="menuitem" onclick={startNewFile}>New File</button>
-    <button role="menuitem" onclick={startNewFolder}>New Folder</button>
+    <button role="menuitem" onclick={() => void startNewFile($contextMenu.path, $contextMenu.isDir)}>New File<kbd class="shortcut-hint">{SHORTCUT_LABELS.newFile}</kbd></button>
+    <button role="menuitem" onclick={() => void startNewFolder($contextMenu.path, $contextMenu.isDir)}>New Folder<kbd class="shortcut-hint">{SHORTCUT_LABELS.newFolder}</kbd></button>
     {#if !isRootContextMenu}
-      <button role="menuitem" onclick={startRename}>Rename</button>
-      <button role="menuitem" onclick={startDelete}>Delete</button>
+      <button role="menuitem" onclick={() => startRename($contextMenu.path)}>Rename<kbd class="shortcut-hint">{SHORTCUT_LABELS.rename}</kbd></button>
+      <button role="menuitem" onclick={() => startDelete($contextMenu.path, $contextMenu.isDir)}>Delete<kbd class="shortcut-hint">{SHORTCUT_LABELS.delete}</kbd></button>
     {/if}
-    <button role="menuitem" onclick={() => void reveal()}>Reveal in Finder</button>
+    <button role="menuitem" onclick={() => void reveal($contextMenu.path)}>Reveal in Finder<kbd class="shortcut-hint">{SHORTCUT_LABELS.revealInFinder}</kbd></button>
   </ContextMenu>
 {/if}
 

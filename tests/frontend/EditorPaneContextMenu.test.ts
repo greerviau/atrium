@@ -92,15 +92,15 @@ describe("EditorPane: context menu", () => {
       el.getAttribute("role") === "separator" ? "—" : el.textContent,
     );
     expect(items).toEqual([
-      "Cut",
-      "Copy",
-      "Paste",
+      "Cut⌘X",
+      "Copy⌘C",
+      "Paste⌘V",
       "—",
-      "Select All",
+      "Select All⌘A",
       "—",
       "Switch to Source View",
       "—",
-      "Save",
+      "Save⌘S",
       "Reveal in Finder",
     ]);
   });
@@ -113,7 +113,7 @@ describe("EditorPane: context menu", () => {
     await openMenu(container);
 
     const labels = [...container.querySelectorAll('[role="menuitem"]')].map((el) => el.textContent);
-    expect(labels).toEqual(["Cut", "Copy", "Paste", "Select All", "Save", "Reveal in Finder"]);
+    expect(labels).toEqual(["Cut⌘X", "Copy⌘C", "Paste⌘V", "Select All⌘A", "Save⌘S", "Reveal in Finder"]);
   });
 
   it("labels the View item by the tab's current view mode", async () => {

@@ -74,7 +74,7 @@ describe("TerminalPane: context menu", () => {
     const items = [...container.querySelectorAll('[role="menuitem"], [role="separator"]')].map((el) =>
       el.getAttribute("role") === "separator" ? "—" : el.textContent,
     );
-    expect(items).toEqual(["Copy", "Paste", "—", "Select All", "Clear"]);
+    expect(items).toEqual(["Copy⌘C", "Paste⌘V", "—", "Select All⌘A", "Clear"]);
   });
 
   it("disables Copy when there is no selection", async () => {

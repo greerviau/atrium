@@ -3,6 +3,7 @@ import { render, cleanup } from "@testing-library/svelte";
 import ContextMenuHost from "./ContextMenuHost.svelte";
 import AnchorContextMenuHost from "./AnchorContextMenuHost.svelte";
 import SeparatorDisabledContextMenuHost from "./SeparatorDisabledContextMenuHost.svelte";
+import ShortcutHintContextMenuHost from "./ShortcutHintContextMenuHost.svelte";
 
 /**
  * jsdom has no real layout engine, so `getBoundingClientRect()` normally
@@ -222,5 +223,40 @@ describe("ContextMenu: separator and disabled buttons", () => {
     (getByText("Item 2") as HTMLButtonElement).click();
 
     expect(onClick).not.toHaveBeenCalled();
+  });
+});
+
+describe("ContextMenu: shortcut-hint rendering (issue #156)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("renders a trailing <kbd class=shortcut-hint> without disturbing the label's own text match", () => {
+    const { getByText } = render(ShortcutHintContextMenuHost, { onClick: () => {} });
+
+    // getByText only matches an element's own direct text-node children, so
+    // the label is still found even with a sibling <kbd> element appended —
+    // the same reason none of this menu's existing findByText/getByText
+    // call sites needed to change when this hint was added.
+    const item = getByText("New File").closest("button")!;
+    const kbd = item.querySelector("kbd.shortcut-hint")!;
+    expect(kbd).not.toBeNull();
+    expect(kbd.textContent).toBe("⌘N");
+
+    // An item with no shortcut renders no <kbd> at all.
+    const plainItem = getByText("No Shortcut").closest("button")!;
+    expect(plainItem.querySelector("kbd.shortcut-hint")).toBeNull();
+  });
+
+  it("right-aligns the hint via the button's own flex layout, and still fires its click handler", () => {
+    const onClick = vi.fn();
+    const { getByText } = render(ShortcutHintContextMenuHost, { onClick });
+
+    const item = getByText("New File").closest("button")!;
+    expect(window.getComputedStyle(item).display).toBe("flex");
+    expect(window.getComputedStyle(item).justifyContent).toBe("space-between");
+
+    (item as HTMLButtonElement).click();
+    expect(onClick).toHaveBeenCalledTimes(1);
   });
 });

@@ -11,6 +11,8 @@ export interface TerminalKeyEventHandlerOptions {
   writeToPty: (data: string) => void;
 }
 
+const SPLIT_ARROW_KEYS = new Set(["arrowup", "arrowdown", "arrowleft", "arrowright"]);
+
 export function handleTerminalKeyEvent(
   event: KeyboardEvent,
   { isMacPlatform, writeToPty }: TerminalKeyEventHandlerOptions,
@@ -19,6 +21,13 @@ export function handleTerminalKeyEvent(
   const hasToggleModifier = isMacPlatform ? event.metaKey : event.ctrlKey && !event.metaKey;
   const isToggleAccelerator = hasToggleModifier && (key === "b" || key === "r");
   if (isToggleAccelerator) return false;
+
+  // The four new split-direction accelerators (⌥⌘↑/↓/←/→, issue #156) are
+  // Option+Cmd+Arrow — xterm.js's default keymap otherwise treats a bare
+  // Alt+Arrow as a word-navigation escape sequence, which would swallow the
+  // chord before it ever reaches `main.rs`'s native accelerator table.
+  const hasSplitModifier = isMacPlatform ? event.metaKey && event.altKey : event.ctrlKey && event.altKey && !event.metaKey;
+  if (hasSplitModifier && SPLIT_ARROW_KEYS.has(key)) return false;
 
   if (
     event.type === "keydown" &&

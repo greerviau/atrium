@@ -4,6 +4,7 @@ import FileTree from "../../src/lib/explorer/FileTree.svelte";
 import { loadRoot } from "../../src/lib/stores/fileTree";
 import { editingPath, pendingCreate } from "../../src/lib/explorer/inlineEdit";
 import * as commands from "../../src/lib/ipc/commands";
+import * as reveal from "../../src/lib/ipc/reveal";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
   fsListDir: vi.fn(),
@@ -14,6 +15,10 @@ vi.mock("../../src/lib/ipc/commands", () => ({
   localWorkspaceId: () => "local",
   isAppError: (value: unknown) =>
     typeof value === "object" && value !== null && "code" in value && "message" in value,
+}));
+
+vi.mock("../../src/lib/ipc/reveal", () => ({
+  revealInFinder: vi.fn(),
 }));
 
 const ROOT = "/workspace";
@@ -314,5 +319,167 @@ describe("FileTree: inline create/rename", () => {
     });
     expect(input.value).toBe("");
     expect(commands.fsRename).not.toHaveBeenCalled();
+  });
+});
+
+describe("FileTree: keyboard shortcuts (issue #156)", () => {
+  beforeEach(() => {
+    vi.mocked(commands.fsListDir).mockReset();
+    vi.mocked(commands.fsCreateFile).mockReset();
+    vi.mocked(commands.fsCreateDir).mockReset();
+    vi.mocked(commands.fsDelete).mockReset();
+    vi.mocked(reveal.revealInFinder).mockReset().mockResolvedValue(undefined);
+    editingPath.set(null);
+    pendingCreate.set(null);
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  async function renderWithOneFile() {
+    vi.mocked(commands.fsListDir).mockResolvedValue([
+      { name: "notes.txt", path: `${ROOT}/notes.txt`, isDir: false, isSymlink: false },
+    ]);
+    await loadRoot(ROOT);
+    return render(FileTree);
+  }
+
+  it("⌘N on a focused row creates a new file alongside it", async () => {
+    const { container, findByText } = await renderWithOneFile();
+    const row = (await findByText("notes.txt")).closest(".row") as HTMLElement;
+    row.focus();
+
+    await fireEvent.keyDown(row, { key: "n", metaKey: true });
+
+    const input = await vi.waitFor(() => {
+      const el = container.querySelector("input");
+      if (!el) throw new Error("pending input not rendered yet");
+      return el;
+    });
+    await fireEvent.input(input, { target: { value: "new.txt" } });
+    await fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(commands.fsCreateFile).toHaveBeenCalledWith("local", `${ROOT}/new.txt`);
+  });
+
+  it("⌘⇧N on a focused row creates a new folder alongside it", async () => {
+    const { container, findByText } = await renderWithOneFile();
+    const row = (await findByText("notes.txt")).closest(".row") as HTMLElement;
+    row.focus();
+
+    await fireEvent.keyDown(row, { key: "n", metaKey: true, shiftKey: true });
+
+    const input = await vi.waitFor(() => {
+      const el = container.querySelector("input");
+      if (!el) throw new Error("pending input not rendered yet");
+      return el;
+    });
+    await fireEvent.input(input, { target: { value: "newdir" } });
+    await fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(commands.fsCreateDir).toHaveBeenCalledWith("local", `${ROOT}/newdir`);
+  });
+
+  it("F2 on a focused row opens an inline rename prefilled with its name", async () => {
+    const { container, findByText } = await renderWithOneFile();
+    const row = (await findByText("notes.txt")).closest(".row") as HTMLElement;
+    row.focus();
+
+    await fireEvent.keyDown(row, { key: "F2" });
+
+    const input = container.querySelector("input") as HTMLInputElement;
+    expect(input.value).toBe("notes.txt");
+  });
+
+  it("⌘⌫ on a focused row opens the confirm-delete modal without calling fsDelete directly", async () => {
+    const { container, findByText } = await renderWithOneFile();
+    const row = (await findByText("notes.txt")).closest(".row") as HTMLElement;
+    row.focus();
+
+    await fireEvent.keyDown(row, { key: "Backspace", metaKey: true });
+
+    expect(container.querySelector(".modal-backdrop")).not.toBeNull();
+    expect(commands.fsDelete).not.toHaveBeenCalled();
+
+    await fireEvent.click(container.querySelector(".modal .danger")!);
+    expect(commands.fsDelete).toHaveBeenCalledWith("local", `${ROOT}/notes.txt`, false);
+  });
+
+  it("⌥⌘R on a focused row reveals it in Finder", async () => {
+    const { findByText } = await renderWithOneFile();
+    const row = (await findByText("notes.txt")).closest(".row") as HTMLElement;
+    row.focus();
+
+    await fireEvent.keyDown(row, { key: "r", metaKey: true, altKey: true });
+
+    expect(reveal.revealInFinder).toHaveBeenCalledWith(`${ROOT}/notes.txt`);
+  });
+
+  it("F2 and ⌘⌫ are no-ops on a focused root row, mirroring the right-click menu's own root exclusion", async () => {
+    const { container, findByText } = await renderWithOneFile();
+    const rootRow = (await findByText("workspace")).closest(".row") as HTMLElement;
+    rootRow.focus();
+
+    await fireEvent.keyDown(rootRow, { key: "F2" });
+    expect(container.querySelector("input")).toBeNull();
+
+    await fireEvent.keyDown(rootRow, { key: "Backspace", metaKey: true });
+    expect(container.querySelector(".modal-backdrop")).toBeNull();
+  });
+
+  it("⌘N on the tree container (nothing focused) creates a new file at the workspace root", async () => {
+    const { container, findByText } = await renderWithOneFile();
+
+    await fireEvent.keyDown(container.querySelector(".file-tree")!, { key: "n", metaKey: true });
+
+    const input = await vi.waitFor(() => {
+      const el = container.querySelector("input");
+      if (!el) throw new Error("pending input not rendered yet");
+      return el;
+    });
+    await fireEvent.input(input, { target: { value: "root-file.txt" } });
+    await fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(commands.fsCreateFile).toHaveBeenCalledWith("local", `${ROOT}/root-file.txt`);
+    await findByText("notes.txt"); // sanity: the tree is still the one we rendered
+  });
+
+  it("F2 / ⌘⌫ / ⌥⌘R are no-ops on the tree container fallback (no row focused)", async () => {
+    const { container } = await renderWithOneFile();
+    const treeEl = container.querySelector(".file-tree")!;
+
+    await fireEvent.keyDown(treeEl, { key: "F2" });
+    expect(container.querySelector("input")).toBeNull();
+
+    await fireEvent.keyDown(treeEl, { key: "Backspace", metaKey: true });
+    expect(container.querySelector(".modal-backdrop")).toBeNull();
+
+    await fireEvent.keyDown(treeEl, { key: "r", metaKey: true, altKey: true });
+    expect(reveal.revealInFinder).not.toHaveBeenCalled();
+  });
+
+  it("does not double-handle a row's own chord at the container level (bubbling guard)", async () => {
+    const { container, findByText } = await renderWithOneFile();
+    const row = (await findByText("notes.txt")).closest(".row") as HTMLElement;
+    row.focus();
+
+    // A real keydown on the row bubbles up through `.file-tree` exactly like
+    // this: `fireEvent.keyDown(row, ...)` dispatches a real, bubbling
+    // KeyboardEvent, so the container's own `onkeydown` also receives it —
+    // it must recognize `event.target` is still the row, not itself, and
+    // decline to also dispatch a second, root-targeted action.
+    await fireEvent.keyDown(row, { key: "n", metaKey: true });
+
+    const inputs = await vi.waitFor(() => {
+      const els = container.querySelectorAll("input");
+      if (els.length === 0) throw new Error("pending input not rendered yet");
+      return els;
+    });
+    expect(inputs).toHaveLength(1);
+    // The row's own dispatch targets notes.txt's own directory (the
+    // workspace root, since notes.txt is a root-level file) — asserting a
+    // second dispatch didn't fire is really about there being only one
+    // pending-create row, not two competing ones.
   });
 });

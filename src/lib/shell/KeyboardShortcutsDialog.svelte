@@ -12,12 +12,17 @@
     rows: ShortcutRow[];
   }
 
-  // Static, hand-maintained mirror of `main.rs`'s `build_menu` accelerators
-  // (plus the one shortcut — Shift+Enter in the terminal — that has no menu
-  // entry at all). Nothing in the frontend has access to Rust's accelerator
-  // strings, so keep this in sync by hand whenever `build_menu` changes one.
-  // The four rows also shown as a `StatusBar.svelte` button tooltip read
-  // their glyph from `shortcutLabels.ts` instead of repeating it here.
+  // Static, hand-maintained mirror of `main.rs`'s `build_menu` accelerators,
+  // plus the shortcuts that have no native menu entry at all: Shift+Enter in
+  // the terminal, and the "Explorer" group's five file-tree shortcuts (New
+  // File/Folder, Rename, Delete, Reveal in Finder), which are plain
+  // DOM-focus-scoped `keydown` handlers rather than `main.rs` accelerators
+  // (see `FileTreeNode.svelte`/`FileTree.svelte`) and so never appear in the
+  // native menu bar either. Nothing in the frontend has access to Rust's
+  // accelerator strings, so keep the `main.rs`-backed rows in sync by hand
+  // whenever `build_menu` changes one. The rows also shown elsewhere (a
+  // `StatusBar.svelte` button tooltip, a `ContextMenu.svelte` shortcut hint)
+  // read their glyph from `shortcutLabels.ts` instead of repeating it here.
   const SHORTCUT_GROUPS: ShortcutGroup[] = [
     { title: "General", rows: [{ label: "Settings", keys: SHORTCUT_LABELS.settings }] },
     {
@@ -40,10 +45,24 @@
       rows: [
         { label: "Toggle File Explorer", keys: SHORTCUT_LABELS.toggleExplorer },
         { label: "Toggle Terminal", keys: SHORTCUT_LABELS.toggleTerminal },
-        { label: "Split Terminal", keys: "⌘\\" },
+        { label: "Split Up", keys: SHORTCUT_LABELS.splitUp },
+        { label: "Split Down", keys: SHORTCUT_LABELS.splitDown },
+        { label: "Split Left", keys: SHORTCUT_LABELS.splitLeft },
+        { label: "Split Right", keys: SHORTCUT_LABELS.splitRight },
+        { label: "Split Terminal (alias for Split Right)", keys: SHORTCUT_LABELS.splitTerminalAlias },
         { label: "Zoom In", keys: "⌘=" },
         { label: "Zoom Out", keys: "⌘−" },
         { label: "Reset Zoom", keys: "⌘0" },
+      ],
+    },
+    {
+      title: "Explorer",
+      rows: [
+        { label: "New File", keys: SHORTCUT_LABELS.newFile },
+        { label: "New Folder", keys: SHORTCUT_LABELS.newFolder },
+        { label: "Rename", keys: SHORTCUT_LABELS.rename },
+        { label: "Delete", keys: SHORTCUT_LABELS.delete },
+        { label: "Reveal in Finder", keys: SHORTCUT_LABELS.revealInFinder },
       ],
     },
     {

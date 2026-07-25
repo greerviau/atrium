@@ -40,6 +40,11 @@ The native folder-picker dialog lives outside the WebView, so the spec registers
 
 `specs/scrollThenClick.e2e.js` covers the rendered-markdown scroll-then-click regression (issue #183): open `long.md` (a fixture long enough to scroll), scroll the pane down, click shortly after the scroll on a pane that has never yet been clicked into, and confirm the scroll position is preserved rather than snapping back to the top. This is a real-display, real-input-timing bug that a jsdom/vitest test cannot exercise (see `tests/frontend/scrollSettleMousedown.test.ts` for the unit-level coverage of the fix's mechanics instead) — this spec is the regression guard for the actual user-visible behavior.
 
+`specs/keyboardShortcuts.e2e.js` covers issue #156's two kinds of shortcut:
+
+1. The five file-explorer shortcuts, which are plain DOM `keydown` handlers scoped to whichever tree row holds focus rather than native accelerators (see the plan's safety-constraint note): click a row to focus it, press ⌘N, type a name, and confirm the new file appears in the tree; press F2 on that file's own row and confirm the inline rename opens prefilled with its current name; press ⌘⌫ and confirm the permanent-delete confirmation modal opens (and the entry survives) before actually deleting it via the modal's own button.
+2. The four split-direction shortcuts, which unlike the explorer shortcuts *are* native `main.rs` accelerators — reached the same way this suite's own Cmd+Shift+F/Cmd+P/Cmd+S accelerator tests already reach theirs, by sending the raw key combo via `browser.keys()` rather than clicking a per-pane split button: click into a terminal pane, press ⌥⌘→, and confirm a second `.xterm-screen` appears; click into an editor pane, press ⌥⌘↓, and confirm a second `.editor-panel` appears.
+
 ## Status
 
 Written against the plan but **not executed** in the environment this was developed in (no display, no system WebView libraries, no macOS). Run this suite on a real dev machine or in CI on `macos-latest` before relying on it — treat it as a starting point to verify and adjust selectors/timing against, not as already-passing.

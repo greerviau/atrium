@@ -19,16 +19,27 @@ use tauri::{Emitter, Manager};
 /// Builds the native menu bar: `Atrium` (About, Settings…, Quit), `File`
 /// (Open Folder, Save, New Terminal Tab), `Edit` (standard
 /// Undo/Redo/Cut/Copy/Paste/Select All, plus Find in Files), `View` (Toggle
-/// File Explorer, Toggle Terminal, Split Terminal, Zoom In, Zoom Out, Reset
-/// Zoom), `Window` (standard), and `Help` (Keyboard Shortcuts…, Atrium on
-/// GitHub, Report an Issue…). Menu items that need frontend behavior
-/// (Settings, Open Folder, Save, New Terminal Tab, Find in Files, both View
-/// toggles, Split Terminal, all three zoom items, every Help item) emit a
-/// `menu:*` event; `App.svelte` / `MenuBar.ts` listen for these and dispatch
-/// to the active pane, the search overlay, the settings dialog, the
-/// panel-visibility store, the zoom store, the keyboard shortcuts panel, or
-/// the external-link opener, since the menu itself has no notion of "the
-/// active editor," "is the panel shown," or "the current zoom level."
+/// File Explorer, Toggle Terminal, Split Terminal, Split Up/Down/Left/Right,
+/// Zoom In, Zoom Out, Reset Zoom), `Window` (standard), and `Help` (Keyboard
+/// Shortcuts…, Atrium on GitHub, Report an Issue…). Menu items that need
+/// frontend behavior (Settings, Open Folder, Save, New Terminal Tab, Find in
+/// Files, both View toggles, Split Terminal, the four Split direction items,
+/// all three zoom items, every Help item) emit a `menu:*` event; `App.svelte`
+/// / `MenuBar.ts` listen for these and dispatch to the active pane, the
+/// search overlay, the settings dialog, the panel-visibility store, the zoom
+/// store, the keyboard shortcuts panel, or the external-link opener, since
+/// the menu itself has no notion of "the active editor," "is the panel
+/// shown," or "the current zoom level." The four Split direction items are
+/// new accelerators (⌥⌘↑/↓/←/→) routed by `App.svelte`'s
+/// `splitFocusedSurface` to whichever of the terminal dock or the editor's
+/// split panes last had focus; `Split Terminal` (⌘\) is left as a
+/// pre-existing, terminal-only alias for split-right specifically, kept only
+/// so that binding's own muscle memory keeps working. The five
+/// file-explorer shortcuts (New File/Folder, Rename, Delete, Reveal in
+/// Finder) are deliberately absent from this menu: unlike every accelerator
+/// here, which fires regardless of what has focus, those five must act only
+/// on the file tree's own DOM-focused row, so they're implemented as plain
+/// JS `keydown` handlers in `FileTreeNode.svelte`/`FileTree.svelte` instead.
 ///
 /// The `Help` submenu's title is the literal string `"Help"`: on macOS,
 /// AppKit recognizes that exact title and automatically adds a menu-search
@@ -132,6 +143,34 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         Some("CmdOrCtrl+\\"),
     )?;
+    let split_up = MenuItem::with_id(
+        app,
+        "menu:split-up",
+        "Split Up",
+        true,
+        Some("CmdOrCtrl+Alt+Up"),
+    )?;
+    let split_down = MenuItem::with_id(
+        app,
+        "menu:split-down",
+        "Split Down",
+        true,
+        Some("CmdOrCtrl+Alt+Down"),
+    )?;
+    let split_left = MenuItem::with_id(
+        app,
+        "menu:split-left",
+        "Split Left",
+        true,
+        Some("CmdOrCtrl+Alt+Left"),
+    )?;
+    let split_right = MenuItem::with_id(
+        app,
+        "menu:split-right",
+        "Split Right",
+        true,
+        Some("CmdOrCtrl+Alt+Right"),
+    )?;
     let zoom_in = MenuItem::with_id(app, "menu:zoom-in", "Zoom In", true, Some("CmdOrCtrl+="))?;
     let zoom_out = MenuItem::with_id(app, "menu:zoom-out", "Zoom Out", true, Some("CmdOrCtrl+-"))?;
     let zoom_reset = MenuItem::with_id(
@@ -149,6 +188,10 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
             &toggle_explorer,
             &toggle_terminal,
             &split_terminal,
+            &split_up,
+            &split_down,
+            &split_left,
+            &split_right,
             &PredefinedMenuItem::separator(app)?,
             &zoom_in,
             &zoom_out,

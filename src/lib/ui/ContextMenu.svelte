@@ -74,6 +74,10 @@
     visibility: visible;
   }
   .context-menu :global(button) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
     text-align: left;
     background: none;
     border: none;
@@ -93,6 +97,15 @@
   }
   .context-menu :global(button:disabled:hover) {
     background: none;
+  }
+  /* A trailing shortcut hint next to an item's label, right-aligned via the
+     button's own flex layout above — the same `<kbd>` pattern `tooltip.ts`
+     already uses for a toolbar-button tooltip's shortcut, just rendered
+     inline in the menu row instead of in a floating tooltip. */
+  .context-menu :global(kbd.shortcut-hint) {
+    font: inherit;
+    font-size: 0.85em;
+    opacity: 0.6;
   }
   .context-menu :global(.menu-separator) {
     border-top: 1px solid var(--atrium-border);

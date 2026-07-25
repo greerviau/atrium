@@ -23,7 +23,12 @@ describe("SplitMenu", () => {
 
     await fireEvent.click(container.querySelector('button[aria-label="Split terminal"]')!);
     const items = container.querySelectorAll('[role="menuitem"]');
-    expect([...items].map((el) => el.textContent)).toEqual(["Split Up", "Split Down", "Split Left", "Split Right"]);
+    expect([...items].map((el) => el.textContent)).toEqual([
+      "Split Up⌥⌘↑",
+      "Split Down⌥⌘↓",
+      "Split Left⌥⌘←",
+      "Split Right⌥⌘→",
+    ]);
 
     await fireEvent.click(items[2]);
     expect(onSplit).toHaveBeenCalledWith("left");

@@ -17,6 +17,7 @@
   import { EXPLORER_PATH_DRAG_TYPE } from "../util/dragDropTypes";
   import { registerTerminalDropTarget } from "./terminalDropTargets";
   import ContextMenu from "../ui/ContextMenu.svelte";
+  import { SHORTCUT_LABELS } from "../shell/shortcutLabels";
 
   // Tauri's `CmdOrCtrl` accelerator resolves to Cmd-only on macOS and
   // Ctrl-only elsewhere (never both on one platform), so the toggle-panel
@@ -290,10 +291,10 @@
 
 {#if menu}
   <ContextMenu x={menu.x} y={menu.y}>
-    <button role="menuitem" disabled={!menu.hasSelection} onclick={() => void doCopy()}>Copy</button>
-    <button role="menuitem" onclick={() => void doPaste()}>Paste</button>
+    <button role="menuitem" disabled={!menu.hasSelection} onclick={() => void doCopy()}>Copy<kbd class="shortcut-hint">{SHORTCUT_LABELS.copy}</kbd></button>
+    <button role="menuitem" onclick={() => void doPaste()}>Paste<kbd class="shortcut-hint">{SHORTCUT_LABELS.paste}</kbd></button>
     <div class="menu-separator" role="separator"></div>
-    <button role="menuitem" onclick={doSelectAll}>Select All</button>
+    <button role="menuitem" onclick={doSelectAll}>Select All<kbd class="shortcut-hint">{SHORTCUT_LABELS.selectAll}</kbd></button>
     <button role="menuitem" onclick={doClear}>Clear</button>
   </ContextMenu>
 {/if}

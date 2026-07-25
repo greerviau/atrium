@@ -42,6 +42,7 @@
   import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
   import { revealInFinder } from "../ipc/reveal";
   import ContextMenu from "../ui/ContextMenu.svelte";
+  import { SHORTCUT_LABELS } from "../shell/shortcutLabels";
 
   // `paneId` identifies which split pane this instance belongs to — combined
   // with `filePath` (via the caller's `${paneId}:${path}` keying, see
@@ -523,11 +524,11 @@
 
 {#if menu}
   <ContextMenu x={menu.x} y={menu.y}>
-    <button role="menuitem" disabled={!menu.hasSelection} onclick={doCut}>Cut</button>
-    <button role="menuitem" disabled={!menu.hasSelection} onclick={doCopy}>Copy</button>
-    <button role="menuitem" disabled={menu.pasteDisabled} onclick={() => void doPaste()}>Paste</button>
+    <button role="menuitem" disabled={!menu.hasSelection} onclick={doCut}>Cut<kbd class="shortcut-hint">{SHORTCUT_LABELS.cut}</kbd></button>
+    <button role="menuitem" disabled={!menu.hasSelection} onclick={doCopy}>Copy<kbd class="shortcut-hint">{SHORTCUT_LABELS.copy}</kbd></button>
+    <button role="menuitem" disabled={menu.pasteDisabled} onclick={() => void doPaste()}>Paste<kbd class="shortcut-hint">{SHORTCUT_LABELS.paste}</kbd></button>
     <div class="menu-separator" role="separator"></div>
-    <button role="menuitem" onclick={doSelectAll}>Select All</button>
+    <button role="menuitem" onclick={doSelectAll}>Select All<kbd class="shortcut-hint">{SHORTCUT_LABELS.selectAll}</kbd></button>
     {#if tab?.mode === "markdown"}
       <div class="menu-separator" role="separator"></div>
       <button role="menuitem" onclick={doToggleViewMode}>
@@ -552,7 +553,7 @@
       <button role="menuitem" disabled={!duplicateColumn(view.state, ctx)} onclick={() => doTableEdit(duplicateColumn(view.state, ctx))}>Duplicate Column</button>
     {/if}
     <div class="menu-separator" role="separator"></div>
-    <button role="menuitem" onclick={doSave}>Save</button>
+    <button role="menuitem" onclick={doSave}>Save<kbd class="shortcut-hint">{SHORTCUT_LABELS.save}</kbd></button>
     <button role="menuitem" onclick={() => void doReveal()}>Reveal in Finder</button>
   </ContextMenu>
 {/if}

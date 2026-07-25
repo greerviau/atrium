@@ -9,6 +9,7 @@ import { openShortcuts } from "../stores/shortcutsOverlay";
 import { openExternalLink } from "../ipc/commands";
 import { showErrorToast, describeError } from "../stores/errorToast";
 import { get } from "svelte/store";
+import type { SplitDirection } from "../terminal/paneTree";
 
 /**
  * Wires the native menu bar (built in `main.rs`) to frontend behavior. Menu
@@ -27,8 +28,18 @@ import { get } from "svelte/store";
  * actions; `menu:help:shortcuts` opens the keyboard shortcuts dialog, and
  * `menu:help:github`/`menu:help:report-issue` open their hardcoded GitHub
  * URLs via the same `openExternalLink` command rendered markdown links use.
+ * `menu:split-up`/`-down`/`-left`/`-right` all route through the same
+ * `onSplitDirection` callback (`App.svelte`'s `splitFocusedSurface`), which
+ * decides for itself which of the terminal dock or the editor's split panes
+ * last had focus — the menu item itself carries no more context than which
+ * direction was chosen. `menu:split-terminal` keeps calling `onSplitTerminal`
+ * unchanged, a separate, terminal-only alias for split-right specifically.
  */
-export async function initMenuBar(onNewTerminalTab: () => void, onSplitTerminal: () => void): Promise<void> {
+export async function initMenuBar(
+  onNewTerminalTab: () => void,
+  onSplitTerminal: () => void,
+  onSplitDirection: (direction: SplitDirection) => void,
+): Promise<void> {
   await onMenuEvent("menu:open-folder", () => void openWorkspaceFolder());
   await onMenuEvent("menu:settings", () => openSettings());
   await onMenuEvent("menu:save", () => {
@@ -42,6 +53,10 @@ export async function initMenuBar(onNewTerminalTab: () => void, onSplitTerminal:
   });
   await onMenuEvent("menu:new-terminal-tab", onNewTerminalTab);
   await onMenuEvent("menu:split-terminal", onSplitTerminal);
+  await onMenuEvent("menu:split-up", () => onSplitDirection("up"));
+  await onMenuEvent("menu:split-down", () => onSplitDirection("down"));
+  await onMenuEvent("menu:split-left", () => onSplitDirection("left"));
+  await onMenuEvent("menu:split-right", () => onSplitDirection("right"));
   await onMenuEvent("menu:find-in-files", () => {
     if (get(workspace).root) {
       openSearch();
