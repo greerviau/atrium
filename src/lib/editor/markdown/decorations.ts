@@ -894,7 +894,7 @@ function decorateTableRow(
       classes.push(CLASS.tableColSelected);
     }
     if (slot.to > slot.from) {
-      out.push(Decoration.mark({ class: classes.join(" ") }).range(slot.from, slot.to));
+      out.push(Decoration.mark({ class: classes.join(" "), inclusive: true }).range(slot.from, slot.to));
     } else {
       out.push(Decoration.widget({ widget: new EmptyCellWidget(classes.join(" ")), side: 0 }).range(slot.from));
     }
@@ -909,16 +909,27 @@ function decorateTableRow(
 /**
  * Row-handle widgets use `side: -1000` so they always sort before every
  * column-bar widget anchored at the same header-row position; column bars
- * use their own column index (0, 1, 2, ...) so their left-to-right DOM
- * order always matches column order — `tableGeometryMeasurePlugin`'s write
- * phase relies on that order to match each bar to its header cell (see its
- * own doc comment in tableHandles.ts). The add-row/add-column bands sort
- * last; their own relative DOM order doesn't matter since neither is
+ * use `-900 + column` so their left-to-right DOM order always matches
+ * column order — `tableGeometryMeasurePlugin`'s write phase relies on that
+ * order to match each bar to its header cell (see its own doc comment in
+ * tableHandles.ts). The add-row/add-column bands sort after the column
+ * bars; their own relative DOM order doesn't matter since neither is
  * matched positionally the way the column bars are.
+ *
+ * All four of these sides must stay below -1 (CodeMirror's `InlineIncStart`,
+ * which is what the cell's own `Decoration.mark({ inclusive: true })` above
+ * gets for its `startSide`). A GFM table row can omit its leading pipe, in
+ * which case the first cell's `slot.from` is the same position every one of
+ * these widgets is anchored at — if a widget's side sorted above the cell
+ * mark's `startSide`, it would render nested inside that cell's span instead
+ * of beside it, and being `position: absolute` against `.cm-table-box`, it
+ * would visibly jump to that one cell's box the moment the cell's own class
+ * list changes (hover/selection).
  */
 const ROW_HANDLE_SIDE = -1000;
-const ADD_ROW_BAND_SIDE = 9000;
-const ADD_COLUMN_BAND_SIDE = 9001;
+const COLUMN_BAR_SIDE_BASE = -900;
+const ADD_ROW_BAND_SIDE = -100;
+const ADD_COLUMN_BAND_SIDE = -99;
 
 /**
  * Decorates an entire `Table` node in one pass: parses per-column alignment
@@ -938,7 +949,10 @@ const ADD_COLUMN_BAND_SIDE = 9001;
  * blockquote/list handling doesn't need a second special case. `node.from`
  * is used as the table's own identity key (`tableFrom`) — stable for the
  * table's lifetime within one decoration pass, and the same value
- * `tableHoverField` keys hover/selection state on.
+ * `tableHoverField` keys hover/selection state on. The row handle, column
+ * bar, and add-row/add-column band sides must all stay below -1 (the cell
+ * mark's own `inclusive: true` startSide) — see the doc comment on
+ * `ROW_HANDLE_SIDE` above for why.
  */
 function decorateTable(
   state: EditorState,
@@ -967,9 +981,10 @@ function decorateTable(
       );
       for (let column = 0; column < alignment.length; column++) {
         out.push(
-          Decoration.widget({ widget: new TableColumnBarWidget(tableFrom, column), side: column }).range(
-            headerLineStart,
-          ),
+          Decoration.widget({
+            widget: new TableColumnBarWidget(tableFrom, column),
+            side: COLUMN_BAR_SIDE_BASE + column,
+          }).range(headerLineStart),
         );
       }
       out.push(
