@@ -40,24 +40,11 @@ describe("minimapExtension", () => {
     expect(container.querySelector(".cm-minimap-gutter")).toBeNull();
   });
 
-  it("takes the gutter out of flow with an absolute, top-right-anchored panel", () => {
+  it("leaves the gutter in flow, with no position: absolute override", () => {
     mount(true);
     const css = allStyleText();
-    const gutterRule = css.split("\n").find((line) => line.includes(".cm-minimap-gutter") && line.includes("position: absolute"));
-    expect(gutterRule, `expected a .cm-minimap-gutter rule with position: absolute, got:\n${css}`).toBeDefined();
-    expect(gutterRule).toContain("position: absolute");
-    expect(gutterRule).not.toContain("position: sticky");
-    expect(gutterRule).toContain("top: 8px");
-    expect(gutterRule).toContain("right: 8px");
-  });
-
-  it("gives the panel floating chrome matching the app's other floating panels", () => {
-    mount(true);
-    const css = allStyleText();
-    const gutterRule = css.split("\n").find((line) => line.includes(".cm-minimap-gutter") && line.includes("position: absolute"));
+    const gutterRule = css.split("\n").find((line) => line.includes(".cm-minimap-gutter"));
     expect(gutterRule).toBeDefined();
-    expect(gutterRule).toContain("border-radius: 6px");
-    expect(gutterRule).toContain("box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3)");
-    expect(gutterRule).toContain("var(--atrium-border)");
+    expect(gutterRule).not.toMatch(/position:\s*absolute/);
   });
 });
