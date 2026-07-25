@@ -10,6 +10,7 @@
   import KeyboardShortcutsDialog from "./lib/shell/KeyboardShortcutsDialog.svelte";
   import ErrorToast from "./lib/shell/ErrorToast.svelte";
   import StatusBar from "./lib/shell/StatusBar.svelte";
+  import TitleBar from "./lib/shell/TitleBar.svelte";
   import { workspace, openWorkspacePath } from "./lib/stores/workspace";
   import { tabsState, setActiveTab, requestCloseTab, reconcileExternalChange } from "./lib/stores/tabs";
   import { closePrompt } from "./lib/stores/closePrompt";
@@ -581,96 +582,106 @@
 <SettingsDialog />
 <KeyboardShortcutsDialog />
 <ErrorToast />
-{#if !$workspace.root}
-  <WelcomeScreen />
-{:else}
-<SearchOverlay />
-<UnsavedChangesDialog />
-<div class="app-shell">
-<main class="app">
-  {#if $explorerVisible}
-    <div class="explorer" style={`width: ${explorerWidth}px`}>
-      <FileTree />
-    </div>
-    <div class="resizer vertical" role="separator" aria-orientation="vertical" onpointerdown={startDragExplorer}>
-      <div class="resizer-line"></div>
-    </div>
-  {/if}
-
-  <div class="main" class:row={$terminalPosition !== "bottom"} bind:this={mainEl}>
-    {#each mainSlotOrder as slot (slot)}
-      {#if slot === "editor"}
-        <div class="editor-area">
-          {#if $editorPaneTree}
-            <EditorPaneSplit
-              tree={$editorPaneTree}
-              activePaneId={$focusedEditorPaneId ?? ""}
-              onFocus={setFocusedEditorPane}
-              onSplit={(paneId, direction) => splitEditorPaneAt(paneId, direction)}
-              onSetActiveTab={(paneId, path) => setActiveTabInEditorPane(paneId, path)}
-              onCloseTab={(paneId, path) => closeTabInEditorPane(paneId, path)}
-              onResizeSplit={(splitId, index, delta, containerSizePx) =>
-                resizeEditorPaneSplit(splitId, index, delta, containerSizePx)}
-            />
-          {/if}
+<div class="window">
+  <TitleBar />
+  {#if !$workspace.root}
+    <WelcomeScreen />
+  {:else}
+    <SearchOverlay />
+    <UnsavedChangesDialog />
+    <div class="app-shell">
+    <main class="app">
+      {#if $explorerVisible}
+        <div class="explorer" style={`width: ${explorerWidth}px`}>
+          <FileTree />
         </div>
-      {:else if slot === "resizer"}
-        <div
-          class="resizer"
-          class:horizontal={$terminalPosition === "bottom"}
-          class:vertical={$terminalPosition !== "bottom"}
-          class:hidden={!$terminalVisible}
-          role="separator"
-          aria-orientation={$terminalPosition === "bottom" ? "horizontal" : "vertical"}
-          onpointerdown={startDragTerminal}
-        >
+        <div class="resizer vertical" role="separator" aria-orientation="vertical" onpointerdown={startDragExplorer}>
           <div class="resizer-line"></div>
         </div>
-      {:else}
-        <div
-          class="terminal-area"
-          class:hidden={!$terminalVisible}
-          style={$terminalPosition === "bottom" ? `height: ${terminalHeight}px` : `width: ${terminalWidth}px`}
-        >
-          <div class="terminal-panes">
-            {#if terminalPaneTree}
-              <div class="terminal-pane-slot">
-                <PaneSplit
-                  tree={terminalPaneTree}
-                  activePaneId={focusedPaneId ?? ""}
-                  workspaceId={$workspace.id}
-                  onFocus={setFocusedPane}
-                  onSplit={(paneId, direction) => splitPaneAt(paneId, direction)}
-                  onNewTab={(paneId) => addTabToPane(paneId)}
-                  onCloseTab={(paneId, sessionId) => closeTabInPane(paneId, sessionId)}
-                  onSessionExit={(paneId, sessionId, elapsedMs) => exitTabInPane(paneId, sessionId, elapsedMs)}
-                  onSetActiveTab={(paneId, sessionId) => setActiveTabInPane(paneId, sessionId)}
-                  onTitleChange={(paneId, sessionId, title) => setSessionTitle(paneId, sessionId, title)}
-                  onResizeSplit={(splitId, index, delta, containerSizePx) =>
-                    resizePaneSplit(splitId, index, delta, containerSizePx)}
-                />
-              </div>
-            {:else}
-              <div class="terminal-empty">
-                <button class="new-tab" onclick={newTerminalTab}>+ New Terminal</button>
-              </div>
-            {/if}
-          </div>
-        </div>
       {/if}
-    {/each}
-  </div>
-</main>
-<StatusBar />
+
+      <div class="main" class:row={$terminalPosition !== "bottom"} bind:this={mainEl}>
+        {#each mainSlotOrder as slot (slot)}
+          {#if slot === "editor"}
+            <div class="editor-area">
+              {#if $editorPaneTree}
+                <EditorPaneSplit
+                  tree={$editorPaneTree}
+                  activePaneId={$focusedEditorPaneId ?? ""}
+                  onFocus={setFocusedEditorPane}
+                  onSplit={(paneId, direction) => splitEditorPaneAt(paneId, direction)}
+                  onSetActiveTab={(paneId, path) => setActiveTabInEditorPane(paneId, path)}
+                  onCloseTab={(paneId, path) => closeTabInEditorPane(paneId, path)}
+                  onResizeSplit={(splitId, index, delta, containerSizePx) =>
+                    resizeEditorPaneSplit(splitId, index, delta, containerSizePx)}
+                />
+              {/if}
+            </div>
+          {:else if slot === "resizer"}
+            <div
+              class="resizer"
+              class:horizontal={$terminalPosition === "bottom"}
+              class:vertical={$terminalPosition !== "bottom"}
+              class:hidden={!$terminalVisible}
+              role="separator"
+              aria-orientation={$terminalPosition === "bottom" ? "horizontal" : "vertical"}
+              onpointerdown={startDragTerminal}
+            >
+              <div class="resizer-line"></div>
+            </div>
+          {:else}
+            <div
+              class="terminal-area"
+              class:hidden={!$terminalVisible}
+              style={$terminalPosition === "bottom" ? `height: ${terminalHeight}px` : `width: ${terminalWidth}px`}
+            >
+              <div class="terminal-panes">
+                {#if terminalPaneTree}
+                  <div class="terminal-pane-slot">
+                    <PaneSplit
+                      tree={terminalPaneTree}
+                      activePaneId={focusedPaneId ?? ""}
+                      workspaceId={$workspace.id}
+                      onFocus={setFocusedPane}
+                      onSplit={(paneId, direction) => splitPaneAt(paneId, direction)}
+                      onNewTab={(paneId) => addTabToPane(paneId)}
+                      onCloseTab={(paneId, sessionId) => closeTabInPane(paneId, sessionId)}
+                      onSessionExit={(paneId, sessionId, elapsedMs) => exitTabInPane(paneId, sessionId, elapsedMs)}
+                      onSetActiveTab={(paneId, sessionId) => setActiveTabInPane(paneId, sessionId)}
+                      onTitleChange={(paneId, sessionId, title) => setSessionTitle(paneId, sessionId, title)}
+                      onResizeSplit={(splitId, index, delta, containerSizePx) =>
+                        resizePaneSplit(splitId, index, delta, containerSizePx)}
+                    />
+                  </div>
+                {:else}
+                  <div class="terminal-empty">
+                    <button class="new-tab" onclick={newTerminalTab}>+ New Terminal</button>
+                  </div>
+                {/if}
+              </div>
+            </div>
+          {/if}
+        {/each}
+      </div>
+    </main>
+    <StatusBar />
+    </div>
+  {/if}
 </div>
-{/if}
 
 <style>
-  .app-shell {
+  .window {
     display: flex;
     flex-direction: column;
     height: 100vh;
     width: 100vw;
+    overflow: hidden;
+  }
+  .app-shell {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
   }
   .app {

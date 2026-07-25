@@ -62,8 +62,9 @@
 
 <style>
   .welcome {
-    height: 100vh;
-    width: 100vw;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
