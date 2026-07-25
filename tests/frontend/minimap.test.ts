@@ -43,8 +43,10 @@ describe("minimapExtension", () => {
   it("leaves the gutter in flow, with no position: absolute override", () => {
     mount(true);
     const css = allStyleText();
-    const gutterRule = css.split("\n").find((line) => line.includes(".cm-minimap-gutter"));
-    expect(gutterRule).toBeDefined();
-    expect(gutterRule).not.toMatch(/position:\s*absolute/);
+    const gutterRules = css.split("\n").filter((line) => line.includes(".cm-minimap-gutter"));
+    expect(gutterRules.length, `expected at least one .cm-minimap-gutter rule, got:\n${css}`).toBeGreaterThan(0);
+    for (const rule of gutterRules) {
+      expect(rule).not.toMatch(/position:\s*absolute/);
+    }
   });
 });
