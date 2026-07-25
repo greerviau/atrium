@@ -916,15 +916,18 @@ function decorateTableRow(
  * bars; their own relative DOM order doesn't matter since neither is
  * matched positionally the way the column bars are.
  *
- * All four of these sides must stay below -1 (CodeMirror's `InlineIncStart`,
- * which is what the cell's own `Decoration.mark({ inclusive: true })` above
- * gets for its `startSide`). A GFM table row can omit its leading pipe, in
- * which case the first cell's `slot.from` is the same position every one of
- * these widgets is anchored at — if a widget's side sorted above the cell
- * mark's `startSide`, it would render nested inside that cell's span instead
- * of beside it, and being `position: absolute` against `.cm-table-box`, it
- * would visibly jump to that one cell's box the moment the cell's own class
- * list changes (hover/selection).
+ * All four of these declared sides must stay non-positive: CodeMirror maps
+ * an inline widget's declared side to `-1e8 + side` when it is <= 0 and to
+ * `+1e8 + side` when it is > 0, and the cell's own
+ * `Decoration.mark({ inclusive: true })` above gets `startSide -1`, which
+ * only a non-positive widget side sorts before. A GFM table row can omit its
+ * leading pipe, in which case the first cell's `slot.from` is the same
+ * position every one of these widgets is anchored at — if a widget's
+ * declared side were positive, it would sort after the cell mark's
+ * `startSide` and render nested inside that cell's span instead of beside
+ * it, and being `position: absolute` against `.cm-table-box`, it would
+ * visibly jump to that one cell's box the moment the cell's own class list
+ * changes (hover/selection).
  */
 const ROW_HANDLE_SIDE = -1000;
 const COLUMN_BAR_SIDE_BASE = -900;
