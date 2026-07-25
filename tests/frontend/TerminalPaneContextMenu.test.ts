@@ -6,7 +6,7 @@ import * as commands from "../../src/lib/ipc/commands";
 import * as clipboardManager from "@tauri-apps/plugin-clipboard-manager";
 
 // Only the Tauri IPC boundary (pty + clipboard) is mocked, matching
-// terminalDragDrop.test.ts's own convention — everything else in the
+// terminalOsDrop.test.ts's own convention — everything else in the
 // component (xterm.js, the context-menu wiring) runs unmodified.
 vi.mock("../../src/lib/ipc/commands", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/lib/ipc/commands")>();
@@ -51,7 +51,7 @@ afterEach(() => {
   // `vi.restoreAllMocks()` would also wipe the `mockResolvedValue`s set up
   // in the `vi.mock` factories above (they're plain `vi.fn()`s, not
   // `vi.spyOn` spies), breaking `ptySpawn`/`ptySubscribe` for every test
-  // after the first — matches terminalDragDrop.test.ts's own convention.
+  // after the first — matches terminalOsDrop.test.ts's own convention.
   vi.clearAllMocks();
 });
 
