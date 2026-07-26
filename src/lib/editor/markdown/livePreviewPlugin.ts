@@ -15,6 +15,7 @@ import { handleLinkClick } from "./widgets";
 import { tableNavigationKeymap } from "./tableEdit";
 import {
   clearTableSelectionOnClickElsewhere,
+  tableDragField,
   tableGeometryMeasurePlugin,
   tableHoverField,
   tableSelectionField,
@@ -82,9 +83,12 @@ const focusTrackingHandlers = EditorView.domEventHandlers({
  * multi-input facet, so the two wrapper sets are provided as two separate
  * facet inputs below rather than merged into one `RangeSet` here.
  *
- * Also rebuilds decorations on a `tableHoverField`/`tableSelectionField`
- * change, so hovering or clicking a table row/column handle applies its
- * highlight class the same update it's dispatched in.
+ * Also rebuilds decorations on a `tableHoverField`/`tableSelectionField`/
+ * `tableDragField` change, so hovering, clicking, or dragging a table
+ * row/column handle applies its highlight/drag-tint class the same update
+ * it's dispatched in — a transaction carrying only one of these effects
+ * changes no doc, selection, viewport, or focus, so without this the rebuild
+ * guard below would skip it and the drag tint would never appear.
  */
 function livePreviewPlugin(documentPath: string) {
   const plugin = ViewPlugin.fromClass(
@@ -101,6 +105,7 @@ function livePreviewPlugin(documentPath: string) {
           view.state.field(editorFocusField),
           view.state.field(tableHoverField),
           view.state.field(tableSelectionField),
+          view.state.field(tableDragField),
         );
         this.tableWraps = buildTableWrapRanges(view.state);
         this.codeBlockWraps = buildCodeBlockWrapRanges(view.state);
@@ -110,6 +115,7 @@ function livePreviewPlugin(documentPath: string) {
         const focusChanged = update.startState.field(editorFocusField) !== update.state.field(editorFocusField);
         const hoverChanged = update.startState.field(tableHoverField) !== update.state.field(tableHoverField);
         const selectionChanged = update.startState.field(tableSelectionField) !== update.state.field(tableSelectionField);
+        const dragChanged = update.startState.field(tableDragField) !== update.state.field(tableDragField);
         if (
           update.docChanged ||
           update.selectionSet ||
@@ -117,6 +123,7 @@ function livePreviewPlugin(documentPath: string) {
           focusChanged ||
           hoverChanged ||
           selectionChanged ||
+          dragChanged ||
           syntaxTree(update.startState) !== syntaxTree(update.state)
         ) {
           this.decorations = buildDecorations(
@@ -126,6 +133,7 @@ function livePreviewPlugin(documentPath: string) {
             update.state.field(editorFocusField),
             update.state.field(tableHoverField),
             update.state.field(tableSelectionField),
+            update.state.field(tableDragField),
           );
         }
         if (update.docChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
@@ -269,6 +277,7 @@ export function markdownExtensions(documentPath: string): Extension[] {
     editorFocusField,
     tableHoverField,
     tableSelectionField,
+    tableDragField,
     focusTrackingHandlers,
     livePreviewPlugin(documentPath),
     mermaidWidgetField,

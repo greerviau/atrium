@@ -32,9 +32,15 @@ function ruleBodyFor(selector: string): string {
   // that would otherwise be read as regex grouping instead of literal
   // parentheses, silently failing to match a rule that's actually present.
   // Whitespace in the selector is matched flexibly (`\s+`) so a descendant
-  // selector wrapped across lines in the source CSS still matches.
+  // selector wrapped across lines in the source CSS still matches. The
+  // leading negative lookbehind stops a short class name (e.g.
+  // `.cm-table-col-selected`) from matching as the tail of an unrelated,
+  // earlier compound selector that happens to end the same way (e.g.
+  // `.cm-table-cell.cm-table-col-selected`) — `match` otherwise returns
+  // whichever occurrence comes first in the file, not necessarily the rule
+  // whose own selector is exactly this string.
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
-  const match = markdownCss.match(new RegExp(`${escaped}\\s*{([^}]*)}`));
+  const match = markdownCss.match(new RegExp(`(?<![.\\w-])${escaped}\\s*{([^}]*)}`));
   if (!match) throw new Error(`no rule found for selector ${selector}`);
   return match[1];
 }
@@ -76,8 +82,9 @@ function collect(
   hasFocus = true,
   hover?: TableHoverState,
   selection?: TableHoverState,
+  drag?: TableHoverState,
 ): CollectedDecoration[] {
-  const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], documentPath, hasFocus, hover, selection);
+  const decorations = buildDecorations(state, [{ from: 0, to: state.doc.length }], documentPath, hasFocus, hover, selection, drag);
   const out: CollectedDecoration[] = [];
   decorations.between(0, state.doc.length, (from, to, deco) => {
     out.push({
@@ -1335,6 +1342,203 @@ describe("buildDecorations: table geometry widgets (issue #201 phase 2)", () => 
     // Column 0 in row 2 gets neither class.
     expect(row2Cells[0].class?.split(" ")).not.toContain("cm-table-row-selected");
     expect(row2Cells[0].class?.split(" ")).not.toContain("cm-table-col-selected");
+  });
+});
+
+describe("buildDecorations: full row/column outline edge caps (issue #224)", () => {
+  function tableCells(state: EditorState, decos: CollectedDecoration[], lineNumber: number): CollectedDecoration[] {
+    const line = state.doc.line(lineNumber);
+    return decos
+      .filter((d) => d.from >= line.from && d.to <= line.to && d.class?.split(" ").includes("cm-table-cell"))
+      .sort((a, b) => a.from - b.from);
+  }
+
+  it("caps a selected column's header cell with -top and its last row's cell with -bottom, and no others", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n";
+    const state = stateFor(doc, doc.length);
+    const table = findTableFrom(state);
+    const decos = collect(state, "test.md", true, undefined, { table, row: null, col: 0 });
+
+    const headerCells = tableCells(state, decos, 1);
+    const middleRowCells = tableCells(state, decos, 3);
+    const lastRowCells = tableCells(state, decos, 4);
+
+    expect(headerCells[0].class?.split(" ")).toContain("cm-table-col-selected-top");
+    expect(headerCells[0].class?.split(" ")).not.toContain("cm-table-col-selected-bottom");
+    expect(middleRowCells[0].class?.split(" ")).not.toContain("cm-table-col-selected-top");
+    expect(middleRowCells[0].class?.split(" ")).not.toContain("cm-table-col-selected-bottom");
+    expect(lastRowCells[0].class?.split(" ")).toContain("cm-table-col-selected-bottom");
+    expect(lastRowCells[0].class?.split(" ")).not.toContain("cm-table-col-selected-top");
+  });
+
+  it("caps a selected row's first cell with -start and its own last cell with -end", () => {
+    const doc = "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n";
+    const state = stateFor(doc, doc.length);
+    const table = findTableFrom(state);
+    const decos = collect(state, "test.md", true, undefined, { table, row: 1, col: null });
+
+    const cells = tableCells(state, decos, 3);
+    expect(cells).toHaveLength(3);
+    expect(cells[0].class?.split(" ")).toContain("cm-table-row-selected-start");
+    expect(cells[0].class?.split(" ")).not.toContain("cm-table-row-selected-end");
+    expect(cells[1].class?.split(" ")).not.toContain("cm-table-row-selected-start");
+    expect(cells[1].class?.split(" ")).not.toContain("cm-table-row-selected-end");
+    expect(cells[2].class?.split(" ")).toContain("cm-table-row-selected-end");
+    expect(cells[2].class?.split(" ")).not.toContain("cm-table-row-selected-start");
+  });
+
+  // A header-only table (header plus its alignment delimiter, no body rows
+  // typed yet) — the state that exists for as long as a user has written
+  // just those two lines. `!child.nextSibling` would wrongly say the header
+  // isn't the last row (its own next sibling is the TableDelimiter, not
+  // nothing); `hasLaterRow`'s forward scan must still resolve isLastRow to
+  // true for the header here, so a selected column gets both caps on its
+  // one and only row.
+  it("gives the header both -top and -bottom when it's the table's only row (header-only table)", () => {
+    const doc = "| A | B |\n| --- | --- |\n";
+    const state = stateFor(doc, doc.length);
+    const table = findTableFrom(state);
+    const decos = collect(state, "test.md", true, undefined, { table, row: null, col: 0 });
+
+    const headerCells = tableCells(state, decos, 1);
+    expect(headerCells[0].class?.split(" ")).toContain("cm-table-col-selected-top");
+    expect(headerCells[0].class?.split(" ")).toContain("cm-table-col-selected-bottom");
+  });
+
+  // A one-column table — a row selection's own first and last cell are the
+  // same cell, so it must get both -start and -end.
+  it("gives a one-column table's selected row cell both -start and -end", () => {
+    const doc = "| A |\n| --- |\n| 1 |\n";
+    const state = stateFor(doc, doc.length);
+    const table = findTableFrom(state);
+    const decos = collect(state, "test.md", true, undefined, { table, row: 1, col: null });
+
+    const cells = tableCells(state, decos, 3);
+    expect(cells).toHaveLength(1);
+    expect(cells[0].class?.split(" ")).toContain("cm-table-row-selected-start");
+    expect(cells[0].class?.split(" ")).toContain("cm-table-row-selected-end");
+  });
+
+  // A ragged row with fewer cells than the header's own column count: the
+  // `-end` cap must land on this row's own last real cell (via
+  // `collectCellSlots(node).length`), not at `alignment.length - 1`, which
+  // would draw the outline's right edge through the middle of the row (or
+  // never close it at all).
+  it("caps a short/ragged row's own last cell with -end, not the header's column count", () => {
+    const doc = "| A | B | C |\n| --- | --- | --- |\n| 1 |\n";
+    const state = stateFor(doc, doc.length);
+    const table = findTableFrom(state);
+    const decos = collect(state, "test.md", true, undefined, { table, row: 1, col: null });
+
+    const cells = tableCells(state, decos, 3);
+    expect(cells).toHaveLength(1);
+    expect(cells[0].class?.split(" ")).toContain("cm-table-row-selected-start");
+    expect(cells[0].class?.split(" ")).toContain("cm-table-row-selected-end");
+  });
+
+  // A crossing cell (a pinned row selection and a separately hovered column,
+  // both landing at their own respective end caps) must carry both
+  // directions' end-cap modifiers together, not just the base
+  // `-row-selected`/`-col-selected` classes the older simultaneous-highlight
+  // test above already covers — this is the trickiest part of the edge-cap
+  // design, since the row's own `-end` and the column's own `-bottom` are
+  // computed from entirely independent conditions but land on the same cell.
+  it("gives a crossing cell both directions' end-cap modifiers when a pinned last row and a hovered last column meet", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n";
+    const state = stateFor(doc, doc.length);
+    const table = findTableFrom(state);
+    // Row 2 (the table's own last row, "3 | 4") is pinned; column 1 (the
+    // last column) is hovered — the crossing cell is "4".
+    const decos = collect(state, "test.md", true, { table, row: null, col: 1 }, { table, row: 2, col: null });
+
+    const lastRowCells = tableCells(state, decos, 4);
+    const crossingCell = lastRowCells[1];
+    expect(state.doc.sliceString(crossingCell.from, crossingCell.to)).toBe("4");
+
+    const classes = crossingCell.class?.split(" ") ?? [];
+    expect(classes).toContain("cm-table-row-selected");
+    expect(classes).toContain("cm-table-row-selected-end");
+    expect(classes).toContain("cm-table-col-selected");
+    expect(classes).toContain("cm-table-col-selected-bottom");
+    // Not the row's own -start (column 1 isn't column 0) or the column's own
+    // -top (row 2 isn't the header).
+    expect(classes).not.toContain("cm-table-row-selected-start");
+    expect(classes).not.toContain("cm-table-col-selected-top");
+  });
+});
+
+describe("buildDecorations: drag-in-progress tint (issue #224)", () => {
+  it("applies cm-table-row-dragging to every cell in the dragged row, and no other row", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n";
+    const state = stateFor(doc, doc.length);
+    const table = findTableFrom(state);
+    const decos = collect(state, "test.md", true, undefined, undefined, { table, row: 1, col: null });
+
+    const bodyLine1 = state.doc.line(3);
+    const bodyLine2 = state.doc.line(4);
+    const row1Cells = decos.filter((d) => d.from >= bodyLine1.from && d.to <= bodyLine1.to && d.class?.split(" ").includes("cm-table-cell"));
+    const row2Cells = decos.filter((d) => d.from >= bodyLine2.from && d.to <= bodyLine2.to && d.class?.split(" ").includes("cm-table-cell"));
+
+    expect(row1Cells.every((d) => d.class?.split(" ").includes("cm-table-row-dragging"))).toBe(true);
+    expect(row2Cells.some((d) => d.class?.split(" ").includes("cm-table-row-dragging"))).toBe(false);
+    expect(row1Cells.some((d) => d.class?.split(" ").includes("cm-table-col-dragging"))).toBe(false);
+  });
+
+  it("applies cm-table-col-dragging to every cell in the dragged column, and no other column", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+    const state = stateFor(doc, doc.length);
+    const table = findTableFrom(state);
+    const decos = collect(state, "test.md", true, undefined, undefined, { table, row: null, col: 1 });
+
+    const headerCells = decos
+      .filter((d) => d.class?.split(" ").includes("cm-table-cell"))
+      .sort((a, b) => a.from - b.from);
+    const draggingCells = headerCells.filter((d) => d.class?.split(" ").includes("cm-table-col-dragging"));
+    expect(draggingCells.length).toBeGreaterThan(0);
+    expect(headerCells.some((d) => !d.class?.split(" ").includes("cm-table-col-dragging") && d.class?.split(" ").includes("cm-table-cell"))).toBe(true);
+    expect(headerCells.some((d) => d.class?.split(" ").includes("cm-table-row-dragging"))).toBe(false);
+  });
+
+  it("applies no dragging class at all when drag is NO_TABLE_HOVER (the default)", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+    const state = stateFor(doc, doc.length);
+    const decos = collect(state);
+    expect(decos.some((d) => d.class?.split(" ").includes("cm-table-row-dragging"))).toBe(false);
+    expect(decos.some((d) => d.class?.split(" ").includes("cm-table-col-dragging"))).toBe(false);
+  });
+});
+
+describe("markdown.css: full row/column outline composition (issue #224)", () => {
+  // The row/column rules must set the shared `--atrium-cell-edge-*` custom
+  // properties, not a full `box-shadow`/`border-width` value directly — a
+  // custom property cascades per-property and merges correctly when a
+  // pinned row selection and a separately hovered column are simultaneously
+  // active on the same crossing cell (see the behavioral test above), where
+  // two independent `box-shadow` declarations from two class rules would
+  // not: whichever rule wins specificity/source-order paints its whole
+  // value and the other direction's edges don't appear. Pinning this at the
+  // CSS-source level (jsdom can't observe box-shadow/border rendering)
+  // stops a future edit from silently reintroducing the compound-selector
+  // `box-shadow` approach this design rejects.
+  it("composes the column outline through --atrium-cell-edge-left/-right custom properties, not box-shadow", () => {
+    const body = ruleBodyFor(".cm-table-col-selected");
+    expect(body).toMatch(/--atrium-cell-edge-left:\s*2px/);
+    expect(body).toMatch(/--atrium-cell-edge-right:\s*2px/);
+    expect(body).not.toMatch(/box-shadow/);
+  });
+
+  it("composes the row outline through --atrium-cell-edge-top/-bottom custom properties, not box-shadow", () => {
+    const body = ruleBodyFor(".cm-table-row-selected");
+    expect(body).toMatch(/--atrium-cell-edge-top:\s*2px/);
+    expect(body).toMatch(/--atrium-cell-edge-bottom:\s*2px/);
+    expect(body).not.toMatch(/box-shadow/);
+  });
+
+  it("caps the row/column outline's top/bottom/start/end edges only on the modifier classes", () => {
+    expect(ruleBodyFor(".cm-table-col-selected-top")).toMatch(/--atrium-cell-edge-top:\s*2px/);
+    expect(ruleBodyFor(".cm-table-col-selected-bottom")).toMatch(/--atrium-cell-edge-bottom:\s*2px/);
+    expect(ruleBodyFor(".cm-table-row-selected-start")).toMatch(/--atrium-cell-edge-left:\s*2px/);
+    expect(ruleBodyFor(".cm-table-row-selected-end")).toMatch(/--atrium-cell-edge-right:\s*2px/);
   });
 });
 

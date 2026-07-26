@@ -228,27 +228,113 @@
   text-align: right;
 }
 
-/* A row/column's outline uses `box-shadow: inset` (not `outline`, and not a
-   border, which would shift layout) applied per-cell: adjacent selected
-   cells' insets meet exactly at their shared edge, reading as one
-   continuous outline around the whole row or column without needing a
-   single wrapping element — there isn't one, since a row/column is made up
-   of independent cell elements. `position: relative; z-index: 1` keeps the
-   shadow painting above a neighboring cell's own border. */
+/* A row/column's outline draws as one continuous border around the whole
+   run, not a box-shadow on every individual cell (which would draw all four
+   of each cell's own edges and produce a seam at every internal cell
+   boundary). Each cell only knows which of its own four sides face outward
+   — `decorateTableRow`'s `-top`/`-bottom`/`-start`/`-end` modifier classes,
+   applied only at the row/column's own end caps — and composes them through
+   `--atrium-cell-edge-*` custom properties rather than compound selectors:
+   a pinned row selection and a separately hovered column can be
+   simultaneously active on the same crossing cell (deliberate — see
+   `decorateTableRow`'s own doc comment), and a custom property cascades
+   per-property, merging the row's top/bottom edges with the column's
+   left/right edges on that one cell, where a `box-shadow` from two separate
+   class rules would not (whichever rule wins specificity/source-order paints
+   its whole value and the other direction's edges don't appear at all).
+   Named by physical side (`-left`/`-right`), not `-start`/`-end`, since the
+   `border-width` shorthand's four positions are physical and this editor is
+   LTR-only.
+
+   The border draws on a `::after` rather than `box-shadow: inset`: an inset
+   shadow is clipped to the padding box, under the cell's own 1px
+   `border-right`/`border-bottom`, so even with every internal edge
+   correctly suppressed it would still show a 1px border-colored gap at
+   every row/column boundary — a dashed line, not a continuous one. The
+   `::after` is offset outward by `inset: -1px` so it overlaps (and visually
+   covers) the cell's own hairline border instead of stopping short of it. */
 .cm-table-cell.cm-table-row-selected,
 .cm-table-cell.cm-table-col-selected {
   position: relative;
   z-index: 1;
-  box-shadow: inset 0 0 0 2px var(--atrium-accent);
 }
 
-/* Six-dot (2x3) drag-handle glyph shared by the row handle and column bar
-   (`tableHandles.ts`'s `createHandleGlyph`). */
+.cm-table-cell.cm-table-row-selected::after,
+.cm-table-cell.cm-table-col-selected::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  pointer-events: none;
+  border-style: solid;
+  border-color: var(--atrium-accent);
+  border-width: var(--atrium-cell-edge-top, 0px) var(--atrium-cell-edge-right, 0px) var(--atrium-cell-edge-bottom, 0px)
+    var(--atrium-cell-edge-left, 0px);
+}
+
+.cm-table-col-selected {
+  --atrium-cell-edge-left: 2px;
+  --atrium-cell-edge-right: 2px;
+}
+
+.cm-table-col-selected-top {
+  --atrium-cell-edge-top: 2px;
+}
+
+.cm-table-col-selected-bottom {
+  --atrium-cell-edge-bottom: 2px;
+}
+
+.cm-table-row-selected {
+  --atrium-cell-edge-top: 2px;
+  --atrium-cell-edge-bottom: 2px;
+}
+
+.cm-table-row-selected-start {
+  --atrium-cell-edge-left: 2px;
+}
+
+.cm-table-row-selected-end {
+  --atrium-cell-edge-right: 2px;
+}
+
+/* The header row's own bottom border is 2px, not the ordinary 1px (see
+   `.cm-table-header-row .cm-table-cell` above) — when the header row itself
+   is the selected row, `-1px` on every side leaves the outline's bottom edge
+   1px short of that heavier border, showing a hairline `--atrium-border`
+   strip under it. */
+.cm-table-header-row .cm-table-cell.cm-table-row-selected::after,
+.cm-table-header-row .cm-table-cell.cm-table-col-selected::after {
+  inset: -1px -1px -2px -1px;
+}
+
+/* A filled tint (not an outline) for the row/column currently being dragged
+   (`tableDragField`, `tableHandles.ts`), so "this is what's moving" reads as
+   visually distinct from a plain hover/selection border. A background-color
+   fill already covers each cell's own padding+border box; the 1px neutral
+   grid line still showing faintly through it during a drag is an accepted,
+   transient artifact — this doesn't need the seam-free `::after` treatment
+   the outline below does, since a drag is momentary rather than a resting
+   state a seam would be visible in. */
+.cm-table-cell.cm-table-row-dragging,
+.cm-table-cell.cm-table-col-dragging {
+  background: color-mix(in srgb, var(--atrium-accent) 15%, transparent);
+}
+
+/* Six-dot drag-handle glyph shared by the row handle and column bar
+   (`tableHandles.ts`'s `createHandleGlyph`). The row handle keeps a tall 2x3
+   grid (it sits in a narrow vertical margin), while the column bar below
+   overrides it to a wide 3x2 grid, since it sits in a wide horizontal
+   strip above the table. */
 .cm-table-handle-dots {
   display: inline-grid;
   grid-template-columns: repeat(2, 3px);
   grid-template-rows: repeat(3, 3px);
   gap: 2px;
+}
+
+.cm-table-col-bar .cm-table-handle-dots {
+  grid-template-columns: repeat(3, 3px);
+  grid-template-rows: repeat(2, 3px);
 }
 
 .cm-table-handle-dot {
@@ -292,6 +378,40 @@
   align-items: center;
   justify-content: center;
   cursor: grab;
+}
+
+/* Both handles stay invisible until the table (or the handle itself) is
+   hovered, or a drag is in progress — `opacity`, not `display: none`: an
+   invisible handle still answers `pointerenter` (which is what reveals the
+   rail on first touch) and still reports a real `getBoundingClientRect()` to
+   `measureRectsByIndex` (`tableHandles.ts`) during a drag. `body.cm-table-
+   dragging-active` (toggled by `attachDragReorder`'s `pointerdown`/cleanup)
+   keeps the rail lit for the whole gesture even once the pointer leaves
+   `.cm-table-box` — `attachDragReorder` tracks the pointer at the `window`
+   level specifically so a drag isn't bounded by the table's own box. */
+.cm-table-row-handle,
+.cm-table-col-bar {
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.cm-table-box:hover .cm-table-row-handle,
+.cm-table-box:hover .cm-table-col-bar,
+body.cm-table-dragging-active .cm-table-row-handle,
+body.cm-table-dragging-active .cm-table-col-bar {
+  opacity: 1;
+}
+
+/* Keeps the drag cursor a consistent `grabbing` over the whole app for the
+   duration of a row/column drag, regardless of what's actually under the
+   pointer — `attachDragReorder` tracks the pointer at the `window` level, so
+   the gesture routinely continues after the pointer leaves the handle (and
+   the table) entirely. Toggled on `document.body` by `attachDragReorder`'s
+   `pointerdown` handler and torn down by its shared `cleanup`, run on both
+   `pointerup` and `pointercancel`. */
+body.cm-table-dragging-active,
+body.cm-table-dragging-active * {
+  cursor: grabbing !important;
 }
 
 .cm-table-row-handle:hover .cm-table-handle-dot,

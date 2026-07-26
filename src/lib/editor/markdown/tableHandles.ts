@@ -79,6 +79,18 @@ export const setTableSelection = selectionTarget.effect;
 export const tableSelectionField = selectionTarget.field;
 
 /**
+ * The row/column currently being dragged, if any — set on `pointerdown` and
+ * updated (in the same transaction as the move, see `attachDragReorder`'s
+ * `attemptStep`) on every step, so the tint this drives never blanks for a
+ * frame between a move landing and the field catching up. Cleared
+ * unconditionally on `pointerup` and on `pointercancel` alike, since either
+ * one ends the gesture.
+ */
+const dragTarget = defineTableTargetField();
+export const setTableDrag = dragTarget.effect;
+export const tableDragField = dragTarget.field;
+
+/**
  * A click landing anywhere in the editor that isn't a row/column handle
  * clears the pinned selection — the "click elsewhere deselects" half of
  * making selection sticky. `mousedown` (not `click`) matches this
@@ -115,9 +127,11 @@ export const tableSelectionKeymap: readonly KeyBinding[] = [
 ];
 
 /**
- * The six-dot (2x3) drag-handle glyph shared by row and column handles,
- * built from real elements (rather than a CSS `::before`/font glyph) so its
- * dot count/layout stays easy to read and adjust in `markdown.css`.
+ * The six-dot drag-handle glyph shared by row and column handles, built
+ * from real elements (rather than a CSS `::before`/font glyph) so its dot
+ * count/layout stays easy to read and adjust in `markdown.css` — a tall 2x3
+ * grid for the row handle, a wide 3x2 grid for the column bar (scoped in
+ * CSS to `.cm-table-col-bar .cm-table-handle-dots`).
  */
 function createHandleGlyph(): HTMLElement {
   const glyph = document.createElement("span");
@@ -208,6 +222,21 @@ function attachHandleInteractions(el: HTMLElement, view: EditorView, target: Tab
  * bulk-move logic — returning whether a step actually happened (`null` from
  * `moveRow`/`moveColumn` means the table's own edge was reached, ending
  * the loop for this move event without erroring).
+ *
+ * `tableDragField` (via the `dragTarget` option, giving each axis its own
+ * `TableHoverState` shape) is set on `pointerdown` and carried in the same
+ * `view.dispatch` call as each successful step's move transaction — a
+ * separate follow-up dispatch would blank the field for a frame on every
+ * step, since `defineTableTargetField`'s reducer clears an ungated field on
+ * any `docChanged` transaction that doesn't itself carry a matching effect.
+ * `document.body`'s `cm-table-dragging-active` class (driving the drag tint's
+ * handle visibility and the `grabbing` cursor) and `tableDragField` are both
+ * torn down from one shared `cleanup`, run on `pointerup`, `pointercancel`,
+ * and a window `blur` alike — the field going stale is invisible, but the
+ * body class isn't: it forces `cursor: grabbing` on every element, so
+ * missing one of these exit paths would leave the whole app stuck with a
+ * grabbing cursor after an OS/browser-level gesture interruption or a
+ * mid-drag app/tab switch.
  */
 function attachDragReorder(options: {
   el: HTMLElement;
@@ -219,6 +248,7 @@ function attachDragReorder(options: {
   indexDatasetKey: "tableHandleRow" | "tableHandleCol";
   rectCoords: (rect: DOMRect) => { start: number; end: number };
   attemptStep: (state: EditorState, table: number, current: number, dir: "before" | "after") => { spec: TransactionSpec | null; next: number };
+  dragTarget: (index: number) => TableHoverState;
 }): void {
   const { el, view, table, initial, pointerCoord, handleSelector, indexDatasetKey, rectCoords } = options;
   el.addEventListener("pointerdown", (event) => {
@@ -227,6 +257,9 @@ function attachDragReorder(options: {
     }
     event.preventDefault();
     let current = initial;
+
+    document.body.classList.add("cm-table-dragging-active");
+    view.dispatch({ effects: setTableDrag.of(options.dragTarget(current)) });
 
     function measureRectsByIndex(): Map<number, DOMRect> {
       const box = el.closest<HTMLElement>(".cm-table-box");
@@ -249,8 +282,8 @@ function attachDragReorder(options: {
       if (!spec) {
         return false;
       }
-      view.dispatch(spec);
       current = next;
+      view.dispatch({ ...spec, effects: setTableDrag.of(options.dragTarget(current)) });
       return true;
     }
 
@@ -278,13 +311,31 @@ function attachDragReorder(options: {
       }
     }
 
-    function onUp(): void {
+    function cleanup(): void {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("blur", onCancel);
+      document.body.classList.remove("cm-table-dragging-active");
+      view.dispatch({ effects: setTableDrag.of(NO_TABLE_HOVER) });
+    }
+
+    function onUp(): void {
+      cleanup();
+    }
+
+    function onCancel(): void {
+      cleanup();
     }
 
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    // A window blur mid-drag (switching apps/tabs) otherwise self-heals only
+    // on the next pointerup anywhere, leaving `cm-table-dragging-active`'s
+    // app-wide `grabbing` cursor stuck in the meantime — closed the same way
+    // as a real pointercancel.
+    window.addEventListener("blur", onCancel);
   });
 }
 
@@ -306,6 +357,7 @@ function attachRowDrag(el: HTMLElement, view: EditorView, table: number, initial
       const spec = moveRow(state, ctx, dir === "before" ? "up" : "down");
       return { spec, next: dir === "before" ? row - 1 : row + 1 };
     },
+    dragTarget: (row) => ({ table, row, col: null }),
   });
 }
 
@@ -327,6 +379,7 @@ function attachColumnDrag(el: HTMLElement, view: EditorView, table: number, init
       const spec = moveColumn(state, ctx, dir === "before" ? "left" : "right");
       return { spec, next: dir === "before" ? column - 1 : column + 1 };
     },
+    dragTarget: (col) => ({ table, row: null, col }),
   });
 }
 
