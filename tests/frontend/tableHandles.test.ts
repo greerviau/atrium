@@ -11,6 +11,7 @@ import {
   measureTableGeometry,
   setTableHover,
   setTableSelection,
+  tableDragField,
   tableHoverField,
   tableSelectionField,
 } from "../../src/lib/editor/markdown/tableHandles";
@@ -533,6 +534,11 @@ describe("drag-to-reposition (phase 4)", () => {
     } as DOMRect);
   }
 
+  /** The table identity `attachHandleInteractions` stamps onto every handle's own `data-table-handle-table`. */
+  function tableOf(handle: HTMLElement): number {
+    return Number(handle.dataset.tableHandleTable);
+  }
+
   function pointerCoordEvent(type: string, coord: "clientX" | "clientY", value: number): Event {
     const event = new Event(type, { bubbles: true, cancelable: true });
     Object.defineProperty(event, "button", { value: 0, configurable: true });
@@ -711,6 +717,83 @@ describe("drag-to-reposition (phase 4)", () => {
     expect(view.state.doc.line(166).text).toBe("| Row163 | Val163 |");
     expect(view.state.doc.line(169).text).toBe("| Row166 | Val166 |");
     expect(view.state.doc.line(10).text).toBe("| Row7 | Val7 |");
+
+    view.destroy();
+  });
+
+  it("sets tableDragField on pointerdown, updates it in the same step as each move, and clears it on pointerup", () => {
+    const doc =
+      "| Name  | Role     |\n| ----- | -------- |\n| Alice | Engineer |\n| Bob   | Designer |\n| Carol | Manager  |\n";
+    const view = makeView(doc);
+    const handles = view.dom.querySelectorAll<HTMLElement>(".cm-table-row-handle");
+    const table = tableOf(handles[1]);
+    mockRect(handles[0], 0, 20);
+    mockRect(handles[1], 20, 40); // Alice
+    mockRect(handles[2], 40, 60); // Bob
+    mockRect(handles[3], 60, 80); // Carol
+
+    handles[1].dispatchEvent(pointerCoordEvent("pointerdown", "clientY", 30));
+    expect(view.state.field(tableDragField)).toEqual({ table, row: 1, col: null });
+    expect(document.body.classList.contains("cm-table-dragging-active")).toBe(true);
+
+    window.dispatchEvent(pointerCoordEvent("pointermove", "clientY", 55)); // past Bob's own center: one step
+    // The field already reflects the row's new position — not a stale value
+    // waiting on a follow-up dispatch, since the plan requires the move and
+    // the drag-target update to land in the same transaction.
+    expect(view.state.field(tableDragField)).toEqual({ table, row: 2, col: null });
+
+    window.dispatchEvent(pointerCoordEvent("pointerup", "clientY", 55));
+    expect(view.state.field(tableDragField)).toEqual(NO_TABLE_HOVER);
+    expect(document.body.classList.contains("cm-table-dragging-active")).toBe(false);
+
+    view.destroy();
+  });
+
+  it("sets tableDragField for a column drag, keyed on col with row null", () => {
+    const doc = "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |\n";
+    const view = makeView(doc);
+    const bars = view.dom.querySelectorAll<HTMLElement>(".cm-table-col-bar");
+    const table = tableOf(bars[0]);
+    mockRect(bars[0], 0, 20);
+    mockRect(bars[1], 20, 40);
+    mockRect(bars[2], 40, 60);
+
+    bars[0].dispatchEvent(pointerCoordEvent("pointerdown", "clientX", 10));
+    expect(view.state.field(tableDragField)).toEqual({ table, row: null, col: 0 });
+
+    window.dispatchEvent(pointerCoordEvent("pointerup", "clientX", 10));
+    expect(view.state.field(tableDragField)).toEqual(NO_TABLE_HOVER);
+
+    view.destroy();
+  });
+
+  // A real browser event (an OS/browser-level gesture interruption, e.g. a
+  // touch scroll taking over) — must clear the field and the body's
+  // dragging cursor class exactly like a normal pointerup, since a stale
+  // `cm-table-dragging-active` forces `cursor: grabbing` app-wide with
+  // nothing left to clear it.
+  it("clears tableDragField and the dragging-active body class on pointercancel", () => {
+    const doc =
+      "| Name  | Role     |\n| ----- | -------- |\n| Alice | Engineer |\n| Bob   | Designer |\n";
+    const view = makeView(doc);
+    const handles = view.dom.querySelectorAll<HTMLElement>(".cm-table-row-handle");
+    const table = tableOf(handles[1]);
+    mockRect(handles[0], 0, 20);
+    mockRect(handles[1], 20, 40);
+    mockRect(handles[2], 40, 60);
+
+    handles[1].dispatchEvent(pointerCoordEvent("pointerdown", "clientY", 30));
+    expect(view.state.field(tableDragField)).toEqual({ table, row: 1, col: null });
+    expect(document.body.classList.contains("cm-table-dragging-active")).toBe(true);
+
+    window.dispatchEvent(pointerLikeEvent("pointercancel"));
+    expect(view.state.field(tableDragField)).toEqual(NO_TABLE_HOVER);
+    expect(document.body.classList.contains("cm-table-dragging-active")).toBe(false);
+
+    // A pointermove after the cancel must be a no-op — the listeners were
+    // removed, not just the drag "finished" logically.
+    window.dispatchEvent(pointerCoordEvent("pointermove", "clientY", 50));
+    expect(view.state.doc.toString()).toBe(doc);
 
     view.destroy();
   });

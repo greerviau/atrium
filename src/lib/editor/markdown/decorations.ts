@@ -852,10 +852,12 @@ function decorateTableRow(
   alignment: ColumnAlignment[],
   narrowColumns: boolean[],
   isHeader: boolean,
+  isLastRow: boolean,
   tableFrom: number,
   rowIndex: number,
   hover: TableHoverState,
   selection: TableHoverState,
+  drag: TableHoverState,
   out: Range<Decoration>[],
 ): void {
   const rowClass = isHeader ? `${CLASS.tableRow} ${CLASS.tableHeaderRow}` : CLASS.tableRow;
@@ -866,10 +868,19 @@ function decorateTableRow(
   // currently hovered) — either one matching is enough to highlight.
   const rowHighlighted =
     (hover.table === tableFrom && hover.row === rowIndex) || (selection.table === tableFrom && selection.row === rowIndex);
+  const rowDragging = drag.table === tableFrom && drag.row === rowIndex;
+
+  // Captured once so the row's own `-end` cap (the row's own last cell) can
+  // be keyed off this row's real cell count, not the header-derived
+  // `alignment.length` — a row's own cell count and the table's column count
+  // aren't the same thing for a ragged or mid-typing row (see the plan's
+  // "Full row/column outline" design for why `alignment.length - 1` is wrong
+  // here).
+  const slots = collectCellSlots(node);
 
   let prevEnd = state.doc.lineAt(node.from).from;
   let column = 0;
-  for (const slot of collectCellSlots(node)) {
+  for (const slot of slots) {
     if (slot.from > prevEnd) {
       out.push(Decoration.replace({ tableGap: true }).range(prevEnd, slot.from));
     }
@@ -887,11 +898,30 @@ function decorateTableRow(
     }
     if (rowHighlighted) {
       classes.push(CLASS.tableRowSelected);
+      if (column === 0) {
+        classes.push(CLASS.tableRowSelectedStart);
+      }
+      if (column === slots.length - 1) {
+        classes.push(CLASS.tableRowSelectedEnd);
+      }
     }
     const colHighlighted =
       (hover.table === tableFrom && hover.col === column) || (selection.table === tableFrom && selection.col === column);
     if (colHighlighted) {
       classes.push(CLASS.tableColSelected);
+      if (isHeader) {
+        classes.push(CLASS.tableColSelectedTop);
+      }
+      if (isLastRow) {
+        classes.push(CLASS.tableColSelectedBottom);
+      }
+    }
+    if (rowDragging) {
+      classes.push(CLASS.tableRowDragging);
+    }
+    const colDragging = drag.table === tableFrom && drag.col === column;
+    if (colDragging) {
+      classes.push(CLASS.tableColDragging);
     }
     if (slot.to > slot.from) {
       out.push(Decoration.mark({ class: classes.join(" "), inclusive: true }).range(slot.from, slot.to));
@@ -935,6 +965,26 @@ const ADD_ROW_BAND_SIDE = -100;
 const ADD_COLUMN_BAND_SIDE = -99;
 
 /**
+ * Whether `child` (a `TableHeader` or `TableRow`) is the table's own last
+ * row — used to cap a highlighted column's bottom edge. `!child.nextSibling`
+ * is not a valid test: a `Table` node's direct children are always ordered
+ * header, delimiter, then zero or more body rows, so a header-only table's
+ * own next sibling is always the `TableDelimiter`, never nothing — exactly
+ * the state that exists for as long as a user has typed a header and
+ * delimiter but no body row yet. Scanning forward for another row/header
+ * sibling instead of counting children up front keeps this inside
+ * `decorateTable`'s single existing pass.
+ */
+function hasLaterRow(child: SyntaxNode): boolean {
+  let sibling: SyntaxNode | null = child.nextSibling;
+  while (sibling) {
+    if (sibling.type.name === "TableHeader" || sibling.type.name === "TableRow") return true;
+    sibling = sibling.nextSibling;
+  }
+  return false;
+}
+
+/**
  * Decorates an entire `Table` node in one pass: parses per-column alignment
  * from the row-level alignment-delimiter (a direct `TableDelimiter` child),
  * removes that delimiter's line from the render flow entirely, and
@@ -956,12 +1006,20 @@ const ADD_COLUMN_BAND_SIDE = -99;
  * bar, and add-row/add-column band sides must all stay below -1 (the cell
  * mark's own `inclusive: true` startSide) — see the doc comment on
  * `ROW_HANDLE_SIDE` above for why.
+ *
+ * `hasLaterRow` derives each row's own `isLastRow`, threaded into
+ * `decorateTableRow` alongside `hover`/`selection`/`drag` so a highlighted
+ * column's bottom cap lands on the table's actual last row rather than
+ * assuming it's whichever row happens to have no next sibling at all (see
+ * `hasLaterRow`'s own doc comment for why that assumption is wrong for a
+ * header-only table).
  */
 function decorateTable(
   state: EditorState,
   node: SyntaxNode,
   hover: TableHoverState,
   selection: TableHoverState,
+  drag: TableHoverState,
   out: Range<Decoration>[],
 ): void {
   const delimiterNode = node.getChild("TableDelimiter");
@@ -975,7 +1033,20 @@ function decorateTable(
   let child = node.firstChild;
   while (child) {
     if (child.type.name === "TableHeader") {
-      decorateTableRow(state, child, alignment, narrowColumns, true, tableFrom, rowIndex, hover, selection, out);
+      decorateTableRow(
+        state,
+        child,
+        alignment,
+        narrowColumns,
+        true,
+        !hasLaterRow(child),
+        tableFrom,
+        rowIndex,
+        hover,
+        selection,
+        drag,
+        out,
+      );
       const headerLineStart = state.doc.lineAt(child.from).from;
       out.push(
         Decoration.widget({ widget: new RowHandleWidget(tableFrom, rowIndex), side: ROW_HANDLE_SIDE }).range(
@@ -1000,7 +1071,20 @@ function decorateTable(
       );
       rowIndex++;
     } else if (child.type.name === "TableRow") {
-      decorateTableRow(state, child, alignment, narrowColumns, false, tableFrom, rowIndex, hover, selection, out);
+      decorateTableRow(
+        state,
+        child,
+        alignment,
+        narrowColumns,
+        false,
+        !hasLaterRow(child),
+        tableFrom,
+        rowIndex,
+        hover,
+        selection,
+        drag,
+        out,
+      );
       const rowLineStart = state.doc.lineAt(child.from).from;
       out.push(
         Decoration.widget({ widget: new RowHandleWidget(tableFrom, rowIndex), side: ROW_HANDLE_SIDE }).range(
@@ -1241,6 +1325,7 @@ export function buildDecorations(
   hasFocus: boolean,
   hover: TableHoverState = NO_TABLE_HOVER,
   selection: TableHoverState = NO_TABLE_HOVER,
+  drag: TableHoverState = NO_TABLE_HOVER,
 ): DecorationSet {
   const decorations: Range<Decoration>[] = [];
   const tree = syntaxTree(state);
@@ -1287,7 +1372,7 @@ export function buildDecorations(
           // reaches the switch below and gets decorated the same way it
           // would inside a paragraph; TableHeader/TableRow/TableCell/
           // TableDelimiter have no case there, so revisiting them is a no-op.
-          decorateTable(state, ref.node, hover, selection, decorations);
+          decorateTable(state, ref.node, hover, selection, drag, decorations);
           return;
         }
 
