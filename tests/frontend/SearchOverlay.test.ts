@@ -568,7 +568,33 @@ describe("SearchOverlay", () => {
     expect(names).toEqual(["tabs.test.ts", "a.txt"]);
   });
 
-  it("shows an error toast and prunes a stale recorded-recent file when opening it fails", async () => {
+  it("orders recents by true recency across present and missing files alike, not by which group each falls into", async () => {
+    // a.txt is the more-recently-opened file and findFiles does return it;
+    // old-missing.txt is older and, like the universe-mismatch case above,
+    // absent from findFiles' own result set. The present-but-newer file must
+    // still lead — bucketing "missing" ahead of "present" regardless of
+    // actual recency was the bug.
+    recordFileOpened("/proj", "/proj/old-missing.txt");
+    recordFileOpened("/proj", "/proj/a.txt");
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([
+        { path: "/proj/a.txt", displayPath: "a.txt", score: 0, matchIndices: [] },
+        { path: "/proj/b.txt", displayPath: "b.txt", score: 0, matchIndices: [] },
+      ]),
+    );
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("a.txt");
+
+    const names = Array.from(container.querySelectorAll(".search-result-filename")).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(names).toEqual(["a.txt", "old-missing.txt", "b.txt"]);
+  });
+
+  it("shows an error toast, prunes a stale recorded-recent file when opening it fails, and drops its row", async () => {
     recordFileOpened("/proj", "/proj/deleted.txt");
     vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
     vi.mocked(tabsStore.openFile).mockRejectedValue(new Error("No such file or directory"));
@@ -586,8 +612,10 @@ describe("SearchOverlay", () => {
     expect(get(errorToast)).toBe("Couldn't open file: No such file or directory");
     expect(getRecentFiles("/proj")).toEqual([]);
     // The overlay stays open (the user gets to see the toast and try
-    // something else) rather than closing on a failed open.
+    // something else) rather than closing on a failed open — but the dead
+    // row itself is gone, so re-clicking the same spot can't just re-toast.
     expect(get(searchOverlay).open).toBe(true);
+    expect(screen.queryByText("deleted.txt")).toBeNull();
   });
 
   it("hides the case-sensitivity/regex toggles in Files mode", async () => {

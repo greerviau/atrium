@@ -84,43 +84,35 @@
   });
 
   /**
-   * Moves any file already in the workspace's recently-opened list to the
-   * front, in recency order (most-recent-first), leaving every other match
-   * in its existing (alphabetical) order after them — the default,
-   * nothing-typed-yet view telescope/VS Code's own file pickers show.
-   */
-  function applyRecencyOrder(matches: FileMatch[]): FileMatch[] {
-    const root = $workspace.root;
-    if (!root) return matches;
-    const recentPaths = getRecentFiles(root);
-    if (recentPaths.length === 0) return matches;
-    const recentRank = new Map(recentPaths.map((path, index) => [path, index]));
-    const recent: FileMatch[] = [];
-    const rest: FileMatch[] = [];
-    for (const match of matches) {
-      (recentRank.has(match.path) ? recent : rest).push(match);
-    }
-    recent.sort((a, b) => recentRank.get(a.path)! - recentRank.get(b.path)!);
-    return [...recent, ...rest];
-  }
-
-  /**
+   * Builds the empty-query "browse" list for Files mode: every recorded
+   * recent, most-recent-first — pulling its real entry out of `matches` when
+   * `findFiles` returned one, or synthesizing a `FileMatch` for it when it
+   * didn't — followed by whatever else `matches` contains.
+   *
    * `findFiles` only ever returns paths that survived its own walk filters
    * (hidden/gitignored entries excluded) and its 200-entry cap, so a
    * recorded-recent path can be missing from `matches` even though it's a
    * perfectly real, opened-moments-ago file — that's the exact bug #242
-   * reports (a file opened via the explorer never shows up in Cmd+P).
-   * `applyRecencyOrder` can only reorder what's already in `matches`, so
-   * this synthesizes a `FileMatch` for each recorded path `matches` is
-   * missing, most-recent-first, to be prepended ahead of it.
+   * reports (a file opened via the explorer never shows up in Cmd+P). Recency
+   * order has to span both groups together: a recent that's missing from
+   * `matches` is not necessarily older than one that's present, so bucketing
+   * "present recents" and "missing recents" into two separately-ordered runs
+   * (as an earlier version of this function did) put every missing recent
+   * ahead of every present one regardless of actual recency.
    */
-  function missingRecentMatches(matches: FileMatch[]): FileMatch[] {
+  function filesModeResults(matches: FileMatch[]): FileMatch[] {
     const root = $workspace.root;
-    if (!root) return [];
-    const present = new Set(matches.map((m) => m.path));
-    return getRecentFiles(root)
-      .filter((path) => !present.has(path))
-      .map((path) => ({ path, displayPath: relativePath(path), score: 0, matchIndices: [] }));
+    if (!root) return matches;
+    const recentPaths = getRecentFiles(root);
+    if (recentPaths.length === 0) return matches;
+    const byPath = new Map(matches.map((m) => [m.path, m]));
+    const recent = recentPaths.map(
+      (path): FileMatch =>
+        byPath.get(path) ?? { path, displayPath: relativePath(path), score: 0, matchIndices: [] },
+    );
+    const recordedSet = new Set(recentPaths);
+    const rest = matches.filter((m) => !recordedSet.has(m.path));
+    return [...recent, ...rest];
   }
 
   async function runSearch(myRequestId: number): Promise<void> {
@@ -167,10 +159,7 @@
         // (mirroring VS Code/telescope's own "recently opened files" default
         // view) — once a query narrows the results by relevance, that
         // fuzzy-match ranking is what the user is asking for.
-        fileResults =
-          q === ""
-            ? [...missingRecentMatches(response.matches), ...applyRecencyOrder(response.matches)]
-            : response.matches;
+        fileResults = q === "" ? filesModeResults(response.matches) : response.matches;
         truncated = response.truncated;
         errorMessage = null;
         hasSearched = true;
@@ -325,14 +314,16 @@
   // open with no feedback. Reported the same way `linkProviders.ts` already
   // reports a failed terminal-link open, and self-corrects by pruning the
   // offending entry so it doesn't keep failing the same way.
-  async function openSelected(path: string, selection?: PendingSelection): Promise<void> {
+  async function openSelected(path: string, selection?: PendingSelection): Promise<boolean> {
     try {
       await (selection ? openFile(path, selection) : openFile(path));
       closeSearch();
+      return true;
     } catch (err) {
       showErrorToast(`Couldn't open file: ${describeError(err)}`);
       const root = $workspace.root;
       if (root) pruneRecentFiles(root, path);
+      return false;
     }
   }
 
@@ -340,11 +331,15 @@
     if (mode === "content") {
       const match = results[index];
       if (!match) return;
-      await openSelected(match.path, { line: match.line, col: match.column });
+      const opened = await openSelected(match.path, { line: match.line, col: match.column });
+      // Drop the now-pruned entry from the rendered list too, so re-clicking
+      // it can't just toast the same failure again.
+      if (!opened) results = results.filter((m) => m.path !== match.path);
     } else {
       const match = fileResults[index];
       if (!match) return;
-      await openSelected(match.path);
+      const opened = await openSelected(match.path);
+      if (!opened) fileResults = fileResults.filter((m) => m.path !== match.path);
     }
   }
 

@@ -61,8 +61,8 @@ export async function rename(path: string, newName: string): Promise<void> {
   const workspaceId = localWorkspaceId();
   const dir = dirOf(path);
   await fsRename(workspaceId, path, `${dir}/${newName}`);
-  await loadChildren(dir);
   pruneRecents(path);
+  await loadChildren(dir);
 }
 
 /** Moves `sourcePath` into `destDir` — a rename to a new parent directory. Reloads both the source's old parent and the destination so both listings reflect the move; a destination collision surfaces as `fsRename`'s `AlreadyExists` rejection, same as the same-directory rename above. */
@@ -71,8 +71,8 @@ export async function movePath(sourcePath: string, destDir: string): Promise<voi
   const sourceDir = dirOf(sourcePath);
   const newPath = `${destDir}/${basename(sourcePath)}`;
   await fsRename(workspaceId, sourcePath, newPath);
-  await Promise.all([loadChildren(sourceDir), loadChildren(destDir)]);
   pruneRecents(sourcePath);
+  await Promise.all([loadChildren(sourceDir), loadChildren(destDir)]);
 }
 
 /**
@@ -83,11 +83,11 @@ export async function movePath(sourcePath: string, destDir: string): Promise<voi
 export async function deletePath(path: string, isDir: boolean): Promise<void> {
   const workspaceId = localWorkspaceId();
   await fsDelete(workspaceId, path, isDir);
-  await loadChildren(dirOf(path));
   pruneRecents(path);
+  await loadChildren(dirOf(path));
 }
 
-/** Prunes `recentFiles`' entry (or, for a directory, every entry nested under it) for `affectedPath`, once the explorer's own delete/rename/move has committed. A rename/move prunes the *old* path — the moved-to path re-earns recency on its own next open. */
+/** Prunes `recentFiles`' entry (or, for a directory, every entry nested under it) for `affectedPath`, once the explorer's own delete/rename/move has committed on the backend — deliberately ahead of the tree reload, so a rejected reload can never skip the prune after the filesystem mutation already succeeded. A rename/move prunes the *old* path — the moved-to path re-earns recency on its own next open. */
 function pruneRecents(affectedPath: string): void {
   const root = get(workspace).root;
   if (root) pruneRecentFiles(root, affectedPath);
