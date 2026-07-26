@@ -153,7 +153,13 @@
     padding-bottom: 2px;
     cursor: pointer;
     white-space: nowrap;
+    -webkit-user-select: none;
     user-select: none;
+    -webkit-user-drag: none;
+  }
+  .row :global(input) {
+    -webkit-user-select: text;
+    user-select: text;
   }
   .row:hover {
     background: var(--atrium-bg-hover);
