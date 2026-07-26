@@ -81,7 +81,7 @@
     // row's onClick), so a stale `true` from an earlier gesture must never
     // survive into this one.
     justDragged = false;
-    beginExplorerDrag(rowEl, event, node.entry.path, () => {
+    beginExplorerDrag(rowEl, event, node.entry, () => {
       justDragged = true;
     });
   }

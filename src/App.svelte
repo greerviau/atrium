@@ -9,6 +9,7 @@
   import SettingsDialog from "./lib/shell/SettingsDialog.svelte";
   import KeyboardShortcutsDialog from "./lib/shell/KeyboardShortcutsDialog.svelte";
   import ErrorToast from "./lib/shell/ErrorToast.svelte";
+  import ExplorerDragPreview from "./lib/explorer/ExplorerDragPreview.svelte";
   import StatusBar from "./lib/shell/StatusBar.svelte";
   import TitleBar from "./lib/shell/TitleBar.svelte";
   import { workspace, openWorkspacePath } from "./lib/stores/workspace";
@@ -582,6 +583,7 @@
 <SettingsDialog />
 <KeyboardShortcutsDialog />
 <ErrorToast />
+<ExplorerDragPreview />
 <div class="window">
   <TitleBar />
   {#if !$workspace.root}
