@@ -4,7 +4,7 @@ import { get } from "svelte/store";
 import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import FileTree from "../../src/lib/explorer/FileTree.svelte";
 import { loadRoot, loadChildren, fileTree, type TreeNode } from "../../src/lib/stores/fileTree";
-import { draggingPath, dragOverTargetDir } from "../../src/lib/explorer/explorerDrag";
+import { draggingPath, dragOverTargetDir, draggingEntry, dragPointerPosition } from "../../src/lib/explorer/explorerDrag";
 import { editingPath } from "../../src/lib/explorer/inlineEdit";
 import * as commands from "../../src/lib/ipc/commands";
 import type { DirEntry } from "../../src/lib/ipc/commands";
@@ -122,6 +122,8 @@ describe("explorer drag-move", () => {
     vi.mocked(commands.fsRename).mockReset();
     draggingPath.set(null);
     dragOverTargetDir.set(null);
+    draggingEntry.set(null);
+    dragPointerPosition.set(null);
     editingPath.set(null);
     // jsdom implements neither method at all.
     HTMLElement.prototype.setPointerCapture = vi.fn();
@@ -132,6 +134,8 @@ describe("explorer drag-move", () => {
     cleanup();
     draggingPath.set(null);
     dragOverTargetDir.set(null);
+    draggingEntry.set(null);
+    dragPointerPosition.set(null);
     editingPath.set(null);
   });
 

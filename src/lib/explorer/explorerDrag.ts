@@ -3,6 +3,7 @@ import { dirOf } from "../util/path";
 import { resolveExplorerDropTargetDir } from "./explorerDropTargets";
 import { movePath } from "./contextMenu";
 import { terminalPaneAtScreenPoint, insertPathsAtScreenPoint, dragOverTerminalPane, setDragOverTerminalPane } from "../terminal/terminalDropTargets";
+import type { DirEntry } from "../ipc/commands";
 
 /** Path of the explorer row currently in a pointer-driven drag, or null. */
 export const draggingPath = writable<string | null>(null);
@@ -16,16 +17,25 @@ export const draggingPath = writable<string | null>(null);
  */
 export const dragOverTargetDir = writable<string | null>(null);
 
+/** The dragged row's own entry (name/path/isDir/isSymlink) while a pointer-driven drag is in progress, or null. Set the same moment draggingPath is (once the gesture crosses the drag threshold); cleared in the same end(). Carries what ExplorerDragPreview needs to render — draggingPath alone is only a path string. */
+export const draggingEntry = writable<DirEntry | null>(null);
+
+/** Latest viewport point of the pointer during a drag, or null when no drag is in progress. Updated on every pointermove past the drag threshold; drives ExplorerDragPreview's position. */
+export const dragPointerPosition = writable<{ x: number; y: number } | null>(null);
+
 const DRAG_THRESHOLD_PX = 4;
 
 /**
- * Starts a pointer-driven move gesture for `sourcePath`, called from a row's
- * `pointerdown`. Tracks movement past a small threshold before committing to
- * "this is a drag" (so a plain click still opens/toggles the row normally,
- * and `onRowStartedDragging` fires exactly once per gesture that crosses the
- * threshold), then on every `pointermove` re-resolves the directory under
- * the pointer via `resolveExplorerDropTargetDir` — the same screen-point
- * hit-test the native Finder-drop path already uses, now serving both.
+ * Starts a pointer-driven move gesture for `entry`, called from a row's
+ * `pointerdown`. Takes the full entry rather than just its path because the
+ * drag preview (`draggingEntry`, above) needs the item's name and `isDir` to
+ * render, not only its path. Tracks movement past a small threshold before
+ * committing to "this is a drag" (so a plain click still opens/toggles the
+ * row normally, and `onRowStartedDragging` fires exactly once per gesture
+ * that crosses the threshold), then on every `pointermove` re-resolves the
+ * directory under the pointer via `resolveExplorerDropTargetDir` — the same
+ * screen-point hit-test the native Finder-drop path already uses, now
+ * serving both.
  *
  * Does **not** call `event.preventDefault()` on `pointerdown` (unlike
  * `tableHandles.ts`'s `attachDragReorder`, which can — a table handle has no
@@ -41,10 +51,13 @@ const DRAG_THRESHOLD_PX = 4;
  * cancellation), or `lostpointercapture` (capture stolen or released by the
  * platform) — funnels through the single `end()` below, so there is no path
  * that leaves `window` listeners attached or `draggingPath`/`dragOverTargetDir`/
- * `dragOverTerminalPane` stuck set with no active gesture behind them (the
- * latter is defined in `terminalDropTargets.ts` and imported here — the
- * guarantee is about what `end()` clears, not about where the store lives);
- * only a genuine `pointerup` with `commit: true` ever calls `movePath`.
+ * `dragOverTerminalPane`/`draggingEntry`/`dragPointerPosition` stuck set with
+ * no active gesture behind them (the middle one is defined in
+ * `terminalDropTargets.ts` and imported here — the guarantee is about what
+ * `end()` clears, not about where the store lives); unlike the first three,
+ * `draggingEntry`/`dragPointerPosition` leaking would be immediately visible
+ * on screen, as a drag preview pinned mid-window with no drag behind it.
+ * Only a genuine `pointerup` with `commit: true` ever calls `movePath`.
  * `end()` removes every listener *before* releasing capture, so a
  * `lostpointercapture` fired synchronously by the release itself can't
  * re-enter `end()`.
@@ -68,7 +81,8 @@ const DRAG_THRESHOLD_PX = 4;
  * the time `dragging` flips true the gesture has already committed to being
  * a drag, not a click).
  */
-export function beginExplorerDrag(rowEl: HTMLElement, event: PointerEvent, sourcePath: string, onRowStartedDragging: () => void): void {
+export function beginExplorerDrag(rowEl: HTMLElement, event: PointerEvent, entry: DirEntry, onRowStartedDragging: () => void): void {
+  const sourcePath = entry.path;
   const startX = event.clientX;
   const startY = event.clientY;
   const pointerId = event.pointerId;
@@ -83,6 +97,7 @@ export function beginExplorerDrag(rowEl: HTMLElement, event: PointerEvent, sourc
       if (Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_THRESHOLD_PX) return;
       dragging = true;
       draggingPath.set(sourcePath);
+      draggingEntry.set(entry);
       onRowStartedDragging();
       rowEl.setPointerCapture(pointerId);
       captured = true;
@@ -90,6 +105,7 @@ export function beginExplorerDrag(rowEl: HTMLElement, event: PointerEvent, sourc
     e.preventDefault();
     lastX = e.clientX;
     lastY = e.clientY;
+    dragPointerPosition.set({ x: e.clientX, y: e.clientY });
     const explorerTarget = resolveExplorerDropTargetDir(e.clientX, e.clientY);
     if (explorerTarget !== null) {
       dragOverTargetDir.set(isValidMoveTarget(sourcePath, explorerTarget) ? explorerTarget : null);
@@ -110,6 +126,8 @@ export function beginExplorerDrag(rowEl: HTMLElement, event: PointerEvent, sourc
     const overTerminal = get(dragOverTerminalPane);
     draggingPath.set(null);
     dragOverTargetDir.set(null);
+    draggingEntry.set(null);
+    dragPointerPosition.set(null);
     setDragOverTerminalPane(null);
     if (!commit || !dragging) return;
     if (target) {

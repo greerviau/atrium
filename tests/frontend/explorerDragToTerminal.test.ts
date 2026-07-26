@@ -3,7 +3,7 @@ import { get } from "svelte/store";
 import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import FileTree from "../../src/lib/explorer/FileTree.svelte";
 import { loadRoot } from "../../src/lib/stores/fileTree";
-import { draggingPath, dragOverTargetDir } from "../../src/lib/explorer/explorerDrag";
+import { draggingPath, dragOverTargetDir, draggingEntry, dragPointerPosition } from "../../src/lib/explorer/explorerDrag";
 import { dragOverTerminalPane, registerTerminalDropTarget } from "../../src/lib/terminal/terminalDropTargets";
 import * as commands from "../../src/lib/ipc/commands";
 import type { DirEntry } from "../../src/lib/ipc/commands";
@@ -96,6 +96,8 @@ describe("explorer drag into a terminal pane", () => {
     vi.mocked(commands.fsRename).mockReset();
     draggingPath.set(null);
     dragOverTargetDir.set(null);
+    draggingEntry.set(null);
+    dragPointerPosition.set(null);
     dragOverTerminalPane.set(null);
     // jsdom implements neither method at all.
     HTMLElement.prototype.setPointerCapture = vi.fn();
@@ -126,6 +128,8 @@ describe("explorer drag into a terminal pane", () => {
     editorEl.remove();
     draggingPath.set(null);
     dragOverTargetDir.set(null);
+    draggingEntry.set(null);
+    dragPointerPosition.set(null);
     dragOverTerminalPane.set(null);
   });
 
