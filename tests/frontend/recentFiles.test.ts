@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { recordFileOpened, getRecentFiles } from "../../src/lib/stores/recentFiles";
+import { recordFileOpened, getRecentFiles, pruneRecentFiles } from "../../src/lib/stores/recentFiles";
 
 describe("recentFiles", () => {
   beforeEach(() => {
@@ -46,5 +46,47 @@ describe("recentFiles", () => {
   it("tolerates corrupted localStorage content instead of throwing", () => {
     localStorage.setItem("atrium.recentFiles./proj", "not json");
     expect(getRecentFiles("/proj")).toEqual([]);
+  });
+});
+
+describe("pruneRecentFiles", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("removes a single recorded file that exactly matches the affected path", () => {
+    recordFileOpened("/proj", "/proj/a.txt");
+    recordFileOpened("/proj", "/proj/b.txt");
+
+    pruneRecentFiles("/proj", "/proj/a.txt");
+
+    expect(getRecentFiles("/proj")).toEqual(["/proj/b.txt"]);
+  });
+
+  it("removes every recorded path nested under a renamed/deleted directory prefix", () => {
+    recordFileOpened("/proj", "/proj/src/lib/search/SearchOverlay.svelte");
+    recordFileOpened("/proj", "/proj/src/lib/search/searchOverlay.ts");
+    recordFileOpened("/proj", "/proj/src/lib/other.ts");
+
+    pruneRecentFiles("/proj", "/proj/src/lib/search");
+
+    expect(getRecentFiles("/proj")).toEqual(["/proj/src/lib/other.ts"]);
+  });
+
+  it("does not touch a sibling whose name merely shares the affected prefix as a string", () => {
+    recordFileOpened("/proj", "/proj/src/lib/search/SearchOverlay.svelte");
+    recordFileOpened("/proj", "/proj/src/lib/searching/Index.svelte");
+
+    pruneRecentFiles("/proj", "/proj/src/lib/search");
+
+    expect(getRecentFiles("/proj")).toEqual(["/proj/src/lib/searching/Index.svelte"]);
+  });
+
+  it("leaves the list untouched when nothing recorded matches the affected path", () => {
+    recordFileOpened("/proj", "/proj/a.txt");
+
+    pruneRecentFiles("/proj", "/proj/b.txt");
+
+    expect(getRecentFiles("/proj")).toEqual(["/proj/a.txt"]);
   });
 });

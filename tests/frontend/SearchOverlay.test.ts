@@ -5,7 +5,8 @@ import { render, fireEvent, cleanup, screen } from "@testing-library/svelte";
 import SearchOverlay from "../../src/lib/search/SearchOverlay.svelte";
 import { searchOverlay } from "../../src/lib/search/searchOverlay";
 import { workspace } from "../../src/lib/stores/workspace";
-import { recordFileOpened } from "../../src/lib/stores/recentFiles";
+import { recordFileOpened, getRecentFiles } from "../../src/lib/stores/recentFiles";
+import { errorToast, dismissErrorToast } from "../../src/lib/stores/errorToast";
 import * as commands from "../../src/lib/ipc/commands";
 import * as tabsStore from "../../src/lib/stores/tabs";
 import type { SearchResults, FileSearchResults } from "../../src/lib/ipc/commands";
@@ -62,6 +63,7 @@ describe("SearchOverlay", () => {
     localStorage.clear();
     searchOverlay.set({ open: false, mode: "content" });
     workspace.set({ id: "local", root: "/proj" });
+    dismissErrorToast();
   });
 
   afterEach(() => {
@@ -524,6 +526,96 @@ describe("SearchOverlay", () => {
     // The backend's relevance ranking (a.txt first) is left untouched, even
     // though b.txt is the more-recently-opened file.
     expect(names).toEqual(["a.txt", "b.txt"]);
+  });
+
+  it("surfaces a recorded-recent file that findFiles' own result set omits (e.g. hidden/gitignored)", async () => {
+    // Mirrors what the real backend does for a file like `.gitignore`: it's
+    // outside `find_files`' walk universe, so it never appears in `matches`,
+    // even though it was just opened from the explorer and recorded.
+    recordFileOpened("/proj", "/proj/.gitignore");
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([{ path: "/proj/a.txt", displayPath: "a.txt", score: 0, matchIndices: [] }]),
+    );
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("a.txt");
+
+    const names = Array.from(container.querySelectorAll(".search-result-filename")).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(names).toEqual([".gitignore", "a.txt"]);
+  });
+
+  it("surfaces a recorded-recent file that findFiles omitted for being past its 200-entry cap", async () => {
+    recordFileOpened("/proj", "/proj/tests/frontend/tabs.test.ts");
+    // The backend truncates before the frontend ever sees the list; the
+    // recorded file simply isn't in `matches`, same shape as the universe
+    // mismatch above but with `truncated: true`.
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([{ path: "/proj/a.txt", displayPath: "a.txt", score: 0, matchIndices: [] }], true),
+    );
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("tabs.test.ts");
+
+    const names = Array.from(container.querySelectorAll(".search-result-filename")).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(names).toEqual(["tabs.test.ts", "a.txt"]);
+  });
+
+  it("orders recents by true recency across present and missing files alike, not by which group each falls into", async () => {
+    // a.txt is the more-recently-opened file and findFiles does return it;
+    // old-missing.txt is older and, like the universe-mismatch case above,
+    // absent from findFiles' own result set. The present-but-newer file must
+    // still lead — bucketing "missing" ahead of "present" regardless of
+    // actual recency was the bug.
+    recordFileOpened("/proj", "/proj/old-missing.txt");
+    recordFileOpened("/proj", "/proj/a.txt");
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([
+        { path: "/proj/a.txt", displayPath: "a.txt", score: 0, matchIndices: [] },
+        { path: "/proj/b.txt", displayPath: "b.txt", score: 0, matchIndices: [] },
+      ]),
+    );
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("a.txt");
+
+    const names = Array.from(container.querySelectorAll(".search-result-filename")).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(names).toEqual(["a.txt", "old-missing.txt", "b.txt"]);
+  });
+
+  it("shows an error toast, prunes a stale recorded-recent file when opening it fails, and drops its row", async () => {
+    recordFileOpened("/proj", "/proj/deleted.txt");
+    vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
+    vi.mocked(tabsStore.openFile).mockRejectedValue(new Error("No such file or directory"));
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("deleted.txt");
+
+    const row = container.querySelector(".search-result-row");
+    expect(row).not.toBeNull();
+    await fireEvent.click(row!);
+    await tick();
+
+    expect(get(errorToast)).toBe("Couldn't open file: No such file or directory");
+    expect(getRecentFiles("/proj")).toEqual([]);
+    // The overlay stays open (the user gets to see the toast and try
+    // something else) rather than closing on a failed open — but the dead
+    // row itself is gone, so re-clicking the same spot can't just re-toast.
+    expect(get(searchOverlay).open).toBe(true);
+    expect(screen.queryByText("deleted.txt")).toBeNull();
   });
 
   it("hides the case-sensitivity/regex toggles in Files mode", async () => {

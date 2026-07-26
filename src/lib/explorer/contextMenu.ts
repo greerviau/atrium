@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
 import {
   fsCreateFile,
   fsCreateDir,
@@ -7,6 +7,8 @@ import {
   localWorkspaceId,
 } from "../ipc/commands";
 import { loadChildren } from "../stores/fileTree";
+import { pruneRecentFiles } from "../stores/recentFiles";
+import { workspace } from "../stores/workspace";
 import { basename, dirOf } from "../util/path";
 
 export interface ContextMenuState {
@@ -59,6 +61,7 @@ export async function rename(path: string, newName: string): Promise<void> {
   const workspaceId = localWorkspaceId();
   const dir = dirOf(path);
   await fsRename(workspaceId, path, `${dir}/${newName}`);
+  pruneRecents(path);
   await loadChildren(dir);
 }
 
@@ -68,6 +71,7 @@ export async function movePath(sourcePath: string, destDir: string): Promise<voi
   const sourceDir = dirOf(sourcePath);
   const newPath = `${destDir}/${basename(sourcePath)}`;
   await fsRename(workspaceId, sourcePath, newPath);
+  pruneRecents(sourcePath);
   await Promise.all([loadChildren(sourceDir), loadChildren(destDir)]);
 }
 
@@ -79,5 +83,12 @@ export async function movePath(sourcePath: string, destDir: string): Promise<voi
 export async function deletePath(path: string, isDir: boolean): Promise<void> {
   const workspaceId = localWorkspaceId();
   await fsDelete(workspaceId, path, isDir);
+  pruneRecents(path);
   await loadChildren(dirOf(path));
+}
+
+/** Prunes `recentFiles`' entry (or, for a directory, every entry nested under it) for `affectedPath`, once the explorer's own delete/rename/move has committed on the backend — deliberately ahead of the tree reload, so a rejected reload can never skip the prune after the filesystem mutation already succeeded. A rename/move prunes the *old* path — the moved-to path re-earns recency on its own next open. */
+function pruneRecents(affectedPath: string): void {
+  const root = get(workspace).root;
+  if (root) pruneRecentFiles(root, affectedPath);
 }
