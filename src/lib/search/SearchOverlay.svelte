@@ -338,16 +338,25 @@
       tabindex="-1"
     >
       <div class="search-input-row">
-        <input
-          bind:this={inputEl}
-          bind:value={query}
-          onkeydown={onInputKeydown}
-          placeholder={mode === "content" ? "Search across the project…" : "Go to file…"}
-          autocomplete="off"
-          autocorrect="off"
-          autocapitalize="off"
-          spellcheck="false"
-        />
+        <div class="search-input-wrapper">
+          <input
+            bind:this={inputEl}
+            bind:value={query}
+            onkeydown={onInputKeydown}
+            placeholder={mode === "content" ? "Search across the project…" : "Go to file…"}
+            autocomplete="off"
+            autocorrect="off"
+            autocapitalize="off"
+            spellcheck="false"
+          />
+          <!-- Always in the DOM (not `{#if isSearching}`) and hidden with
+               `visibility`, not `display`. It's absolutely positioned over the
+               input's right edge, so it never affects layout either way; the
+               input's own right padding reserves the space for it, meaning
+               the spinner appearing and disappearing never shifts the input's
+               text. -->
+          <span class="search-spinner" class:visible={isSearching} aria-hidden="true"></span>
+        </div>
         {#if mode === "content"}
           <button
             class="search-toggle"
@@ -370,11 +379,6 @@
             .*
           </button>
         {/if}
-        <!-- Always in the DOM (not `{#if isSearching}`) and hidden with
-             `visibility`, not `display`, so this fixed slot on the far
-             right always reserves its own width — the spinner appearing
-             and disappearing must never resize the rest of the search bar. -->
-        <span class="search-spinner" class:visible={isSearching} aria-hidden="true"></span>
       </div>
 
       {#if errorMessage}
@@ -494,27 +498,37 @@
     border-bottom: 1px solid var(--atrium-border);
     flex-shrink: 0;
   }
-  .search-input-row input {
+  .search-input-wrapper {
+    position: relative;
     flex: 1;
-    padding: 8px 10px;
+    display: flex;
+  }
+  .search-input-wrapper input {
+    flex: 1;
+    padding: 8px 28px 8px 10px;
     font: inherit;
     background: var(--atrium-bg-surface);
     color: inherit;
     border: 1px solid var(--atrium-border);
     border-radius: 6px;
   }
-  .search-input-row input:focus {
+  .search-input-wrapper input:focus {
     outline: none;
     border-color: var(--atrium-accent);
   }
   .search-spinner {
-    flex-shrink: 0;
+    position: absolute;
+    right: 10px;
+    top: 0;
+    bottom: 0;
+    margin-block: auto;
     width: 14px;
     height: 14px;
     border: 2px solid var(--atrium-border);
     border-top-color: var(--atrium-accent);
     border-radius: 50%;
     visibility: hidden;
+    pointer-events: none;
   }
   .search-spinner.visible {
     visibility: visible;
