@@ -8,9 +8,10 @@
     type SearchMatch,
     type FileMatch,
   } from "../ipc/commands";
-  import { openFile } from "../stores/tabs";
+  import { openFile, type PendingSelection } from "../stores/tabs";
   import { workspace } from "../stores/workspace";
-  import { getRecentFiles } from "../stores/recentFiles";
+  import { getRecentFiles, pruneRecentFiles } from "../stores/recentFiles";
+  import { showErrorToast, describeError } from "../stores/errorToast";
   import { tooltip } from "../ui/tooltip";
 
   const DEBOUNCE_MS = 150;
@@ -103,6 +104,25 @@
     return [...recent, ...rest];
   }
 
+  /**
+   * `findFiles` only ever returns paths that survived its own walk filters
+   * (hidden/gitignored entries excluded) and its 200-entry cap, so a
+   * recorded-recent path can be missing from `matches` even though it's a
+   * perfectly real, opened-moments-ago file — that's the exact bug #242
+   * reports (a file opened via the explorer never shows up in Cmd+P).
+   * `applyRecencyOrder` can only reorder what's already in `matches`, so
+   * this synthesizes a `FileMatch` for each recorded path `matches` is
+   * missing, most-recent-first, to be prepended ahead of it.
+   */
+  function missingRecentMatches(matches: FileMatch[]): FileMatch[] {
+    const root = $workspace.root;
+    if (!root) return [];
+    const present = new Set(matches.map((m) => m.path));
+    return getRecentFiles(root)
+      .filter((path) => !present.has(path))
+      .map((path) => ({ path, displayPath: relativePath(path), score: 0, matchIndices: [] }));
+  }
+
   async function runSearch(myRequestId: number): Promise<void> {
     const q = query;
     if (mode === "content") {
@@ -147,7 +167,10 @@
         // (mirroring VS Code/telescope's own "recently opened files" default
         // view) — once a query narrows the results by relevance, that
         // fuzzy-match ranking is what the user is asking for.
-        fileResults = q === "" ? applyRecencyOrder(response.matches) : response.matches;
+        fileResults =
+          q === ""
+            ? [...missingRecentMatches(response.matches), ...applyRecencyOrder(response.matches)]
+            : response.matches;
         truncated = response.truncated;
         errorMessage = null;
         hasSearched = true;
@@ -291,17 +314,38 @@
     };
   }
 
+  // Explorer-driven delete/rename/move prunes what it can predict
+  // (`pruneRecentFiles` via `contextMenu.ts`), but an externally-deleted
+  // file (a `git checkout`, another editor, a build cleaning `dist/`) can
+  // still leave a stale entry behind — and now that recents are surfaced
+  // independently of `findFiles`' own result set, such an entry is
+  // reachable from Files mode. Without this, every caller of `selectResult`
+  // invokes it as `void selectResult(...)`, so a rejected `openFile` would
+  // otherwise become a silent unhandled rejection: the overlay just stays
+  // open with no feedback. Reported the same way `linkProviders.ts` already
+  // reports a failed terminal-link open, and self-corrects by pruning the
+  // offending entry so it doesn't keep failing the same way.
+  async function openSelected(path: string, selection?: PendingSelection): Promise<void> {
+    try {
+      await (selection ? openFile(path, selection) : openFile(path));
+      closeSearch();
+    } catch (err) {
+      showErrorToast(`Couldn't open file: ${describeError(err)}`);
+      const root = $workspace.root;
+      if (root) pruneRecentFiles(root, path);
+    }
+  }
+
   async function selectResult(index: number): Promise<void> {
     if (mode === "content") {
       const match = results[index];
       if (!match) return;
-      await openFile(match.path, { line: match.line, col: match.column });
+      await openSelected(match.path, { line: match.line, col: match.column });
     } else {
       const match = fileResults[index];
       if (!match) return;
-      await openFile(match.path);
+      await openSelected(match.path);
     }
-    closeSearch();
   }
 
   function onInputKeydown(event: KeyboardEvent): void {

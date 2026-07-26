@@ -1,3 +1,5 @@
+import { isPathUnderOrEqual } from "../util/path";
+
 const STORAGE_PREFIX = "atrium.recentFiles.";
 const MAX_RECENT_FILES = 20;
 
@@ -48,4 +50,17 @@ export function recordFileOpened(root: string, path: string): void {
 /** The workspace's recently-opened file paths, most-recent-first. */
 export function getRecentFiles(root: string): string[] {
   return load(root);
+}
+
+/**
+ * Removes every recorded path equal to or nested under `affectedPath` from
+ * the workspace's recent-files list. Used by the explorer's delete/rename/
+ * move handlers so a deleted or renamed directory doesn't leave every file
+ * that used to live under it pointing at a path that no longer exists —
+ * matched prefix-aware, not just an exact path, since renaming or moving a
+ * folder is the common case.
+ */
+export function pruneRecentFiles(root: string, affectedPath: string): void {
+  const paths = load(root).filter((p) => !isPathUnderOrEqual(p, affectedPath));
+  save(root, paths);
 }

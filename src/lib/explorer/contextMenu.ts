@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
 import {
   fsCreateFile,
   fsCreateDir,
@@ -7,6 +7,8 @@ import {
   localWorkspaceId,
 } from "../ipc/commands";
 import { loadChildren } from "../stores/fileTree";
+import { pruneRecentFiles } from "../stores/recentFiles";
+import { workspace } from "../stores/workspace";
 import { basename, dirOf } from "../util/path";
 
 export interface ContextMenuState {
@@ -60,6 +62,7 @@ export async function rename(path: string, newName: string): Promise<void> {
   const dir = dirOf(path);
   await fsRename(workspaceId, path, `${dir}/${newName}`);
   await loadChildren(dir);
+  pruneRecents(path);
 }
 
 /** Moves `sourcePath` into `destDir` — a rename to a new parent directory. Reloads both the source's old parent and the destination so both listings reflect the move; a destination collision surfaces as `fsRename`'s `AlreadyExists` rejection, same as the same-directory rename above. */
@@ -69,6 +72,7 @@ export async function movePath(sourcePath: string, destDir: string): Promise<voi
   const newPath = `${destDir}/${basename(sourcePath)}`;
   await fsRename(workspaceId, sourcePath, newPath);
   await Promise.all([loadChildren(sourceDir), loadChildren(destDir)]);
+  pruneRecents(sourcePath);
 }
 
 /**
@@ -80,4 +84,11 @@ export async function deletePath(path: string, isDir: boolean): Promise<void> {
   const workspaceId = localWorkspaceId();
   await fsDelete(workspaceId, path, isDir);
   await loadChildren(dirOf(path));
+  pruneRecents(path);
+}
+
+/** Prunes `recentFiles`' entry (or, for a directory, every entry nested under it) for `affectedPath`, once the explorer's own delete/rename/move has committed. A rename/move prunes the *old* path — the moved-to path re-earns recency on its own next open. */
+function pruneRecents(affectedPath: string): void {
+  const root = get(workspace).root;
+  if (root) pruneRecentFiles(root, affectedPath);
 }

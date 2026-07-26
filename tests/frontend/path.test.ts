@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { basename, dirOf } from "../../src/lib/util/path";
+import { basename, dirOf, isPathUnderOrEqual } from "../../src/lib/util/path";
 
 describe("basename", () => {
   it("returns the last segment of a plain path", () => {
@@ -42,5 +42,31 @@ describe("dirOf", () => {
 
   it("falls back to the input for a single-segment path", () => {
     expect(dirOf("notes.txt")).toBe("notes.txt");
+  });
+});
+
+describe("isPathUnderOrEqual", () => {
+  it("matches the exact same path", () => {
+    expect(isPathUnderOrEqual("/a/b/notes.txt", "/a/b/notes.txt")).toBe(true);
+  });
+
+  it("matches a descendant of a directory prefix", () => {
+    expect(isPathUnderOrEqual("/a/b/search/file.ts", "/a/b/search")).toBe(true);
+  });
+
+  it("does not match a sibling whose name merely shares the prefix as a string", () => {
+    expect(isPathUnderOrEqual("/a/b/searching/file.ts", "/a/b/search")).toBe(false);
+  });
+
+  it("does not match an unrelated path", () => {
+    expect(isPathUnderOrEqual("/a/c/file.ts", "/a/b")).toBe(false);
+  });
+
+  it("normalizes backslashes on both sides before comparing", () => {
+    expect(isPathUnderOrEqual("C:\\a\\b\\file.ts", "C:\\a\\b")).toBe(true);
+  });
+
+  it("tolerates a trailing slash on the prefix", () => {
+    expect(isPathUnderOrEqual("/a/b/file.ts", "/a/b/")).toBe(true);
   });
 });
