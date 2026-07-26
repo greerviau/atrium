@@ -20,14 +20,14 @@ async function waitForIdle(): Promise<void> {
   await tick();
 }
 
-function seedTab(path: string, mode: "code" | "markdown"): Tab {
+function seedTab(path: string, mode: "code" | "markdown", viewMode: "rendered" | "source" = "rendered"): Tab {
   const tab: Tab = {
     path,
     mode,
     savedDoc: "line one\nline two\n",
     isDirty: false,
     hasExternalConflict: false,
-    viewMode: "rendered",
+    viewMode,
   };
   tabsState.set({ tabs: [tab], activeTabPath: path });
   focusedEditorPaneId.set(PANE_ID);
@@ -62,12 +62,36 @@ describe("EditorPane: minimap", () => {
     expect(container.querySelector(".cm-minimap-gutter")).not.toBeNull();
   });
 
-  it("shows the minimap gutter in a markdown pane by default, once the deferred build runs", async () => {
-    seedTab(MARKDOWN_PATH, "markdown");
+  it("never shows the minimap gutter in a markdown pane in rendered view, even once the deferred build runs", async () => {
+    seedTab(MARKDOWN_PATH, "markdown", "rendered");
     const { container } = render(EditorPane, { filePath: MARKDOWN_PATH, paneId: PANE_ID });
     await waitForIdle();
 
-    expect(container.querySelector(".cm-minimap-gutter")).not.toBeNull();
+    expect(container.querySelector(".cm-minimap-gutter")).toBeNull();
+  });
+
+  it("never shows the minimap gutter in a markdown pane in source view either", async () => {
+    seedTab(MARKDOWN_PATH, "markdown", "source");
+    const { container } = render(EditorPane, { filePath: MARKDOWN_PATH, paneId: PANE_ID });
+    await waitForIdle();
+
+    expect(container.querySelector(".cm-minimap-gutter")).toBeNull();
+  });
+
+  // Wrapping alone already breaks `@replit/codemirror-minimap`'s one
+  // document-line-per-visual-row assumption — a `viewMode`-only gate would
+  // still show a wrong minimap in source view on any wrapped file, which
+  // (per this repo's own semantic-line-break convention) is most of them.
+  // This pins the real precondition (`mode === "markdown"`) against the
+  // symptom it exists to prevent, so it fails loudly if wrapping and the
+  // minimap gate ever drift apart again.
+  it("gates the minimap on markdown's always-on line wrapping, not on view mode", async () => {
+    seedTab(MARKDOWN_PATH, "markdown", "source");
+    const { container } = render(EditorPane, { filePath: MARKDOWN_PATH, paneId: PANE_ID });
+    await waitForIdle();
+
+    expect(container.querySelector(".cm-content")?.classList.contains("cm-lineWrapping")).toBe(true);
+    expect(container.querySelector(".cm-minimap-gutter")).toBeNull();
   });
 
   it("never shows the minimap gutter when the setting is off before mount", async () => {
@@ -95,8 +119,8 @@ describe("EditorPane: minimap", () => {
 
   it("reconfigures live when the setting is toggled back on", async () => {
     setMinimapEnabled(false);
-    seedTab(MARKDOWN_PATH, "markdown");
-    const { container } = render(EditorPane, { filePath: MARKDOWN_PATH, paneId: PANE_ID });
+    seedTab(CODE_PATH, "code");
+    const { container } = render(EditorPane, { filePath: CODE_PATH, paneId: PANE_ID });
     await waitForIdle();
     expect(container.querySelector(".cm-minimap-gutter")).toBeNull();
 
@@ -104,6 +128,25 @@ describe("EditorPane: minimap", () => {
     await tick();
 
     expect(container.querySelector(".cm-minimap-gutter")).not.toBeNull();
+  });
+
+  // A deliberate, silent tradeoff of the markdown gate (see "Open questions"
+  // in the plan this implements): the setting toggle is a global control,
+  // but a markdown pane's effective minimap state never moves regardless of
+  // what it's set to. Worth a named test rather than leaving it undiscovered.
+  it("leaves the minimap gutter absent in a markdown pane throughout a setting toggle off and back on", async () => {
+    seedTab(MARKDOWN_PATH, "markdown");
+    const { container } = render(EditorPane, { filePath: MARKDOWN_PATH, paneId: PANE_ID });
+    await waitForIdle();
+    expect(container.querySelector(".cm-minimap-gutter")).toBeNull();
+
+    setMinimapEnabled(false);
+    await tick();
+    expect(container.querySelector(".cm-minimap-gutter")).toBeNull();
+
+    setMinimapEnabled(true);
+    await tick();
+    expect(container.querySelector(".cm-minimap-gutter")).toBeNull();
   });
 
   it("toggling before the deferred build fires applies immediately, without waiting for idle", async () => {

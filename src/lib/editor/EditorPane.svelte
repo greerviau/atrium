@@ -129,7 +129,21 @@
     view.dispatch({ effects: minimapCompartment.reconfigure(minimapExtension(enabled)) });
   }
 
+  // `@replit/codemirror-minimap` computes its geometry from one uniform line
+  // height applied per *document* line, with no notion that a single
+  // document line can span more than one visual row. That assumption holds
+  // for a code pane (which never wraps) but not for a markdown pane, where
+  // `EditorView.lineWrapping` is always active (see below) and, in rendered
+  // view, heading/image/table/Mermaid decorations also vary line heights —
+  // so the minimap's scroll-position overlay and content no longer line up
+  // with the pane's real rendered layout. An actively wrong minimap is worse
+  // than no minimap, so markdown panes never show one, in either view mode.
+  function minimapAllowedFor(mode: "markdown" | "code"): boolean {
+    return mode !== "markdown";
+  }
+
   const tab = $derived($tabsState.tabs.find((t) => t.path === filePath));
+  const effectiveMinimapEnabled = $derived($minimapEnabled && minimapAllowedFor(tab?.mode ?? "code"));
 
   function currentDoc(): string {
     return view.state.doc.toString();
@@ -262,6 +276,7 @@
   onMount(() => {
     const initialTab = $tabsState.tabs.find((t) => t.path === filePath);
     const mode = initialTab?.mode ?? "code";
+    const initialEffectiveMinimapEnabled = $minimapEnabled && minimapAllowedFor(mode);
     lastAppliedViewMode = initialTab?.viewMode;
     lastAppliedActive = active;
 
@@ -325,12 +340,12 @@
     // below silent for this initial value — the idle callback is solely
     // responsible for the first real application, so it isn't raced or
     // duplicated by the effect also firing on mount.
-    lastAppliedMinimapEnabled = $minimapEnabled;
+    lastAppliedMinimapEnabled = initialEffectiveMinimapEnabled;
     const scheduleIdle = typeof requestIdleCallback !== "undefined" ? requestIdleCallback : (cb: () => void) => setTimeout(cb, 1) as unknown as number;
     minimapIdleHandle = scheduleIdle(() => {
       minimapIdleHandle = undefined;
       if (!view) return;
-      applyMinimap($minimapEnabled);
+      applyMinimap(initialEffectiveMinimapEnabled);
     });
   });
 
@@ -362,14 +377,16 @@
     });
   });
 
-  // Reconfigures the minimap compartment in place when the setting actually
-  // changes after mount, applying live to every open pane (code and
-  // markdown alike) without losing undo history, selection, or scroll
-  // position — same guarantee as the theme-switch effect above. Guarded
-  // against firing on the initial mount value (see `lastAppliedMinimapEnabled`
-  // above): the mount-time idle callback owns that first application.
+  // Reconfigures the minimap compartment in place when the effective setting
+  // (the global setting gated by `minimapAllowedFor`) actually changes after
+  // mount, without losing undo history, selection, or scroll position — same
+  // guarantee as the theme-switch effect above. A markdown pane's effective
+  // value never changes regardless of the setting, so this never fires for
+  // one. Guarded against firing on the initial mount value (see
+  // `lastAppliedMinimapEnabled` above): the mount-time idle callback owns
+  // that first application.
   $effect(() => {
-    const enabled = $minimapEnabled;
+    const enabled = effectiveMinimapEnabled;
     if (!view || enabled === lastAppliedMinimapEnabled) {
       return;
     }
