@@ -175,10 +175,14 @@ describe("SearchOverlay", () => {
     await tick();
 
     // Visible immediately, before the debounce timer has even fired. The
-    // spinner element is always in the DOM (a fixed slot on the far right
-    // of the search bar, so its appearing/disappearing never resizes the
-    // rest of the bar) — visibility is a CSS class, not DOM presence.
+    // spinner element is always in the DOM, absolutely positioned over the
+    // input's right edge, so its appearing/disappearing never shifts the
+    // input's text — visibility is a CSS class, not DOM presence.
     expect(container.querySelector(".search-spinner.visible")).not.toBeNull();
+
+    const wrapper = container.querySelector(".search-input-wrapper");
+    expect(wrapper?.querySelector("input")).not.toBeNull();
+    expect(wrapper?.querySelector(".search-spinner")).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(150);
     // Still visible while the backend call is in flight.
