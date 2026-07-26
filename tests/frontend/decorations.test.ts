@@ -1435,6 +1435,36 @@ describe("buildDecorations: full row/column outline edge caps (issue #224)", () 
     expect(cells[0].class?.split(" ")).toContain("cm-table-row-selected-start");
     expect(cells[0].class?.split(" ")).toContain("cm-table-row-selected-end");
   });
+
+  // A crossing cell (a pinned row selection and a separately hovered column,
+  // both landing at their own respective end caps) must carry both
+  // directions' end-cap modifiers together, not just the base
+  // `-row-selected`/`-col-selected` classes the older simultaneous-highlight
+  // test above already covers — this is the trickiest part of the edge-cap
+  // design, since the row's own `-end` and the column's own `-bottom` are
+  // computed from entirely independent conditions but land on the same cell.
+  it("gives a crossing cell both directions' end-cap modifiers when a pinned last row and a hovered last column meet", () => {
+    const doc = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n";
+    const state = stateFor(doc, doc.length);
+    const table = findTableFrom(state);
+    // Row 2 (the table's own last row, "3 | 4") is pinned; column 1 (the
+    // last column) is hovered — the crossing cell is "4".
+    const decos = collect(state, "test.md", true, { table, row: null, col: 1 }, { table, row: 2, col: null });
+
+    const lastRowCells = tableCells(state, decos, 4);
+    const crossingCell = lastRowCells[1];
+    expect(state.doc.sliceString(crossingCell.from, crossingCell.to)).toBe("4");
+
+    const classes = crossingCell.class?.split(" ") ?? [];
+    expect(classes).toContain("cm-table-row-selected");
+    expect(classes).toContain("cm-table-row-selected-end");
+    expect(classes).toContain("cm-table-col-selected");
+    expect(classes).toContain("cm-table-col-selected-bottom");
+    // Not the row's own -start (column 1 isn't column 0) or the column's own
+    // -top (row 2 isn't the header).
+    expect(classes).not.toContain("cm-table-row-selected-start");
+    expect(classes).not.toContain("cm-table-col-selected-top");
+  });
 });
 
 describe("buildDecorations: drag-in-progress tint (issue #224)", () => {

@@ -797,4 +797,27 @@ describe("drag-to-reposition (phase 4)", () => {
 
     view.destroy();
   });
+
+  // A window blur mid-drag (switching apps/tabs) has no pointerup/pointercancel
+  // of its own — without its own exit path, `cm-table-dragging-active`'s
+  // app-wide `grabbing` cursor would stay stuck until some unrelated later
+  // pointerup happened to fire.
+  it("clears tableDragField and the dragging-active body class on a window blur mid-drag", () => {
+    const doc = "| Name  | Role     |\n| ----- | -------- |\n| Alice | Engineer |\n";
+    const view = makeView(doc);
+    const handles = view.dom.querySelectorAll<HTMLElement>(".cm-table-row-handle");
+    const table = tableOf(handles[1]);
+    mockRect(handles[0], 0, 20);
+    mockRect(handles[1], 20, 40);
+
+    handles[1].dispatchEvent(pointerCoordEvent("pointerdown", "clientY", 30));
+    expect(view.state.field(tableDragField)).toEqual({ table, row: 1, col: null });
+    expect(document.body.classList.contains("cm-table-dragging-active")).toBe(true);
+
+    window.dispatchEvent(pointerLikeEvent("blur"));
+    expect(view.state.field(tableDragField)).toEqual(NO_TABLE_HOVER);
+    expect(document.body.classList.contains("cm-table-dragging-active")).toBe(false);
+
+    view.destroy();
+  });
 });

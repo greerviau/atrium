@@ -127,9 +127,11 @@ export const tableSelectionKeymap: readonly KeyBinding[] = [
 ];
 
 /**
- * The six-dot (2x3) drag-handle glyph shared by row and column handles,
- * built from real elements (rather than a CSS `::before`/font glyph) so its
- * dot count/layout stays easy to read and adjust in `markdown.css`.
+ * The six-dot drag-handle glyph shared by row and column handles, built
+ * from real elements (rather than a CSS `::before`/font glyph) so its dot
+ * count/layout stays easy to read and adjust in `markdown.css` — a tall 2x3
+ * grid for the row handle, a wide 3x2 grid for the column bar (scoped in
+ * CSS to `.cm-table-col-bar .cm-table-handle-dots`).
  */
 function createHandleGlyph(): HTMLElement {
   const glyph = document.createElement("span");
@@ -229,11 +231,12 @@ function attachHandleInteractions(el: HTMLElement, view: EditorView, target: Tab
  * any `docChanged` transaction that doesn't itself carry a matching effect.
  * `document.body`'s `cm-table-dragging-active` class (driving the drag tint's
  * handle visibility and the `grabbing` cursor) and `tableDragField` are both
- * torn down from one shared `cleanup`, run on `pointerup` *and*
- * `pointercancel` alike — the field going stale is invisible, but the body
- * class isn't: it forces `cursor: grabbing` on every element, so missing the
- * cancel path would leave the whole app stuck with a grabbing cursor after
- * an OS/browser-level gesture interruption.
+ * torn down from one shared `cleanup`, run on `pointerup`, `pointercancel`,
+ * and a window `blur` alike — the field going stale is invisible, but the
+ * body class isn't: it forces `cursor: grabbing` on every element, so
+ * missing one of these exit paths would leave the whole app stuck with a
+ * grabbing cursor after an OS/browser-level gesture interruption or a
+ * mid-drag app/tab switch.
  */
 function attachDragReorder(options: {
   el: HTMLElement;
@@ -312,6 +315,7 @@ function attachDragReorder(options: {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("blur", onCancel);
       document.body.classList.remove("cm-table-dragging-active");
       view.dispatch({ effects: setTableDrag.of(NO_TABLE_HOVER) });
     }
@@ -327,6 +331,11 @@ function attachDragReorder(options: {
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onCancel);
+    // A window blur mid-drag (switching apps/tabs) otherwise self-heals only
+    // on the next pointerup anywhere, leaving `cm-table-dragging-active`'s
+    // app-wide `grabbing` cursor stuck in the meantime — closed the same way
+    // as a real pointercancel.
+    window.addEventListener("blur", onCancel);
   });
 }
 
