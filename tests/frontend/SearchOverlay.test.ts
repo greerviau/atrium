@@ -181,8 +181,9 @@ describe("SearchOverlay", () => {
     expect(container.querySelector(".search-spinner.visible")).not.toBeNull();
 
     const wrapper = container.querySelector(".search-input-wrapper");
-    expect(wrapper?.querySelector("input")).not.toBeNull();
-    expect(wrapper?.querySelector(".search-spinner")).not.toBeNull();
+    expect(wrapper).not.toBeNull();
+    expect(wrapper!.querySelector("input")).not.toBeNull();
+    expect(wrapper!.querySelector(".search-spinner")).not.toBeNull();
 
     await vi.advanceTimersByTimeAsync(150);
     // Still visible while the backend call is in flight.
