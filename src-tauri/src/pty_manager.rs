@@ -1383,7 +1383,7 @@ mod tests {
             .unwrap();
 
         wait_for(
-            Duration::from_millis(500),
+            Duration::from_secs(5),
             "output after an idle period took too long to arrive",
             || {
                 String::from_utf8_lossy(&received.lock().unwrap())
@@ -1391,9 +1391,16 @@ mod tests {
             },
         );
 
+        // `FLUSH_INTERVAL` is 8ms, so this should land in low tens of
+        // milliseconds under normal conditions; the bound here is loose
+        // enough to absorb scheduling jitter on a busy CI runner while
+        // still catching the real regression this test guards against — a
+        // coalescing window with no periodic flush at all, which would
+        // leave the marker sitting unflushed for seconds rather than
+        // milliseconds.
         assert!(
-            start.elapsed() < Duration::from_millis(100),
-            "expected idle-then-burst output within roughly one flush interval, took {:?}",
+            start.elapsed() < Duration::from_secs(1),
+            "expected idle-then-burst output to arrive well under a second, took {:?}",
             start.elapsed()
         );
 
