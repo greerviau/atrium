@@ -79,7 +79,13 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         Some("CmdOrCtrl+O"),
     )?;
     let save = MenuItem::with_id(app, "menu:save", "Save", true, Some("CmdOrCtrl+S"))?;
-    let close_tab = MenuItem::with_id(app, "menu:close-tab", "Close Tab", true, Some("CmdOrCtrl+W"))?;
+    let close_tab = MenuItem::with_id(
+        app,
+        "menu:close-tab",
+        "Close Tab",
+        true,
+        Some("CmdOrCtrl+W"),
+    )?;
     let new_terminal_tab = MenuItem::with_id(
         app,
         "menu:new-terminal-tab",
@@ -210,15 +216,13 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         ],
     )?;
 
-    let close_window = MenuItem::with_id(app, "menu:close-window", "Close Window", true, None::<&str>)?;
+    let close_window =
+        MenuItem::with_id(app, "menu:close-window", "Close Window", true, None::<&str>)?;
     let window_menu = Submenu::with_items(
         app,
         "Window",
         true,
-        &[
-            &PredefinedMenuItem::minimize(app, None)?,
-            &close_window,
-        ],
+        &[&PredefinedMenuItem::minimize(app, None)?, &close_window],
     )?;
 
     let shortcuts = MenuItem::with_id(

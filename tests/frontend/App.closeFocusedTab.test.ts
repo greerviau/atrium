@@ -168,10 +168,12 @@ describe("App Cmd+W close-focused-tab routing (issue #279)", () => {
     workspace.set({ id: "local", root: "/projects/demo" });
     render(App);
     await tick();
+    await flushMenuBarRegistration();
 
     expect(get(tabsState).tabs).toHaveLength(0);
     expect(get(editorPaneTree)).toBeNull();
 
+    expect(menuHandlers.get("menu:close-tab")).toBeDefined();
     expect(() => menuHandlers.get("menu:close-tab")?.()).not.toThrow();
     await tick();
 
