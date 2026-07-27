@@ -174,27 +174,39 @@ mod tests {
         events
     }
 
-    // The debounce window is 150ms; every test waits well past that (plus
-    // slack for the watcher to actually start up before the first mutation)
-    // before asserting on what arrived.
-    const SETTLE_MS: u64 = 1000;
+    // The debounce window is 150ms; every test waits well past that before
+    // asserting on what arrived. `STARTUP_SETTLE_MS` is slack before the
+    // first mutation, both for the watcher to start up and, on macOS, for
+    // the FSEvents daemon to flush any backlog from setup (e.g. an initial
+    // `std::fs::write`) that happened just before the watch was registered
+    // — otherwise that backlog can bleed into the watched window as a
+    // spurious event. GitHub Actions' macOS runners need noticeably more of
+    // both than a local machine or Linux's inotify does.
+    const STARTUP_SETTLE_MS: u64 = 500;
+    const SETTLE_MS: u64 = 2000;
+
+    /// `/var` on macOS is itself a symlink to `/private/var`; `tempfile`
+    /// returns the unresolved `/var/...` form, but `notify`'s macOS backend
+    /// reports the OS-canonicalized `/private/var/...` path. Every path a
+    /// test builds to compare against a watch event goes through this so
+    /// the comparison is exact on macOS (a no-op elsewhere, since there's
+    /// no such symlink to resolve).
+    fn canonical_root(dir: &tempfile::TempDir) -> std::path::PathBuf {
+        dir.path().canonicalize().unwrap()
+    }
 
     #[tokio::test]
     async fn a_same_directory_rename_arrives_as_one_paired_rename_event() {
         let dir = tempfile::tempdir().unwrap();
-        let from = dir.path().join("old.txt");
+        let root = canonical_root(&dir);
+        let from = root.join("old.txt");
         std::fs::write(&from, "hi").unwrap();
 
         let (tx, mut rx) = unbounded_channel();
-        let _debouncer = watch(
-            dir.path().to_string_lossy().to_string(),
-            "ws".to_string(),
-            tx,
-        )
-        .unwrap();
-        sleep(Duration::from_millis(200)).await;
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        sleep(Duration::from_millis(STARTUP_SETTLE_MS)).await;
 
-        let to = dir.path().join("new.txt");
+        let to = root.join("new.txt");
         std::fs::rename(&from, &to).unwrap();
 
         let events = drain_events(&mut rx, SETTLE_MS).await;
@@ -218,17 +230,13 @@ mod tests {
     #[tokio::test]
     async fn a_delete_still_emits_a_plain_remove_with_no_from_path() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gone.txt");
+        let root = canonical_root(&dir);
+        let path = root.join("gone.txt");
         std::fs::write(&path, "bye").unwrap();
 
         let (tx, mut rx) = unbounded_channel();
-        let _debouncer = watch(
-            dir.path().to_string_lossy().to_string(),
-            "ws".to_string(),
-            tx,
-        )
-        .unwrap();
-        sleep(Duration::from_millis(200)).await;
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        sleep(Duration::from_millis(STARTUP_SETTLE_MS)).await;
 
         std::fs::remove_file(&path).unwrap();
 
@@ -253,20 +261,16 @@ mod tests {
     #[ignore = "platform-dependent: relies on notify observing an out-of-root move as an unpaired rename half"]
     async fn a_rename_out_of_the_watched_root_surfaces_as_remove_for_the_source() {
         let dir = tempfile::tempdir().unwrap();
+        let root = canonical_root(&dir);
         let outside = tempfile::tempdir().unwrap();
-        let from = dir.path().join("leaving.txt");
+        let from = root.join("leaving.txt");
         std::fs::write(&from, "hi").unwrap();
 
         let (tx, mut rx) = unbounded_channel();
-        let _debouncer = watch(
-            dir.path().to_string_lossy().to_string(),
-            "ws".to_string(),
-            tx,
-        )
-        .unwrap();
-        sleep(Duration::from_millis(200)).await;
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        sleep(Duration::from_millis(STARTUP_SETTLE_MS)).await;
 
-        let to = outside.path().join("leaving.txt");
+        let to = canonical_root(&outside).join("leaving.txt");
         std::fs::rename(&from, &to).unwrap();
 
         let events = drain_events(&mut rx, SETTLE_MS).await;
@@ -303,16 +307,12 @@ mod tests {
     #[tokio::test]
     async fn a_new_subdirectory_created_with_many_files_at_once_reports_every_file() {
         let dir = tempfile::tempdir().unwrap();
+        let root = canonical_root(&dir);
         let (tx, mut rx) = unbounded_channel();
-        let _debouncer = watch(
-            dir.path().to_string_lossy().to_string(),
-            "ws".to_string(),
-            tx,
-        )
-        .unwrap();
-        sleep(Duration::from_millis(200)).await;
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        sleep(Duration::from_millis(STARTUP_SETTLE_MS)).await;
 
-        let sub = dir.path().join("newdir");
+        let sub = root.join("newdir");
         std::fs::create_dir(&sub).unwrap();
         const N: usize = 50;
         for i in 0..N {
@@ -350,18 +350,14 @@ mod tests {
     #[tokio::test]
     async fn a_burst_of_files_in_an_already_watched_directory_reports_every_file() {
         let dir = tempfile::tempdir().unwrap();
+        let root = canonical_root(&dir);
         let (tx, mut rx) = unbounded_channel();
-        let _debouncer = watch(
-            dir.path().to_string_lossy().to_string(),
-            "ws".to_string(),
-            tx,
-        )
-        .unwrap();
-        sleep(Duration::from_millis(200)).await;
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        sleep(Duration::from_millis(STARTUP_SETTLE_MS)).await;
 
         const N: usize = 50;
         for i in 0..N {
-            std::fs::write(dir.path().join(format!("file{i}.txt")), "x").unwrap();
+            std::fs::write(root.join(format!("file{i}.txt")), "x").unwrap();
         }
 
         let events = drain_events(&mut rx, SETTLE_MS).await;
