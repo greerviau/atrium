@@ -45,7 +45,12 @@
     terminalVisible,
     terminalPosition,
     setTerminalVisible,
+    loadExplorerWidth,
+    saveExplorerWidth,
+    EXPLORER_WIDTH_MIN,
+    EXPLORER_WIDTH_MAX,
   } from "./lib/stores/layout";
+  import { restoreEditorSession, saveEditorSession, flushEditorSession } from "./lib/stores/editorSession";
   import { folderName } from "./lib/terminal/tabTitle";
   import {
     splitPane,
@@ -81,7 +86,7 @@
 
   const initialLayout = loadTerminalLayout();
 
-  let explorerWidth = $state(240);
+  let explorerWidth = $state(loadExplorerWidth());
   let terminalHeight = $state(initialLayout.height);
   let terminalWidth = $state(initialLayout.width);
   let mainEl: HTMLDivElement | undefined = $state();
@@ -99,6 +104,30 @@
   // might update (e.g. the initial mount, or the id/root pair being set to
   // the same root again).
   let previousWorkspaceRoot: string | null = get(workspace).root;
+
+  // Which root `restoreEditorSession` has actually finished restoring into
+  // `editorPaneTree`/`tabsState`, so the persistence-write effect below can
+  // tell "the new project's own restored session changed" apart from "the
+  // reset effect just cleared the previous project's state on its way out" —
+  // without this guard, a naive write-on-every-change effect would overwrite
+  // the new root's not-yet-loaded persisted session with the transient empty
+  // state `resetTabs()` produces mid-switch.
+  let restoredForRoot: string | null = null;
+
+  // Bumped every time the project-switch effect below actually fires,
+  // capturing its value locally so a stale `restoreEditorSession(root)` call
+  // can tell it's been superseded by a later switch before it applies its
+  // result. Without this, switching A -> B before A's own `fsReadFile` calls
+  // resolve lets A's restore land *after* B's has already started (or
+  // finished): it would apply A's tabs/pane tree on top of B's now-current
+  // state, and — since `restoredForRoot` would already equal B by then — the
+  // persistence-write effect would immediately persist A's tree under B's
+  // storage key, corrupting B's own saved session. Comparing against this
+  // token is what lets a superseded restore recognize "I'm no longer the
+  // switch in progress" and discard its own result entirely, rather than
+  // just discarding the stores-write half and leaving `restoredForRoot`
+  // wrongly latched onto a root whose restore never actually applied.
+  let switchToken = 0;
 
   // Which of the two split-pane surfaces — the terminal dock or the
   // editor's own split panes — last had focus, so a global split-direction
@@ -528,11 +557,12 @@
     const startX = event.clientX;
     const startWidth = explorerWidth;
     function onMove(e: PointerEvent): void {
-      explorerWidth = Math.max(140, Math.min(600, startWidth + (e.clientX - startX)));
+      explorerWidth = Math.max(EXPLORER_WIDTH_MIN, Math.min(EXPLORER_WIDTH_MAX, startWidth + (e.clientX - startX)));
     }
     function onUp(): void {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      saveExplorerWidth(explorerWidth);
     }
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -564,9 +594,45 @@
     const root = $workspace.root;
     if (root === previousWorkspaceRoot) return;
     previousWorkspaceRoot = root;
+    restoredForRoot = null;
+    switchToken += 1;
+    const token = switchToken;
     resetTabs();
     terminalPaneTree = null;
     focusedPaneId = null;
+    if (root) {
+      void restoreEditorSession(root).then((restored) => {
+        // A later switch started (and possibly already finished) while this
+        // one's `fsReadFile` calls were still in flight — see the
+        // `switchToken` comment above. Applying a stale restore here would
+        // overwrite whatever the current root's own effect already put in
+        // place, and latching `restoredForRoot` to this stale `root` would
+        // then let the persistence-write effect below persist this stale
+        // result under the *current* root's storage key.
+        if (token !== switchToken) return;
+        if (restored) {
+          tabsState.set({ tabs: restored.tabs, activeTabPath: restored.activeTabPath });
+          editorPaneTree.set(restored.paneTree);
+          focusedEditorPaneId.set(restored.focusedPaneId);
+        }
+        restoredForRoot = root;
+      });
+    } else {
+      restoredForRoot = null;
+    }
+  });
+
+  // Persists the editor session (pane tree + focused pane) for the current
+  // root whenever it changes — but only once `restoreEditorSession` above
+  // has actually finished restoring this same root, per the guard comment
+  // on `restoredForRoot`.
+  $effect(() => {
+    const root = $workspace.root;
+    const tree = $editorPaneTree;
+    const focused = $focusedEditorPaneId;
+    if (root && restoredForRoot === root) {
+      saveEditorSession(root, { paneTree: tree, focusedPaneId: focused });
+    }
   });
 
   // Toggling the dock visible or opening a workspace are themselves
@@ -688,6 +754,7 @@
     void onCloseRequested(() => {
       const dirty = $tabsState.tabs.filter((t) => t.isDirty);
       if (dirty.length === 0) {
+        if ($workspace.root) flushEditorSession($workspace.root);
         void appConfirmClose();
         return;
       }

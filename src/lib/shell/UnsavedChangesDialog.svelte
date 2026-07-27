@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { get } from "svelte/store";
   import { closePrompt } from "../stores/closePrompt";
   import { closeTab, requestSave } from "../stores/tabs";
   import { appConfirmClose, isAppError } from "../ipc/commands";
-  import { confirmWorkspaceSwitch } from "../stores/workspace";
+  import { confirmWorkspaceSwitch, workspace } from "../stores/workspace";
+  import { flushEditorSession } from "../stores/editorSession";
 
   let panelEl: HTMLDivElement | undefined = $state();
   let errorMessage = $state<string | null>(null);
@@ -59,6 +61,8 @@
           return;
         }
       }
+      const root = get(workspace).root;
+      if (root) flushEditorSession(root);
       await appConfirmClose();
     } finally {
       saving = false;
@@ -67,6 +71,8 @@
   }
 
   async function discardAllThenClose(): Promise<void> {
+    const root = get(workspace).root;
+    if (root) flushEditorSession(root);
     await appConfirmClose();
     closePrompt.set(null);
   }
