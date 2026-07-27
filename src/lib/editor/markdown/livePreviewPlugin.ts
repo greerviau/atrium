@@ -1,5 +1,5 @@
-import type { Extension, Transaction } from "@codemirror/state";
-import { Prec, RangeSet, StateEffect, StateField } from "@codemirror/state";
+import type { Extension, RangeSet, Transaction } from "@codemirror/state";
+import { Prec, StateEffect, StateField } from "@codemirror/state";
 import { BlockWrapper, Decoration, EditorView, ViewPlugin, ViewUpdate, keymap, lineNumbers, type DecorationSet } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -90,77 +90,7 @@ const focusTrackingHandlers = EditorView.domEventHandlers({
  * it's dispatched in — a transaction carrying only one of these effects
  * changes no doc, selection, viewport, or focus, so without this the rebuild
  * guard below would skip it and the drag tint would never appear.
- *
- * When a syntax-tree-identity change with no accompanying doc change
- * actually changes `tableWraps`/`codeBlockWraps` (issue #311), the plugin
- * tries to preserve the user's visual scroll position across it: such a
- * change can retroactively reclassify a block that's already scrolled above
- * the viewport, and CodeMirror's real, DOM-measured scroll-anchor
- * compensation can't see that reclassification for content that's been
- * virtualized away (see the `update` method's own comment for the exact
- * mechanism, its limits, and why a direct edit is excluded).
  */
-// `requestMeasure`'s `key` dedups repeated scheduling within the same
-// measure cycle (matching `tableGeometryMeasurePlugin`'s own key below) —
-// irrelevant in practice here, since a background tree change only
-// schedules this once per update, but kept for the same reason that plugin
-// keys its own request.
-export const livePreviewScrollAnchorKey = Symbol("live-preview-scroll-anchor");
-
-/**
- * DOM *read* phase (see `measureTableGeometry`'s own docstring below for why
- * this must run inside `requestMeasure`'s `read`, not synchronously in
- * `update()`): how far `anchorPos`'s own height-map position has moved since
- * `anchorTopAtCapture` was recorded.
- */
-export function computeScrollAnchorDelta(view: EditorView, anchorPos: number, anchorTopAtCapture: number): number {
-  return view.lineBlockAt(anchorPos).top - anchorTopAtCapture;
-}
-
-/**
- * DOM *write* phase: nudges `scrollDOM.scrollTop` by `diff` — a *relative*
- * correction, not an absolute one. See `scheduleScrollAnchorRestore`'s own
- * docstring for why that distinction is what makes this safe against the
- * user's own in-flight scrolling. `1`px is CodeMirror's own threshold for
- * its equivalent built-in correction (`view/dist/index.js`'s measure loop),
- * kept the same here to avoid correcting sub-pixel noise.
- */
-export function applyScrollAnchorDelta(diff: number, view: EditorView): void {
-  if (Math.abs(diff) > 1) view.scrollDOM.scrollTop += diff;
-}
-
-/**
- * Schedules `computeScrollAnchorDelta`/`applyScrollAnchorDelta` as a single
- * `requestMeasure` read/write pass (the same way `tableGeometryMeasurePlugin`
- * below schedules its own DOM work from `update()`), not
- * `view.scrollSnapshot()` dispatched through a transaction.
- *
- * `scrollSnapshot()`'s effect is an *absolute* rewind (`DocView
- * .scrollIntoView`'s snapshot branch force-writes `scrollDOM.scrollTop`) that
- * only actually lands a full animation frame later, in CodeMirror's own
- * measure pass — long enough for the user's own in-flight scrolling (native
- * wheel/momentum input, which never goes through this plugin, and which a
- * same-tick guard cannot observe: it's delivered as a browser task, and
- * every microtask an update schedules drains before the next task runs) to
- * have moved `scrollDOM.scrollTop` in the meantime. Applying a stale
- * absolute target on top of that reproduces the exact backward jump this
- * guards against — and a pending absolute target also pre-empts CodeMirror's
- * own safe *relative* compensation instead of coexisting with it.
- *
- * Reading `scrollTop` fresh in `read` (rather than trusting a value captured
- * earlier) and writing an additive delta in `write` mirrors that safe
- * mechanism instead of racing it: whatever the user's own scrolling has done
- * by the time this runs, `diff` is added on top of it rather than replacing
- * it.
- */
-export function scheduleScrollAnchorRestore(view: EditorView, anchorPos: number, anchorTopAtCapture: number): void {
-  view.requestMeasure({
-    key: livePreviewScrollAnchorKey,
-    read: (readView) => computeScrollAnchorDelta(readView, anchorPos, anchorTopAtCapture),
-    write: applyScrollAnchorDelta,
-  });
-}
-
 function livePreviewPlugin(documentPath: string) {
   const plugin = ViewPlugin.fromClass(
     class {
@@ -207,55 +137,9 @@ function livePreviewPlugin(documentPath: string) {
             update.state.field(tableDragField),
           );
         }
-
-        const treeChanged = syntaxTree(update.startState) !== syntaxTree(update.state);
-        if (update.docChanged || treeChanged) {
-          // A background-parser tree completion (no doc change, no
-          // selection change — the same shape of transaction `forceParsing`
-          // simulates for the #85 tests above) can retroactively reclassify
-          // a block that's already scrolled above the viewport from plain
-          // text into a real `.cm-table-box`/`.cm-code-block-box` wrapper,
-          // changing its rendered height at a moment entirely decoupled
-          // from the user's own scroll input. CodeMirror's real scroll-anchor
-          // compensation (a later, DOM-measured pass, separate from the
-          // `StateField`-only detection that only drives the viewport
-          // recompute at update time) already handles this correctly for
-          // content that's still within the currently-drawn range — but a
-          // block reclassified while it's scrolled far enough to have been
-          // virtualized away never gets re-measured until it re-enters view,
-          // so that case is what this guards. A direct edit is excluded:
-          // its own scroll handling already covers the doc-changed case, and
-          // `buildTableWrapRanges`/`buildCodeBlockWrapRanges` only ever
-          // retroactively affect content the user *isn't* currently editing.
-          const backgroundReclassify = treeChanged && !update.docChanged;
-          const view = update.view;
-          // The first currently-drawn position is the anchor: whatever's at
-          // the top of the viewport. `view.visibleRanges` and `lineBlockAt`
-          // are both plain reads of CodeMirror's own internal height-map
-          // model (not the real DOM), so — unlike `measureTableGeometry`'s
-          // real DOM reads elsewhere in this file, which do need to wait for
-          // `requestMeasure`'s `read` phase — they're safe to call here, and
-          // at this exact point in `update()` they still reflect pre-change
-          // heights: this plugin's own wraps are the only thing about to
-          // change, and nothing has fed that into the height map yet
-          // (that's the underlying bug). `elementAtHeight`/`lineBlockAtHeight`
-          // are *not* safe here despite looking similar — CodeMirror gates
-          // both behind a "reading the editor layout isn't allowed during an
-          // update" check that `lineBlockAt(pos)` doesn't share.
-          const anchorPos = backgroundReclassify ? (view.visibleRanges[0]?.from ?? 0) : 0;
-          const anchorTopAtCapture = backgroundReclassify ? view.lineBlockAt(anchorPos).top : 0;
-
-          const newTableWraps = buildTableWrapRanges(update.state);
-          const newCodeBlockWraps = buildCodeBlockWrapRanges(update.state);
-          const wrapsChanged =
-            !RangeSet.eq([this.tableWraps], [newTableWraps]) ||
-            !RangeSet.eq([this.codeBlockWraps], [newCodeBlockWraps]);
-          this.tableWraps = newTableWraps;
-          this.codeBlockWraps = newCodeBlockWraps;
-
-          if (backgroundReclassify && wrapsChanged) {
-            scheduleScrollAnchorRestore(view, anchorPos, anchorTopAtCapture);
-          }
+        if (update.docChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
+          this.tableWraps = buildTableWrapRanges(update.state);
+          this.codeBlockWraps = buildCodeBlockWrapRanges(update.state);
         }
       }
     },
