@@ -88,17 +88,35 @@ describe("TerminalPane: destroyed while spawn is pending", () => {
 
   it("does not write to a disposed terminal if a pty event arrives after the pane is torn down", async () => {
     vi.mocked(commands.ptySpawn).mockResolvedValue("term-1");
-    let capturedCallback: ((event: { type: string; data?: string }) => void) | undefined;
+    let capturedCallback:
+      | ((event: { type: string; data?: string; cwd?: string; program?: string | null }) => void)
+      | undefined;
     vi.mocked(commands.ptySubscribe).mockImplementation((_id, cb) => {
       capturedCallback = cb as typeof capturedCallback;
       return Promise.resolve();
     });
+    const onExit = vi.fn();
+    const onTitleChange = vi.fn();
 
-    const { unmount } = render(TerminalPane, { cwd: "/workspace", workspaceId: "local" });
+    const { unmount } = render(TerminalPane, {
+      cwd: "/workspace",
+      workspaceId: "local",
+      onExit,
+      onTitleChange,
+    });
     await flushMicrotasks(); // let spawn + subscribe resolve
 
     unmount();
+    onTitleChange.mockClear(); // the pane emits its initial title during mount
 
-    expect(() => capturedCallback?.({ type: "data", data: "aGVsbG8=" })).not.toThrow();
+    expect(capturedCallback).toBeDefined();
+    expect(() => {
+      capturedCallback?.({ type: "data", data: "aGVsbG8=" });
+      capturedCallback?.({ type: "exit" });
+      capturedCallback?.({ type: "title", cwd: "/other", program: "vim" });
+    }).not.toThrow();
+
+    expect(onExit).not.toHaveBeenCalled();
+    expect(onTitleChange).not.toHaveBeenCalled();
   });
 });
