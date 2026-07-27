@@ -11,6 +11,7 @@ import {
   notifySaveFailed,
   type Tab,
 } from "../../src/lib/stores/tabs";
+import { errorToast } from "../../src/lib/stores/errorToast";
 import * as commands from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
@@ -156,6 +157,7 @@ describe("UnsavedChangesDialog", () => {
     });
 
     it("shows an error and leaves the tab open if the save fails", async () => {
+      errorToast.set(null);
       vi.mocked(commands.fsWriteFile).mockRejectedValueOnce(new Error("disk full"));
       render(UnsavedChangesDialog);
       await tick();
@@ -166,6 +168,11 @@ describe("UnsavedChangesDialog", () => {
       expect(get(tabsState).tabs).toHaveLength(1);
       expect(get(closePrompt)).not.toBeNull();
       expect(await screen.findByText(/disk full/)).toBeTruthy();
+
+      // Regresses a double-toast: this flow reports its own inline error
+      // (asserted above) and must never also trigger the shared error toast
+      // `requestSaveReportingErrors` uses for the other three save triggers.
+      expect(get(errorToast)).toBeNull();
     });
 
     it("does not hang a retried Save after a prior failure", async () => {

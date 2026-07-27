@@ -5,7 +5,7 @@ import { closePrompt } from "./closePrompt";
 import { workspace } from "./workspace";
 import { recordFileOpened } from "./recentFiles";
 import { showErrorToast, describeError } from "./errorToast";
-import { isPathUnderOrEqual } from "../util/path";
+import { basename, isPathUnderOrEqual } from "../util/path";
 
 export interface PendingSelection {
   line: number;
@@ -118,8 +118,7 @@ export function notifySaveFailed(path: string, error: unknown): void {
  */
 export function requestSaveReportingErrors(path: string): void {
   requestSave(path).catch((err: unknown) => {
-    const name = path.split("/").pop() ?? path;
-    showErrorToast(`Couldn't save ${name}: ${describeError(err)}`);
+    showErrorToast(`Couldn't save ${basename(path)}: ${describeError(err)}`);
   });
 }
 
