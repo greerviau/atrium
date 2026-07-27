@@ -20,6 +20,19 @@ const BUFFER_CAP: usize = 64 * 1024;
 /// lifetime, and fast enough that a tab title update never feels laggy.
 const TITLE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
+/// How often the shared flush loop drains each live session's `pending`
+/// output into a single `Data` event. Well under the ~100ms threshold
+/// generally considered perceptible for interactive echo latency, while
+/// still coalescing a flood of small reads into a handful of larger sends.
+const FLUSH_INTERVAL: Duration = Duration::from_millis(8);
+
+/// Safety cap on `Shared::pending`: if a burst of output between two flush
+/// ticks would push `pending` past this, `push_data` flushes immediately
+/// instead of waiting for the next tick. Bounds worst-case memory and
+/// message size for a producer fast enough to accumulate megabytes between
+/// two `FLUSH_INTERVAL` ticks, without changing the common-case cadence.
+const PENDING_CAP: usize = 256 * 1024;
+
 /// The last `(cwd, program)` pair reported for a session, kept so a poll
 /// tick that finds nothing has actually changed can skip sending an event.
 type TitleSnapshot = (String, Option<String>);
@@ -53,16 +66,24 @@ pub enum PtyEvent {
 struct Shared {
     channel: Option<Channel<PtyEvent>>,
     buffer: Vec<u8>,
+    /// Output accumulated since the last flush, once a channel is attached.
+    /// Distinct from `buffer` (which only ever holds pre-subscribe output):
+    /// this is the live path's coalescing window, drained by
+    /// `flush_output_loop` every `FLUSH_INTERVAL`, by `push_data` itself if
+    /// `PENDING_CAP` is exceeded first, or by `push_exit` before the last
+    /// `Exit` event goes out.
+    pending: Vec<u8>,
     exit_code: Option<Option<i32>>,
 }
 
 impl Shared {
     fn push_data(&mut self, chunk: &[u8]) {
         match &self.channel {
-            Some(channel) => {
-                let _ = channel.send(PtyEvent::Data {
-                    data: STANDARD.encode(chunk),
-                });
+            Some(_) => {
+                self.pending.extend_from_slice(chunk);
+                if self.pending.len() > PENDING_CAP {
+                    self.flush_pending();
+                }
             }
             None => {
                 self.buffer.extend_from_slice(chunk);
@@ -74,7 +95,25 @@ impl Shared {
         }
     }
 
+    /// Drains `pending` into a single `Data` event, if there's a channel
+    /// attached and anything to send. Called on the periodic flush tick,
+    /// immediately from `push_data` when `PENDING_CAP` is exceeded, and
+    /// from `push_exit` so the last sub-tick burst of output is never
+    /// dropped.
+    fn flush_pending(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        if let Some(channel) = &self.channel {
+            let _ = channel.send(PtyEvent::Data {
+                data: STANDARD.encode(&self.pending),
+            });
+            self.pending.clear();
+        }
+    }
+
     fn push_exit(&mut self, code: Option<i32>) {
+        self.flush_pending();
         match &self.channel {
             Some(channel) => {
                 let _ = channel.send(PtyEvent::Exit { code });
@@ -118,17 +157,20 @@ pub struct PtyManager {
 }
 
 impl PtyManager {
-    /// Constructs a manager and starts its single shared title-polling
-    /// thread. Replaces the previous `#[derive(Default)]` because the
-    /// poller needs to be started exactly once, alongside the sessions map
-    /// it watches — a session added to the map later is simply picked up on
-    /// the poller's next tick, and one removed via `kill` is simply absent
-    /// from it, with no separate registration/cancellation needed.
+    /// Constructs a manager and starts its two shared background threads —
+    /// title polling and output flushing. Replaces the previous
+    /// `#[derive(Default)]` because both need to be started exactly once,
+    /// alongside the sessions map they watch — a session added to the map
+    /// later is simply picked up on the next tick of each, and one removed
+    /// via `kill` is simply absent from it, with no separate
+    /// registration/cancellation needed.
     pub fn new() -> Self {
         let sessions: Arc<Mutex<HashMap<String, PtySession>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let poller_sessions = sessions.clone();
         std::thread::spawn(move || Self::poll_titles_loop(poller_sessions));
+        let flush_sessions = sessions.clone();
+        std::thread::spawn(move || Self::flush_output_loop(flush_sessions));
         Self { sessions }
     }
 
@@ -180,6 +222,7 @@ impl PtyManager {
         let shared = Arc::new(Mutex::new(Shared {
             channel: None,
             buffer: Vec::new(),
+            pending: Vec::new(),
             exit_code: None,
         }));
 
@@ -404,6 +447,32 @@ impl PtyManager {
             }
         }
         descendants
+    }
+
+    /// Runs for the app's entire lifetime on its own thread, ticking every
+    /// `FLUSH_INTERVAL` and draining each live session's `pending` output
+    /// (if any) into a single `Data` event. Mirrors `poll_titles_loop`'s
+    /// shape — snapshot session state under a brief lock, then act without
+    /// holding it — for the same reason: thread count stays O(1) regardless
+    /// of how many terminals are open, and a session is picked up or
+    /// dropped automatically by virtue of being present or absent in the
+    /// sessions map on the next tick.
+    fn flush_output_loop(sessions: Arc<Mutex<HashMap<String, PtySession>>>) {
+        loop {
+            std::thread::sleep(FLUSH_INTERVAL);
+
+            let shared_handles: Vec<Arc<Mutex<Shared>>> = {
+                let sessions = sessions.lock().unwrap();
+                sessions
+                    .values()
+                    .map(|session| session.shared.clone())
+                    .collect()
+            };
+
+            for shared in shared_handles {
+                shared.lock().unwrap().flush_pending();
+            }
+        }
     }
 
     /// Runs for the app's entire lifetime on its own thread, re-checking
