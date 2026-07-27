@@ -45,7 +45,12 @@
     terminalVisible,
     terminalPosition,
     setTerminalVisible,
+    loadExplorerWidth,
+    saveExplorerWidth,
+    EXPLORER_WIDTH_MIN,
+    EXPLORER_WIDTH_MAX,
   } from "./lib/stores/layout";
+  import { restoreEditorSession, saveEditorSession } from "./lib/stores/editorSession";
   import { folderName } from "./lib/terminal/tabTitle";
   import {
     splitPane,
@@ -81,7 +86,7 @@
 
   const initialLayout = loadTerminalLayout();
 
-  let explorerWidth = $state(240);
+  let explorerWidth = $state(loadExplorerWidth());
   let terminalHeight = $state(initialLayout.height);
   let terminalWidth = $state(initialLayout.width);
   let mainEl: HTMLDivElement | undefined = $state();
@@ -99,6 +104,15 @@
   // might update (e.g. the initial mount, or the id/root pair being set to
   // the same root again).
   let previousWorkspaceRoot: string | null = get(workspace).root;
+
+  // Which root `restoreEditorSession` has actually finished restoring into
+  // `editorPaneTree`/`tabsState`, so the persistence-write effect below can
+  // tell "the new project's own restored session changed" apart from "the
+  // reset effect just cleared the previous project's state on its way out" —
+  // without this guard, a naive write-on-every-change effect would overwrite
+  // the new root's not-yet-loaded persisted session with the transient empty
+  // state `resetTabs()` produces mid-switch.
+  let restoredForRoot: string | null = null;
 
   // Which of the two split-pane surfaces — the terminal dock or the
   // editor's own split panes — last had focus, so a global split-direction
@@ -528,11 +542,12 @@
     const startX = event.clientX;
     const startWidth = explorerWidth;
     function onMove(e: PointerEvent): void {
-      explorerWidth = Math.max(140, Math.min(600, startWidth + (e.clientX - startX)));
+      explorerWidth = Math.max(EXPLORER_WIDTH_MIN, Math.min(EXPLORER_WIDTH_MAX, startWidth + (e.clientX - startX)));
     }
     function onUp(): void {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      saveExplorerWidth(explorerWidth);
     }
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -564,9 +579,30 @@
     const root = $workspace.root;
     if (root === previousWorkspaceRoot) return;
     previousWorkspaceRoot = root;
+    restoredForRoot = null;
     resetTabs();
     terminalPaneTree = null;
     focusedPaneId = null;
+    if (root) {
+      void restoreEditorSession(root).finally(() => {
+        restoredForRoot = root;
+      });
+    } else {
+      restoredForRoot = null;
+    }
+  });
+
+  // Persists the editor session (pane tree + focused pane) for the current
+  // root whenever it changes — but only once `restoreEditorSession` above
+  // has actually finished restoring this same root, per the guard comment
+  // on `restoredForRoot`.
+  $effect(() => {
+    const root = $workspace.root;
+    const tree = $editorPaneTree;
+    const focused = $focusedEditorPaneId;
+    if (root && restoredForRoot === root) {
+      saveEditorSession(root, { paneTree: tree, focusedPaneId: focused });
+    }
   });
 
   // Toggling the dock visible or opening a workspace are themselves
