@@ -506,4 +506,90 @@ mod tests {
             events
         );
     }
+
+    // Positive case: a `.gitignore` entry for `node_modules` keeps every
+    // path under it — including a subdirectory and file created inside it
+    // in one burst — off the wire entirely, both the raw `notify` event and
+    // anything `reconcile_new_directory` would otherwise have synthesized.
+    #[tokio::test]
+    async fn a_gitignored_directory_produces_no_events_for_anything_created_inside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = canonical_root(&dir);
+        std::fs::write(root.join(".gitignore"), "node_modules\n").unwrap();
+
+        let (tx, mut rx) = unbounded_channel();
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
+
+        let pkg_dir = root.join("node_modules").join("pkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(pkg_dir.join("index.js"), "module.exports = {};").unwrap();
+
+        let events = drain_events(&mut rx, SETTLE_MS).await;
+        let ignored_root = root.join("node_modules").to_string_lossy().to_string();
+        assert!(
+            !events.iter().any(|e| e.path.starts_with(&ignored_root)),
+            "expected no events for anything under node_modules, got {events:?}"
+        );
+    }
+
+    // Negative case: a sibling, non-ignored file in the same root must still
+    // arrive normally — guards against the matcher over-matching beyond
+    // what the `.gitignore` actually lists.
+    #[tokio::test]
+    async fn a_non_ignored_sibling_file_still_reports_a_create_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = canonical_root(&dir);
+        std::fs::write(root.join(".gitignore"), "node_modules\n").unwrap();
+
+        let (tx, mut rx) = unbounded_channel();
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
+
+        let tracked = root.join("main.rs");
+        std::fs::write(&tracked, "fn main() {}").unwrap();
+        wait_until_seen(&mut rx, &tracked).await;
+    }
+
+    // Dot-directory case: `.git` is excluded by the dot-prefix rule alone,
+    // with no `.gitignore` entry needed — this is what keeps `.git` out of
+    // search/find-files today, and the watcher applies the same rule.
+    #[tokio::test]
+    async fn a_dot_prefixed_directory_produces_no_events_even_with_no_gitignore_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = canonical_root(&dir);
+
+        let (tx, mut rx) = unbounded_channel();
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
+
+        let git_dir = root.join(".git");
+        std::fs::create_dir(&git_dir).unwrap();
+        std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main").unwrap();
+
+        let events = drain_events(&mut rx, SETTLE_MS).await;
+        let ignored_root = git_dir.to_string_lossy().to_string();
+        assert!(
+            !events.iter().any(|e| e.path.starts_with(&ignored_root)),
+            "expected no events for anything under .git, got {events:?}"
+        );
+    }
+
+    // No-gitignore case: a root with no `.gitignore` at all must still
+    // watch normally — regression guard on `build_gitignore`'s empty-matcher
+    // fallback (the `require_git(false)`-equivalent posture).
+    #[tokio::test]
+    async fn a_root_with_no_gitignore_still_watches_normally() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = canonical_root(&dir);
+        assert!(!root.join(".gitignore").exists());
+
+        let (tx, mut rx) = unbounded_channel();
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
+
+        let tracked = root.join("main.rs");
+        std::fs::write(&tracked, "fn main() {}").unwrap();
+        wait_until_seen(&mut rx, &tracked).await;
+    }
 }
