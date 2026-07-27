@@ -30,6 +30,7 @@
       rows: [
         { label: "Open Folder", keys: "⌘O" },
         { label: "Save", keys: "⌘S" },
+        { label: "Close Tab", keys: "⌘W" },
         { label: "New Terminal Tab", keys: "⌘T" },
       ],
     },

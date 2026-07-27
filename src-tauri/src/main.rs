@@ -17,29 +17,37 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager};
 
 /// Builds the native menu bar: `Atrium` (About, Settings…, Quit), `File`
-/// (Open Folder, Save, New Terminal Tab), `Edit` (standard
+/// (Open Folder, Save, Close Tab, New Terminal Tab), `Edit` (standard
 /// Undo/Redo/Cut/Copy/Paste/Select All, plus Find in Files), `View` (Toggle
 /// File Explorer, Toggle Terminal, Split Terminal, Split Up/Down/Left/Right,
-/// Zoom In, Zoom Out, Reset Zoom), `Window` (standard), and `Help` (Keyboard
-/// Shortcuts…, Atrium on GitHub, Report an Issue…). Menu items that need
-/// frontend behavior (Settings, Open Folder, Save, New Terminal Tab, Find in
-/// Files, both View toggles, Split Terminal, the four Split direction items,
-/// all three zoom items, every Help item) emit a `menu:*` event; `App.svelte`
-/// / `MenuBar.ts` listen for these and dispatch to the active pane, the
-/// search overlay, the settings dialog, the panel-visibility store, the zoom
-/// store, the keyboard shortcuts panel, or the external-link opener, since
-/// the menu itself has no notion of "the active editor," "is the panel
-/// shown," or "the current zoom level." The four Split direction items are
-/// new accelerators (⌥⌘↑/↓/←/→) routed by `App.svelte`'s
-/// `splitFocusedSurface` to whichever of the terminal dock or the editor's
-/// split panes last had focus; `Split Terminal` (⌘\) is left as a
-/// pre-existing, terminal-only alias for split-right specifically, kept only
-/// so that binding's own muscle memory keeps working. The five
-/// file-explorer shortcuts (New File/Folder, Rename, Delete, Reveal in
-/// Finder) are deliberately absent from this menu: unlike every accelerator
-/// here, which fires regardless of what has focus, those five must act only
-/// on the file tree's own DOM-focused row, so they're implemented as plain
-/// JS `keydown` handlers in `FileTreeNode.svelte`/`FileTree.svelte` instead.
+/// Zoom In, Zoom Out, Reset Zoom), `Window` (Minimize, Close Window), and
+/// `Help` (Keyboard Shortcuts…, Atrium on GitHub, Report an Issue…). Menu
+/// items that need frontend behavior (Settings, Open Folder, Save, Close
+/// Tab, New Terminal Tab, Find in Files, both View toggles, Split Terminal,
+/// the four Split direction items, all three zoom items, every Help item)
+/// emit a `menu:*` event; `App.svelte` / `MenuBar.ts` listen for these and
+/// dispatch to the active pane, the search overlay, the settings dialog, the
+/// panel-visibility store, the zoom store, the keyboard shortcuts panel, or
+/// the external-link opener, since the menu itself has no notion of "the
+/// active editor," "is the panel shown," or "the current zoom level." The
+/// four Split direction items are new accelerators (⌥⌘↑/↓/←/→) routed by
+/// `App.svelte`'s `splitFocusedSurface` to whichever of the terminal dock or
+/// the editor's split panes last had focus; `Split Terminal` (⌘\) is left as
+/// a pre-existing, terminal-only alias for split-right specifically, kept
+/// only so that binding's own muscle memory keeps working. `Close Tab`
+/// (⌘W) is routed the same way, via `App.svelte`'s `closeFocusedTab`, to
+/// close the active tab on whichever surface last had focus. `Close Window`
+/// is a plain `MenuItem` with no accelerator (Cmd+W is claimed by `Close
+/// Tab` above): `muda`'s `PredefinedMenuItem::close_window` hardcodes
+/// Cmd+W and has no way to override it, so it can't be used here; the
+/// `on_menu_event` handler below special-cases `menu:close-window` to keep
+/// routing a mouse click on it through the existing whole-app close
+/// confirmation. The five file-explorer shortcuts (New File/Folder, Rename,
+/// Delete, Reveal in Finder) are deliberately absent from this menu: unlike
+/// every accelerator here, which fires regardless of what has focus, those
+/// five must act only on the file tree's own DOM-focused row, so they're
+/// implemented as plain JS `keydown` handlers in
+/// `FileTreeNode.svelte`/`FileTree.svelte` instead.
 ///
 /// The `Help` submenu's title is the literal string `"Help"`: on macOS,
 /// AppKit recognizes that exact title and automatically adds a menu-search
@@ -71,6 +79,13 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         Some("CmdOrCtrl+O"),
     )?;
     let save = MenuItem::with_id(app, "menu:save", "Save", true, Some("CmdOrCtrl+S"))?;
+    let close_tab = MenuItem::with_id(
+        app,
+        "menu:close-tab",
+        "Close Tab",
+        true,
+        Some("CmdOrCtrl+W"),
+    )?;
     let new_terminal_tab = MenuItem::with_id(
         app,
         "menu:new-terminal-tab",
@@ -85,6 +100,8 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         &[
             &open_folder,
             &save,
+            &PredefinedMenuItem::separator(app)?,
+            &close_tab,
             &PredefinedMenuItem::separator(app)?,
             &new_terminal_tab,
         ],
@@ -199,14 +216,13 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         ],
     )?;
 
+    let close_window =
+        MenuItem::with_id(app, "menu:close-window", "Close Window", true, None::<&str>)?;
     let window_menu = Submenu::with_items(
         app,
         "Window",
         true,
-        &[
-            &PredefinedMenuItem::minimize(app, None)?,
-            &PredefinedMenuItem::close_window(app, None)?,
-        ],
+        &[&PredefinedMenuItem::minimize(app, None)?, &close_window],
     )?;
 
     let shortcuts = MenuItem::with_id(
@@ -270,7 +286,11 @@ fn main() {
 
             let menu_handle = handle.clone();
             app.on_menu_event(move |_app, event| {
-                let _ = menu_handle.emit(event.id().as_ref(), ());
+                if event.id().as_ref() == "menu:close-window" {
+                    let _ = menu_handle.emit("app:close-requested", ());
+                } else {
+                    let _ = menu_handle.emit(event.id().as_ref(), ());
+                }
             });
 
             // Rust has no visibility into which tabs are dirty (that state

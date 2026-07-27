@@ -197,10 +197,9 @@
     if (target) splitEditorPaneAt(target, direction);
   }
 
-  // The four ⌥⌘-arrow menu items (§ issue #156) share one dispatch, unlike
-  // `splitFocusedPane` above (still exclusively wired to the pre-existing
-  // ⌘\ terminal-only alias): each of these needs to decide, at the moment
-  // it fires, which surface to act on. Prefers whichever of the terminal
+  // Shared by the ⌥⌘-arrow split shortcuts (§ issue #156) and Cmd+W (§ issue
+  // #279), both of which act on "whichever surface last had focus" rather
+  // than a specific pane of their own. Prefers whichever of the terminal
   // dock or the editor's split panes `lastFocusedSurface` names, as long as
   // that surface is currently eligible — the terminal is only eligible while
   // its dock is visible *and* has a pane tree at all (hiding the dock never
@@ -208,25 +207,21 @@
   // act on it," not just "empty"); the editor is eligible whenever it has a
   // pane tree. Falls back to whichever eligible surface exists, preferring
   // the terminal (matching today's ⌘\ behavior when nothing has explicitly
-  // claimed focus yet), and is a silent no-op if neither is eligible (e.g.
+  // claimed focus yet), and resolves to `null` if neither is eligible (e.g.
   // before any file has been opened and the terminal dock is hidden).
-  function splitFocusedSurface(direction: SplitDirection): void {
+  function resolveFocusedSurface(): "terminal" | "editor" | null {
     const terminalEligible = terminalPaneTree !== null && $terminalVisible;
     const editorEligible = $editorPaneTree !== null;
 
-    let target: "terminal" | "editor" | null;
-    if (lastFocusedSurface === "terminal" && terminalEligible) {
-      target = "terminal";
-    } else if (lastFocusedSurface === "editor" && editorEligible) {
-      target = "editor";
-    } else if (terminalEligible) {
-      target = "terminal";
-    } else if (editorEligible) {
-      target = "editor";
-    } else {
-      target = null;
-    }
+    if (lastFocusedSurface === "terminal" && terminalEligible) return "terminal";
+    if (lastFocusedSurface === "editor" && editorEligible) return "editor";
+    if (terminalEligible) return "terminal";
+    if (editorEligible) return "editor";
+    return null;
+  }
 
+  function splitFocusedSurface(direction: SplitDirection): void {
+    const target = resolveFocusedSurface();
     if (target === "terminal") {
       splitFocusedPane(direction);
     } else if (target === "editor") {
@@ -380,6 +375,32 @@
       syncActiveTabToFocusedPane();
     } else {
       requestCloseTab(path);
+    }
+  }
+
+  // Cmd+W (issue #279): closes the active tab on whichever surface last had
+  // focus, reusing the exact close path each tab strip's own × button uses
+  // (so dirty-tab protection and the "still open in another split pane"
+  // check both apply unchanged). A deliberate no-op when neither surface has
+  // an open tab — Cmd+W must never fall through to closing the window.
+  function closeFocusedTab(): void {
+    const target = resolveFocusedSurface();
+    if (target === "editor" && $editorPaneTree) {
+      const paneId =
+        $focusedEditorPaneId && findEditorLeaf($editorPaneTree, $focusedEditorPaneId)
+          ? $focusedEditorPaneId
+          : listEditorLeaves($editorPaneTree)[0]?.id;
+      const leaf = paneId ? findEditorLeaf($editorPaneTree, paneId) : null;
+      if (paneId && leaf?.activeTabPath) {
+        closeTabInEditorPane(paneId, leaf.activeTabPath);
+      }
+    } else if (target === "terminal" && terminalPaneTree) {
+      const paneId =
+        focusedPaneId && findLeaf(terminalPaneTree, focusedPaneId) ? focusedPaneId : listLeaves(terminalPaneTree)[0]?.id;
+      const leaf = paneId ? findLeaf(terminalPaneTree, paneId) : null;
+      if (paneId && leaf?.activeTabId) {
+        closeTabInPane(paneId, leaf.activeTabId);
+      }
     }
   }
 
@@ -619,7 +640,7 @@
       // just applied.
       saveTerminalLayout({ position: $terminalPosition, height: terminalHeight, width: terminalWidth });
     }
-    void initMenuBar(newTerminalTab, () => splitFocusedPane("right"), splitFocusedSurface);
+    void initMenuBar(newTerminalTab, () => splitFocusedPane("right"), splitFocusedSurface, closeFocusedTab);
     void onFsChanged((event) => {
       if (event.kind === "remove") {
         markPathDeleted(event.path);
