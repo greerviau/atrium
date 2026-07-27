@@ -1360,12 +1360,26 @@ mod tests {
             .unwrap();
 
         let received: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        // Timestamped inside the channel closure, right as the marker
+        // actually lands, rather than derived from a `wait_for` poll loop —
+        // `wait_for` only samples every 50ms, which would quantize any
+        // measurement taken after it returns to that cadence and make a
+        // tight, meaningful bound impossible to assert on.
+        let arrived_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
         let received_clone = received.clone();
+        let arrived_at_clone = arrived_at.clone();
         let channel = Channel::new(move |body| {
             if let InvokeResponseBody::Json(json) = body {
                 if let Ok(PtyEvent::Data { data }) = serde_json::from_str::<PtyEvent>(&json) {
                     if let Ok(bytes) = STANDARD.decode(data) {
-                        received_clone.lock().unwrap().extend_from_slice(&bytes);
+                        let mut received = received_clone.lock().unwrap();
+                        received.extend_from_slice(&bytes);
+                        if String::from_utf8_lossy(&received).contains("atrium-idle-burst-marker") {
+                            arrived_at_clone
+                                .lock()
+                                .unwrap()
+                                .get_or_insert_with(Instant::now);
+                        }
                     }
                 }
             }
@@ -1385,23 +1399,22 @@ mod tests {
         wait_for(
             Duration::from_secs(5),
             "output after an idle period took too long to arrive",
-            || {
-                String::from_utf8_lossy(&received.lock().unwrap())
-                    .contains("atrium-idle-burst-marker")
-            },
+            || arrived_at.lock().unwrap().is_some(),
         );
 
-        // `FLUSH_INTERVAL` is 8ms, so this should land in low tens of
-        // milliseconds under normal conditions; the bound here is loose
-        // enough to absorb scheduling jitter on a busy CI runner while
-        // still catching the real regression this test guards against — a
-        // coalescing window with no periodic flush at all, which would
-        // leave the marker sitting unflushed for seconds rather than
-        // milliseconds.
+        // `FLUSH_INTERVAL` is 8ms, so an exact measurement should land in
+        // low tens of milliseconds; 60ms leaves headroom for scheduling
+        // jitter while still being tight enough to catch a real regression
+        // (e.g. a coalescing window with no periodic flush at all, which
+        // would leave the marker sitting unflushed far longer than this).
+        // Deliberately not a round multiple of `wait_for`'s own 50ms poll
+        // cadence, even though this measurement no longer derives from it,
+        // so the two can never coincidentally land on the same boundary.
+        let elapsed = arrived_at.lock().unwrap().unwrap() - start;
         assert!(
-            start.elapsed() < Duration::from_secs(1),
-            "expected idle-then-burst output to arrive well under a second, took {:?}",
-            start.elapsed()
+            elapsed < Duration::from_millis(60),
+            "expected idle-then-burst output to arrive within about one flush interval, took {:?}",
+            elapsed
         );
 
         manager.kill(&terminal_id).unwrap();
