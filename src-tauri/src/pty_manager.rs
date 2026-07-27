@@ -98,7 +98,7 @@ impl Shared {
 }
 
 struct PtySession {
-    writer: Box<dyn Write + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     shared: Arc<Mutex<Shared>>,
@@ -212,7 +212,7 @@ impl PtyManager {
         self.sessions.lock().unwrap().insert(
             terminal_id.clone(),
             PtySession {
-                writer,
+                writer: Arc::new(Mutex::new(writer)),
                 master: pair.master,
                 child,
                 shared,
@@ -252,14 +252,24 @@ impl PtyManager {
     }
 
     pub fn write(&self, terminal_id: &str, data: &str) -> Result<(), AppError> {
-        let mut sessions = self.sessions.lock().unwrap();
-        let session = sessions
-            .get_mut(terminal_id)
-            .ok_or_else(|| AppError::NotFound(format!("unknown terminal: {terminal_id}")))?;
-        session
-            .writer
+        // Clone the writer handle while `sessions` is locked just long enough
+        // for the map lookup, then drop that lock before the write — matching
+        // `poll_one`'s pattern of never holding the global lock across OS I/O.
+        // A blocked write (PTY input buffer full because the foreground process
+        // isn't reading stdin) then only ever blocks this one terminal's own
+        // writer mutex, not spawn/resize/write/kill for every other terminal.
+        let writer = {
+            let sessions = self.sessions.lock().unwrap();
+            let session = sessions
+                .get(terminal_id)
+                .ok_or_else(|| AppError::NotFound(format!("unknown terminal: {terminal_id}")))?;
+            session.writer.clone()
+        };
+        return writer
+            .lock()
+            .unwrap()
             .write_all(data.as_bytes())
-            .map_err(|e| AppError::Other(format!("failed to write to pty: {e}")))
+            .map_err(|e| AppError::Other(format!("failed to write to pty: {e}")));
     }
 
     pub fn resize(&self, terminal_id: &str, cols: u16, rows: u16) -> Result<(), AppError> {
@@ -279,8 +289,12 @@ impl PtyManager {
     }
 
     pub fn kill(&self, terminal_id: &str) -> Result<(), AppError> {
-        let mut sessions = self.sessions.lock().unwrap();
-        if let Some(mut session) = sessions.remove(terminal_id) {
+        // Remove the entry under the lock (cheap, no syscalls), then release it
+        // before the process-tree walk/signal/wait below — that work doesn't
+        // touch the map and shouldn't block every other terminal's own
+        // spawn/write/resize/kill while it runs.
+        let session = self.sessions.lock().unwrap().remove(terminal_id);
+        if let Some(mut session) = session {
             let mut system = System::new();
             Self::kill_session(&mut session, &mut system);
         }
@@ -292,9 +306,20 @@ impl PtyManager {
     /// across every session being drained, rather than allocating one per
     /// session, since several tabs are commonly still open at quit.
     pub fn kill_all(&self) {
-        let mut sessions = self.sessions.lock().unwrap();
+        // Drain the whole map under the lock (cheap), then release it before
+        // reaping each session — same reasoning as `kill` above, but it matters
+        // more here: this loop runs once per session, so holding the lock for
+        // the whole thing would multiply the stall by however many terminals
+        // are open at quit.
+        let drained: Vec<PtySession> = self
+            .sessions
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(_, session)| session)
+            .collect();
         let mut system = System::new();
-        for (_, mut session) in sessions.drain() {
+        for mut session in drained {
             Self::kill_session(&mut session, &mut system);
         }
     }
@@ -940,5 +965,157 @@ mod tests {
                 system.process(Pid::from_u32(sleep_pid)).is_none()
             },
         );
+    }
+
+    /// Regression test for issue #262: `write` used to hold the global
+    /// `sessions` lock across the blocking `write_all` call, so a write that
+    /// couldn't drain (the pty's kernel-side input buffer full because the
+    /// foreground process isn't reading stdin) stalled every other
+    /// terminal's own spawn/write/resize/kill for as long as the write
+    /// stayed blocked. After the fix, only the stalled terminal's own writer
+    /// mutex is held across the blocking write, so spawning a second
+    /// terminal never waits on it.
+    #[test]
+    fn write_does_not_block_other_terminals_when_pty_input_buffer_is_full() {
+        let manager = PtyManager::new();
+        let dir_a = tempfile::tempdir().unwrap();
+        let terminal_a = manager
+            .spawn(dir_a.path().to_string_lossy().to_string(), 80, 24, None)
+            .unwrap();
+
+        let (channel_a, titles_a) = title_events_channel();
+        manager.subscribe(&terminal_a, channel_a).unwrap();
+
+        // A foreground process that never reads stdin, so nothing ever
+        // drains the pty's kernel-side input buffer.
+        manager.write(&terminal_a, "sleep 600\n").unwrap();
+        wait_for(
+            Duration::from_secs(10),
+            "no Title event ever reported program: Some(\"sleep\") while it was running",
+            || {
+                titles_a
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(_, program)| program.as_deref() == Some("sleep"))
+            },
+        );
+
+        std::thread::scope(|scope| {
+            // Large enough that draining it through the pty's line
+            // discipline (nothing ever reads it, since `sleep 600` never
+            // touches stdin) takes several seconds — comfortably longer than
+            // the bound asserted below, so this thread is still inside
+            // `write_all` when the assertion runs.
+            let writer_thread = scope.spawn(|| manager.write(&terminal_a, &"x".repeat(50_000_000)));
+
+            // Give the writer thread a moment to actually enter the write
+            // before proceeding.
+            std::thread::sleep(Duration::from_millis(300));
+
+            let dir_b = tempfile::tempdir().unwrap();
+            let start = Instant::now();
+            let terminal_b = manager
+                .spawn(dir_b.path().to_string_lossy().to_string(), 80, 24, None)
+                .unwrap();
+            assert!(
+                start.elapsed() < Duration::from_millis(1500),
+                "spawn() for a second terminal was blocked by terminal a's stalled write"
+            );
+
+            manager.kill(&terminal_a).unwrap();
+            manager.kill(&terminal_b).unwrap();
+
+            let _ = writer_thread.join().unwrap();
+        });
+    }
+
+    /// Regression test for the `kill`/`kill_all` lock-scope defect surfaced
+    /// while fixing #262: reaping a session used to hold the global
+    /// `sessions` lock across `kill_session`'s full descendant walk, signal
+    /// loop, and `child.wait()`, which stalled every other terminal's own
+    /// spawn/write/resize/kill for the duration. After the fix, the map is
+    /// only locked long enough to remove the entry being reaped.
+    #[test]
+    fn kill_does_not_block_other_terminals_while_reaping() {
+        let manager = PtyManager::new();
+        let dir_a = tempfile::tempdir().unwrap();
+        let terminal_a = manager
+            .spawn(
+                dir_a.path().to_string_lossy().to_string(),
+                80,
+                24,
+                Some("/bin/dash".to_string()),
+            )
+            .unwrap();
+
+        // Several backgrounded descendants so `kill_session`'s tree walk and
+        // signal loop have non-trivial work to do.
+        for _ in 0..5 {
+            manager.write(&terminal_a, "sleep 300 &\n").unwrap();
+        }
+
+        let shell_pid = manager
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&terminal_a)
+            .unwrap()
+            .shell_pid
+            .unwrap();
+        let mut system = System::new();
+        wait_for(
+            Duration::from_secs(10),
+            "backgrounded sleep descendants never appeared under the shell",
+            || {
+                system.refresh_processes_specifics(
+                    ProcessesToUpdate::All,
+                    true,
+                    ProcessRefreshKind::nothing(),
+                );
+                PtyManager::collect_descendants(&system, shell_pid)
+                    .into_iter()
+                    .filter(|&pid| {
+                        system
+                            .process(Pid::from_u32(pid))
+                            .is_some_and(|process| process.name().to_str() == Some("sleep"))
+                    })
+                    .count()
+                    >= 5
+            },
+        );
+
+        let dir_b = tempfile::tempdir().unwrap();
+        let terminal_b = manager
+            .spawn(dir_b.path().to_string_lossy().to_string(), 80, 24, None)
+            .unwrap();
+
+        std::thread::scope(|scope| {
+            let kill_thread = scope.spawn(|| manager.kill(&terminal_a));
+
+            // Give the kill thread a moment to actually start and acquire
+            // the sessions lock before `resize` below tries for it — without
+            // this, `resize` on the main thread routinely wins the race to
+            // spawn a fresh OS thread and never contends on the lock at all.
+            std::thread::sleep(Duration::from_millis(2));
+
+            // `resize` is just an ioctl and normally returns in well under a
+            // millisecond; 10ms leaves ample margin for scheduling jitter
+            // while staying well below the tens of milliseconds
+            // `kill_session`'s process-table refresh and signal loop take
+            // (measured ~28ms for a shell with 5 descendants on this
+            // machine), so this bound only passes if `resize` truly wasn't
+            // serialized behind terminal a's reaping.
+            let start = Instant::now();
+            manager.resize(&terminal_b, 100, 40).unwrap();
+            assert!(
+                start.elapsed() < Duration::from_millis(10),
+                "resize() for another terminal was blocked by terminal a's reaping"
+            );
+
+            kill_thread.join().unwrap().unwrap();
+        });
+
+        manager.kill(&terminal_b).unwrap();
     }
 }
