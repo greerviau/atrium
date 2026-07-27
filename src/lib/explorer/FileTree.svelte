@@ -18,6 +18,12 @@
   import { dirOf } from "../util/path";
   import { SHORTCUT_LABELS } from "../shell/shortcutLabels";
 
+  // Mirrors `TerminalPane.svelte`'s own platform check: the file-explorer
+  // shortcuts below need the same Cmd-on-Mac/Ctrl-elsewhere branching
+  // `terminalKeyHandling.ts` uses, and there is no shared export for this —
+  // each caller computes it locally.
+  const isMacPlatform = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
+
   let treeEl: HTMLDivElement;
   let detach: (() => void) | undefined;
 
@@ -141,9 +147,9 @@
     if (event.target !== treeEl) return;
     const root = $fileTree.root;
     if (!root) return;
-    const cmd = event.metaKey;
+    const hasModifier = isMacPlatform ? event.metaKey : event.ctrlKey && !event.metaKey;
     const key = event.key.toLowerCase();
-    if (cmd && !event.altKey && key === "n") {
+    if (hasModifier && !event.altKey && key === "n") {
       event.preventDefault();
       treeActionRequest.set({
         action: event.shiftKey ? "newFolder" : "newFile",

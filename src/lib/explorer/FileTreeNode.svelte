@@ -12,6 +12,12 @@
 
   let { node, depth = 0 }: { node: TreeNode; depth?: number } = $props();
 
+  // Mirrors `TerminalPane.svelte`'s own platform check: the file-explorer
+  // shortcuts below need the same Cmd-on-Mac/Ctrl-elsewhere branching
+  // `terminalKeyHandling.ts` uses, and there is no shared export for this —
+  // each caller computes it locally.
+  const isMacPlatform = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
+
   let isEditing = $derived($editingPath === node.entry.path);
   let dropTargetActive = $derived($dragOverTargetDir === node.entry.path);
   let rowEl: HTMLDivElement;
@@ -50,24 +56,27 @@
       onClick();
       return;
     }
-    const cmd = event.metaKey;
+    const hasModifier = isMacPlatform ? event.metaKey : event.ctrlKey && !event.metaKey;
+    const hasRevealModifier = isMacPlatform
+      ? event.metaKey && event.altKey
+      : event.ctrlKey && event.altKey && !event.metaKey;
     const key = event.key.toLowerCase();
-    if (cmd && !event.altKey && key === "n") {
+    if (hasModifier && !event.altKey && key === "n") {
       event.preventDefault();
       dispatchAction(event.shiftKey ? "newFolder" : "newFile");
       return;
     }
-    if (!cmd && !event.altKey && event.key === "F2") {
+    if (!hasModifier && !event.altKey && event.key === "F2") {
       event.preventDefault();
       dispatchAction("rename");
       return;
     }
-    if (cmd && !event.altKey && event.key === "Backspace") {
+    if (hasModifier && !event.altKey && event.key === "Backspace") {
       event.preventDefault();
       dispatchAction("delete");
       return;
     }
-    if (cmd && event.altKey && key === "r") {
+    if (hasRevealModifier && key === "r") {
       event.preventDefault();
       dispatchAction("reveal");
     }
