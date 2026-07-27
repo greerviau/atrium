@@ -251,9 +251,6 @@ fn search_root<M: Matcher + Sync>(
                     truncated.store(true, Ordering::SeqCst);
                     return WalkState::Quit;
                 }
-                if total_match_count.load(Ordering::SeqCst) >= SEARCH_TOTAL_MATCH_CAP {
-                    return WalkState::Quit;
-                }
 
                 let entry = match entry {
                     Ok(entry) => entry,
@@ -1980,6 +1977,37 @@ mod tests {
             let name = format!("file{i}.txt");
             ws.create_file(&name).await.unwrap();
             ws.write_file(&name, "needle\n").await.unwrap();
+        }
+
+        let results = ws.search("needle", options(false, false)).await.unwrap();
+
+        assert_eq!(results.matches.len(), SEARCH_TOTAL_MATCH_CAP);
+        assert!(results.truncated);
+    }
+
+    #[tokio::test]
+    async fn search_reports_truncated_for_a_lone_match_just_beyond_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        // SEARCH_TOTAL_MATCH_CAP matching files plus exactly one more,
+        // diluted among a large set of non-matching filler files. This is
+        // the case an entry-level "count already at cap, quit" shortcut
+        // gets wrong: once the count reaches the cap, every remaining
+        // directory entry (including the one holding the last, over-the-cap
+        // match) gets skipped without ever being opened, so
+        // `total_cap_hit` never fires and `truncated` is never set —
+        // silently under-reporting instead of flagging the drop.
+        let matching_files = SEARCH_TOTAL_MATCH_CAP + 1;
+        let filler_files = 2000;
+        for i in 0..matching_files {
+            let name = format!("match{i:04}.txt");
+            ws.create_file(&name).await.unwrap();
+            ws.write_file(&name, "needle\n").await.unwrap();
+        }
+        for i in 0..filler_files {
+            let name = format!("filler{i:04}.txt");
+            ws.create_file(&name).await.unwrap();
+            ws.write_file(&name, "no match here\n").await.unwrap();
         }
 
         let results = ws.search("needle", options(false, false)).await.unwrap();
