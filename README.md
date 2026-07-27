@@ -22,10 +22,11 @@ npm run tauri dev
 ## Checks
 
 ```sh
-npm run check          # svelte-check (TypeScript + Svelte diagnostics)
-npm test                # frontend unit tests (Vitest)
-cargo test --manifest-path src-tauri/Cargo.toml   # Rust unit/integration tests
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets
+npm run check     # svelte-check (TypeScript + Svelte diagnostics), fails on warnings
+npm test          # frontend unit tests (Vitest)
+cargo fmt --manifest-path src-tauri/Cargo.toml --check                          # Rust formatting
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings  # Rust lints, fails on warnings
+cargo test --manifest-path src-tauri/Cargo.toml --locked                        # Rust unit/integration tests
 ```
 
 End-to-end smoke tests live in `tests/e2e/` and require a real display and the full Tauri build toolchain; see `tests/e2e/README.md`.
