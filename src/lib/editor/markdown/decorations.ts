@@ -754,10 +754,11 @@ export const NARROW_COLUMN_MAX_CHARS = 16;
  * combined demand (`NARROW_COLUMN_MAX_CHARS` + ~2ch padding each) has to stay
  * inside the narrowest `--atrium-prose-max-width` anyone is plausibly running,
  * because a narrow column refuses to wrap and therefore can't be squeezed:
- * overshooting would push the table past its cap with no `overflow-x` on
- * `.cm-table-box` to trap it, re-opening issue #199's sideways-scrolling
- * `.cm-content`. Three columns cost at most 54ch, which clears even the 65ch
- * this variable shipped with.
+ * overshooting would push the table past its cap, forcing `.cm-table-scroll`'s
+ * `overflow-x: auto` (markdown.css) to trap the excess as a horizontal
+ * scrollbar on an otherwise-ordinary table instead of letting it wrap.
+ * Three columns cost at most 54ch, which clears even the 65ch this variable
+ * shipped with.
  */
 export const MAX_NARROW_COLUMNS = 3;
 
@@ -1102,11 +1103,18 @@ function decorateTable(
 }
 
 /**
- * Builds one `BlockWrapper` per `Table` node in the whole document — a real
- * `<div class="cm-table-box">` DOM parent of that table's own line rows
- * (`EditorView.blockWrappers`, added in `@codemirror/view` 6.39.0). This is
- * the anchor both the width cap (`max-width: 100cqw` in `markdown.css`) and
- * everything phase 2 draws outside the table's own border rely on.
+ * Builds two overlapping `BlockWrapper`s per `Table` node in the whole
+ * document, over the same range — a real `<div class="cm-table-scroll">`
+ * wrapping a real `<div class="cm-table-box">`, itself the DOM parent of
+ * that table's own line rows (`EditorView.blockWrappers`, added in
+ * `@codemirror/view` 6.39.0). `.cm-table-scroll` is given `rank: 60`,
+ * higher than `.cm-table-box`'s default `50`, so it nests as the *outer*
+ * ancestor (`BlockWrapperSpec.rank`: lower-rank wrappers nest inside
+ * higher-rank ones). `.cm-table-scroll` carries the width cap and
+ * `overflow-x: auto` containment (`markdown.css`) — a `display: table` box
+ * can't take `overflow-x` itself — while `.cm-table-box` keeps
+ * `position: relative` as the anchor everything phase 2 draws outside the
+ * table's own border relies on.
  *
  * Built from each `Table` node's own `from`/`to` — not `view.visibleRanges`
  * like `buildDecorations` — since a `BlockWrapper`'s range describes DOM
@@ -1144,6 +1152,9 @@ export function buildTableWrapRanges(state: EditorState): RangeSet<BlockWrapper>
       if (ref.name === "Table") {
         const wrapperFrom = state.doc.lineAt(ref.from).from;
         wrappers.push(BlockWrapper.create({ tagName: "div", attributes: { class: CLASS.tableBox } }).range(wrapperFrom, ref.to));
+        wrappers.push(
+          BlockWrapper.create({ tagName: "div", attributes: { class: CLASS.tableScroll }, rank: 60 }).range(wrapperFrom, ref.to),
+        );
         return false;
       }
       if (ref.name !== "Document" && !BLOCK_CONTAINER_NODES.has(ref.name)) {

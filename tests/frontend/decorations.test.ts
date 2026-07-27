@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { EditorState, EditorSelection } from "@codemirror/state";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { EditorView } from "@codemirror/view";
+import { EditorView, type BlockWrapper } from "@codemirror/view";
 import { syntaxTree } from "@codemirror/language";
 import {
   buildCodeBlockWrapRanges,
@@ -23,6 +23,7 @@ import {
   type TableHoverState,
 } from "../../src/lib/editor/markdown/tableHandles";
 import { markdownExtensions, markdownSourceExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
+import { CLASS } from "../../src/lib/editor/markdown/theme";
 
 const markdownCss = readFileSync(resolve(__dirname, "../../src/styles/markdown.css"), "utf-8");
 
@@ -2654,22 +2655,47 @@ describe("markdown.css: prose line wrap width (issue #147, revised for #199)", (
   });
 });
 
-describe("markdown.css: table wrap/border redesign (issue #201 phase 1, revised for #199)", () => {
-  // `.cm-table-box` (the `EditorView.blockWrappers` wrapper `buildTableWrapRanges`
-  // provides) is what carries the table's own width cap now — `max-width`,
-  // never a bare `width`, since `width` is a *preferred* width CSS's auto
-  // table-layout algorithm stretches every column out to fill, padding even
-  // a short table out to the full column. The cap is now the same shared
-  // reading column every other block-level element uses, with an explicit
-  // column inset (not `margin-inline: auto`, which would mis-center a table
-  // narrower than the column instead of aligning its left edge to it).
-  it(".cm-table-box caps at the shared reading column via max-width, never a bare width, with an explicit inset, and anchors phase 2's overlays", () => {
-    const body = ruleBodyFor(".cm-content.cm-md-rendered .cm-table-box");
-    expect(body).toMatch(/display:\s*table/);
+describe("markdown.css: table wrap/border redesign (issue #201 phase 1, revised for #199 and #295)", () => {
+  // `.cm-table-scroll` (the outer of the two `EditorView.blockWrappers`
+  // `buildTableWrapRanges` provides) is what carries the table's own width
+  // cap now — `max-width`, never a bare `width`, since `width` is a
+  // *preferred* width CSS's auto table-layout algorithm stretches every
+  // column out to fill, padding even a short table out to the full column.
+  // The cap is the same shared reading column every other block-level
+  // element uses, with an explicit column inset (not `margin-inline: auto`,
+  // which would mis-center a table narrower than the column instead of
+  // aligning its left edge to it). `overflow-x: auto` traps a genuinely
+  // unbroken long token instead of letting it inflate `.cm-content`
+  // sideways (issue #199) — a `display: table` box can't take `overflow-x`
+  // itself, which is why this lives one level up. The padding matches each
+  // overlay widget's own outward offset (issue #295) — row handle
+  // (`left: -22px`), column bar (`top: -18px`), add-row band
+  // (`bottom: -10px`), add-column band (`right: -10px`) — so none of them
+  // gets clipped by the new scroll container. The bottom value (13px, not
+  // 10) additionally absorbs the add-row band's own "+" glyph, whose
+  // `line-height: 1` inline box renders taller than the band's 8px height
+  // and spills past a plain 10px match, measured as a real 3px vertical
+  // scroll range at rest before this bump.
+  it(".cm-table-scroll caps at the shared reading column via max-width, traps overflow, and pads for the overlay widgets", () => {
+    const body = ruleBodyFor(".cm-content.cm-md-rendered .cm-table-scroll");
     expect(body).toMatch(/max-width:\s*min\(var\(--atrium-prose-max-width\),\s*100cqw\)/);
     expect(body).toMatch(/margin-inline-start:\s*max\(0px,\s*\(100cqw\s*-\s*var\(--atrium-prose-max-width\)\)\s*\/\s*2\)/);
     expect(body).not.toMatch(/margin-inline:\s*auto/);
     expect(body).not.toMatch(/(?:^|[^-])width:\s*100cqw/);
+    expect(body).toMatch(/overflow-x:\s*auto/);
+    expect(body).toMatch(/box-sizing:\s*border-box/);
+    expect(body).toMatch(/padding:\s*18px\s+10px\s+13px\s+22px/);
+  });
+
+  // `.cm-table-box` (the inner wrapper) keeps the table's own shrink-to-fit
+  // layout, border, and positioned-ancestor anchor for phase 2's
+  // handles/bands, but no longer carries the width cap or column inset
+  // itself — `.cm-table-scroll` above does that now.
+  it(".cm-table-box keeps display:table, its own border, and the positioned anchor for phase 2's overlays, with no width cap of its own", () => {
+    const body = ruleBodyFor(".cm-content.cm-md-rendered .cm-table-box");
+    expect(body).toMatch(/display:\s*table/);
+    expect(body).not.toMatch(/max-width/);
+    expect(body).not.toMatch(/margin-inline/);
     expect(body).toMatch(/position:\s*relative/);
     expect(body).toMatch(/border-top/);
     expect(body).toMatch(/border-left/);
@@ -2683,8 +2709,29 @@ describe("markdown.css: table wrap/border redesign (issue #201 phase 1, revised 
     expect(ruleBodyFor(".cm-table-row")).not.toMatch(/white-space/);
   });
 
-  it(".cm-table-cell keeps a defensive (currently redundant) overflow-wrap declaration", () => {
-    expect(ruleBodyFor(".cm-table-cell")).toMatch(/overflow-wrap:\s*anywhere/);
+  // Issue #295: `anywhere` counted its own soft-wrap opportunities toward
+  // min-content, dragging every column's min-content down toward ~1
+  // character and licensing the shrink-to-fit algorithm to crush whichever
+  // column had the least max-content demand. `break-word` leaves min-content
+  // anchored to real word/hyphen boundaries instead, and the much smaller
+  // `min-width` floor is kept only for an empty cell's clickable area now
+  // that `.cm-table-scroll`'s own `overflow-x: auto` (above), not this
+  // property, is what contains one genuinely unbroken long token.
+  //
+  // `word-break: normal` is required alongside `overflow-wrap: break-word`,
+  // not optional: CodeMirror's own base theme sets `word-break: break-word`
+  // on `.cm-lineWrapping` (always active for a markdown pane), which
+  // inherits into every cell, and per CSS Text 3 that legacy value computes
+  // to `word-break: normal` plus an `overflow-wrap` of `anywhere` regardless
+  // of this element's own `overflow-wrap` — so without neutralizing it here,
+  // the inherited value silently puts `anywhere`-equivalent crushing back in
+  // effect and the `overflow-wrap: break-word` above never actually renders.
+  it(".cm-table-cell sizes columns from real word/hyphen boundaries (break-word + word-break: normal) with a small defensive min-width floor", () => {
+    const body = ruleBodyFor(".cm-table-cell");
+    expect(body).toMatch(/overflow-wrap:\s*break-word;/);
+    expect(body).not.toMatch(/overflow-wrap:\s*anywhere;/);
+    expect(body).toMatch(/word-break:\s*normal;/);
+    expect(body).toMatch(/min-width:\s*3ch/);
   });
 });
 
@@ -2749,10 +2796,24 @@ describe("buildTableWrapRanges", () => {
     return out;
   }
 
+  // `buildTableWrapRanges` now pushes two overlapping wrappers per table
+  // (`.cm-table-scroll` and `.cm-table-box`, see the dedicated test below) —
+  // these range-logic tests care about one table producing one wrapped
+  // range, so this filters down to just the inner `.cm-table-box` wrapper,
+  // keeping their assertions about *which* range gets wrapped unchanged.
+  // `BlockWrapper`'s own `attributes`/`rank` fields are `@internal` in
+  // `@codemirror/view`'s public types (present at runtime, absent from the
+  // `.d.ts`) — same reason `buildDecorations`'s own `collectDecorations`
+  // above reaches for `Decoration`'s internal `isReplace` field through an
+  // `as unknown as` cast rather than a public accessor.
+  function wrapperMeta(value: BlockWrapper): { attributes?: { class?: string }; rank: number } {
+    return value as unknown as { attributes?: { class?: string }; rank: number };
+  }
+
   function collectWraps(state: EditorState): { from: number; to: number }[] {
     const out: { from: number; to: number }[] = [];
-    buildTableWrapRanges(state).between(0, state.doc.length, (from, to) => {
-      out.push({ from, to });
+    buildTableWrapRanges(state).between(0, state.doc.length, (from, to, value) => {
+      if (wrapperMeta(value).attributes?.class === CLASS.tableBox) out.push({ from, to });
     });
     return out;
   }
@@ -2794,6 +2855,36 @@ describe("buildTableWrapRanges", () => {
   it("produces no wrapper at all for a document with no table", () => {
     const state = stateFor("plain text, no table here\n", 0);
     expect(collectWraps(state)).toEqual([]);
+  });
+
+  // Issue #295: `.cm-table-scroll` needs to nest *outside* `.cm-table-box`
+  // so it can supply an `overflow-x: auto` scroll container that a
+  // `display: table` box can't be given directly — `rank` is what controls
+  // that nesting order ("lower rank wrappers are nested inside higher-rank
+  // ones", unspecified defaults to 50). This mirrors the single-wrapper span
+  // test above, but over both wrappers `buildTableWrapRanges` now produces
+  // for the one `Table` node.
+  it("emits two overlapping wrappers per table — cm-table-scroll ranked above cm-table-box — over the same range", () => {
+    const doc = "| Name | Role |\n| --- | --- |\n| Alice | Engineer |\n";
+    const state = stateFor(doc, doc.length);
+    const wraps: { from: number; to: number; class: string | undefined; rank: number }[] = [];
+    buildTableWrapRanges(state).between(0, state.doc.length, (from, to, value) => {
+      const meta = wrapperMeta(value);
+      wraps.push({ from, to, class: meta.attributes?.class, rank: meta.rank });
+    });
+
+    expect(wraps).toHaveLength(2);
+    const [expectedRange] = tableLineStartRanges(state);
+    for (const wrap of wraps) {
+      expect(wrap.from).toBe(expectedRange.from);
+      expect(wrap.to).toBe(expectedRange.to);
+    }
+
+    const scroll = wraps.find((w) => w.class === CLASS.tableScroll);
+    const box = wraps.find((w) => w.class === CLASS.tableBox);
+    expect(scroll).toBeDefined();
+    expect(box).toBeDefined();
+    expect(scroll!.rank).toBeGreaterThan(box!.rank);
   });
 });
 
