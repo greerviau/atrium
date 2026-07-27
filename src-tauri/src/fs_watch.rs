@@ -25,15 +25,6 @@ pub fn watch(
         move |result: DebounceEventResult| match result {
             Ok(events) => {
                 for event in events {
-                    // TEMPORARY DIAGNOSTIC (removed before landing): dumps the
-                    // raw notify::EventKind reaching the debouncer, to confirm
-                    // exactly which variant macOS's FSEvents backend produces
-                    // for a same-directory rename and a plain delete before
-                    // committing to a specific #[ignore] reason.
-                    eprintln!(
-                        "[DIAG] kind={:?} paths={:?}",
-                        event.event.kind, event.event.paths
-                    );
                     // `notify-debouncer-full`'s own file-id/rename-cookie
                     // tracking already correlates a rename's `From`/`To`
                     // halves within the debounce window when it can,
@@ -184,19 +175,51 @@ mod tests {
     }
 
     // The debounce window is 150ms; every test waits well past that before
-    // asserting on what arrived. `STARTUP_SETTLE_MS` is slack before the
-    // first mutation: tests are drained (not just slept) for this long
-    // right after the watcher starts, so a setup-time event still sitting
-    // in the debouncer (e.g. from an initial `std::fs::write` just before
-    // the watch was registered) is discarded from `rx` and its own 150ms
-    // debounce window has fully closed before the mutation under test
-    // begins — otherwise the two could land in the same debounce window
-    // and get coalesced together (an unpaired rename half, or a
-    // create+remove merged into a single Modify). GitHub Actions' macOS
-    // runners need noticeably more of both windows than a local machine or
-    // Linux's inotify does.
+    // asserting on what arrived. `STARTUP_SETTLE_MS` is slack right after
+    // the watcher starts, drained (not just slept through) so any bleed
+    // from the watched root's own creation is discarded from `rx` before
+    // a test does anything else. GitHub Actions' macOS runners need
+    // noticeably more of it than a local machine or Linux's inotify does.
     const STARTUP_SETTLE_MS: u64 = 500;
     const SETTLE_MS: u64 = 2000;
+
+    /// Blocks until `rx` produces a `Create` event for exactly `path` (or
+    /// panics on timeout). A test that needs a file to exist before its
+    /// real mutation must create it *after* the watcher is already running
+    /// and wait for that creation to round-trip through here before
+    /// mutating it — not because of debouncer-level coalescing (already
+    /// handled by keeping operations in separate 150ms windows), but
+    /// because macOS's FSEvents itself coalesces multiple flags for the
+    /// *same path* into one summarized event when they're still in flight
+    /// on the OS side; a setup create landing in the same OS-level window
+    /// as the mutation under test can get folded into it (e.g. a create
+    /// immediately followed by a rename summarizing as a single plain
+    /// create for the destination, or a create-then-remove summarizing as
+    /// a single `Modify`). Waiting for the create to have already been
+    /// observed guarantees no such window remains open.
+    async fn wait_until_seen(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<FsChangeEvent>,
+        path: &Path,
+    ) {
+        let target = path.to_string_lossy().to_string();
+        let deadline = TokioInstant::now() + TokioDuration::from_millis(SETTLE_MS);
+        loop {
+            let remaining = deadline.saturating_duration_since(TokioInstant::now());
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for a Create event for {target}"
+            );
+            match timeout(remaining, rx.recv()).await {
+                Ok(Some(event))
+                    if event.path == target && matches!(event.kind, FsChangeKind::Create) =>
+                {
+                    return
+                }
+                Ok(Some(_)) => continue,
+                _ => panic!("timed out waiting for a Create event for {target}"),
+            }
+        }
+    }
 
     /// `/var` on macOS is itself a symlink to `/private/var`; `tempfile`
     /// returns the unresolved `/var/...` form, but `notify`'s macOS backend
@@ -213,11 +236,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = canonical_root(&dir);
         let from = root.join("old.txt");
-        std::fs::write(&from, "hi").unwrap();
 
         let (tx, mut rx) = unbounded_channel();
         let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
         let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
+
+        std::fs::write(&from, "hi").unwrap();
+        wait_until_seen(&mut rx, &from).await;
 
         let to = root.join("new.txt");
         std::fs::rename(&from, &to).unwrap();
@@ -245,11 +270,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = canonical_root(&dir);
         let path = root.join("gone.txt");
-        std::fs::write(&path, "bye").unwrap();
 
         let (tx, mut rx) = unbounded_channel();
         let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
         let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
+
+        std::fs::write(&path, "bye").unwrap();
+        wait_until_seen(&mut rx, &path).await;
 
         std::fs::remove_file(&path).unwrap();
 
@@ -277,11 +304,13 @@ mod tests {
         let root = canonical_root(&dir);
         let outside = tempfile::tempdir().unwrap();
         let from = root.join("leaving.txt");
-        std::fs::write(&from, "hi").unwrap();
 
         let (tx, mut rx) = unbounded_channel();
         let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
         let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
+
+        std::fs::write(&from, "hi").unwrap();
+        wait_until_seen(&mut rx, &from).await;
 
         let to = canonical_root(&outside).join("leaving.txt");
         std::fs::rename(&from, &to).unwrap();
