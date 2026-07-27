@@ -44,6 +44,7 @@
   let terminal: Terminal;
   let fitAddon: FitAddon;
   let terminalId: string | undefined;
+  let destroyed = false;
   let resizeObserver: ResizeObserver;
   let titleChangeDisposable: { dispose(): void };
 
@@ -187,21 +188,41 @@
     (async () => {
       const cols = terminal.cols;
       const rows = terminal.rows;
-      terminalId = await ptySpawn(cwd, cols, rows);
+      const id = await ptySpawn(cwd, cols, rows);
+      if (destroyed) {
+        // The pane was torn down while ptySpawn was still in flight —
+        // onDestroy ran before terminalId existed to guard on, so it never
+        // killed this pty. This is the first and only point where the id is
+        // known, so it's the last chance to kill it. Skip ptySubscribe
+        // entirely: there's no live terminal left to write into, and no
+        // exit/title callback left that should still fire.
+        void ptyKill(id);
+        return;
+      }
+      terminalId = id;
       // Captured after ptySpawn resolves (not before) so the elapsed time
       // measures the pty's own lifetime, not this call's IPC round-trip;
       // performance.now() is monotonic, unlike Date.now(), so a backwards
       // wall-clock correction can't produce a negative elapsed value.
       const spawnedAt = performance.now();
-      await ptySubscribe(terminalId, (event) => {
-        if (event.type === "data") {
-          terminal.write(base64ToBytes(event.data));
-        } else if (event.type === "exit") {
-          onExit?.(performance.now() - spawnedAt);
-        } else if (event.type === "title") {
-          dispatch({ type: "backendTitle", cwd: event.cwd, program: event.program });
-        }
-      });
+      try {
+        await ptySubscribe(id, (event) => {
+          if (destroyed) return;
+          if (event.type === "data") {
+            terminal.write(base64ToBytes(event.data));
+          } else if (event.type === "exit") {
+            onExit?.(performance.now() - spawnedAt);
+          } else if (event.type === "title") {
+            dispatch({ type: "backendTitle", cwd: event.cwd, program: event.program });
+          }
+        });
+      } catch (error) {
+        // If teardown's ptyKill(terminalId) reaches the backend before this
+        // subscribe call does, the backend rejects it with NotFound — that's
+        // expected once destroyed, since onDestroy already handled cleanup.
+        // Otherwise it's a genuine failure and should surface as normal.
+        if (!destroyed) throw error;
+      }
     })();
 
     resizeObserver = new ResizeObserver(() => {
@@ -216,6 +237,7 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
     unregisterDropTarget?.();
     resizeObserver?.disconnect();
     titleChangeDisposable?.dispose();
