@@ -10,6 +10,7 @@ import {
   refreshDirectoryContaining,
 } from "../../src/lib/stores/fileTree";
 import FileTree from "../../src/lib/explorer/FileTree.svelte";
+import { pendingCreate } from "../../src/lib/explorer/inlineEdit";
 import * as commands from "../../src/lib/ipc/commands";
 import type { DirEntry } from "../../src/lib/ipc/commands";
 
@@ -209,6 +210,10 @@ describe("FileTree: scrollbar auto-hide", () => {
 
   afterEach(() => {
     cleanup();
+    // pendingCreate is a module-level singleton store; the new-entry-input test below
+    // deliberately leaves it set (no commit is fired), which would otherwise leak into
+    // whichever test runs next.
+    pendingCreate.set(null);
   });
 
   it("renders the root element with the scrollbar-autohide class", async () => {
@@ -241,5 +246,22 @@ describe("FileTree: scrollbar auto-hide", () => {
 
     expect(treeEl).toBeTruthy();
     expect(window.getComputedStyle(treeEl!).userSelect).toBe("none");
+  });
+
+  it("re-enables selection on the New File/New Folder inline input despite the tree container's user-select: none", async () => {
+    vi.mocked(commands.fsListDir).mockResolvedValue([file("a.txt")]);
+    await loadRoot(ROOT);
+
+    const { container, findByText } = render(FileTree);
+    await fireEvent.contextMenu(container.querySelector(".file-tree")!);
+    await fireEvent.click(await findByText("New File"));
+
+    const input = await vi.waitFor(() => {
+      const el = container.querySelector("input");
+      if (!el) throw new Error("inline-create input not yet rendered");
+      return el;
+    });
+
+    expect(window.getComputedStyle(input).userSelect).toBe("text");
   });
 });

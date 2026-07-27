@@ -216,6 +216,10 @@
     -webkit-user-select: none;
     user-select: none;
   }
+  .file-tree :global(input) {
+    -webkit-user-select: text;
+    user-select: text;
+  }
   .modal-backdrop {
     position: fixed;
     inset: 0;

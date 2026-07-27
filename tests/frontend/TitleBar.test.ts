@@ -105,4 +105,16 @@ describe("TitleBar", () => {
     expect(titleBar).toBeTruthy();
     expect(window.getComputedStyle(titleBar!).userSelect).toBe("none");
   });
+
+  it("re-enables selection on the switcher dropdown, so a recent project's path stays copyable despite the title bar's guard", async () => {
+    workspace.set({ id: "local", root: current.path });
+    recents.set([current, other]);
+
+    const { getByRole, container } = render(TitleBar);
+    await fireEvent.click(getByRole("button", { name: "Switch project" }));
+
+    const menu = container.querySelector(".switcher-menu");
+    expect(menu).toBeTruthy();
+    expect(window.getComputedStyle(menu!).userSelect).toBe("text");
+  });
 });
