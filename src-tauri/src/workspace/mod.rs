@@ -181,5 +181,9 @@ pub trait Workspace: Send + Sync {
     fn root(&self) -> &str;
     /// Starts (or is a no-op if already started) a recursive filesystem
     /// watcher rooted at this workspace, forwarding debounced events to `tx`.
+    /// Best-effort: if the underlying watcher fails to start (e.g. the OS
+    /// watch limit is exhausted, or the root disappeared), the workspace
+    /// stays open and fully usable, it just does not receive live
+    /// external-change notifications until reopened.
     fn watch(&self, tx: UnboundedSender<FsChangeEvent>);
 }
