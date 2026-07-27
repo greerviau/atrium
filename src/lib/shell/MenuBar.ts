@@ -34,11 +34,15 @@ import type { SplitDirection } from "../terminal/paneTree";
  * last had focus — the menu item itself carries no more context than which
  * direction was chosen. `menu:split-terminal` keeps calling `onSplitTerminal`
  * unchanged, a separate, terminal-only alias for split-right specifically.
+ * `menu:close-tab` routes through `onCloseTab` (`App.svelte`'s
+ * `closeFocusedTab`), which resolves the same last-focused surface to close
+ * that surface's active tab.
  */
 export async function initMenuBar(
   onNewTerminalTab: () => void,
   onSplitTerminal: () => void,
   onSplitDirection: (direction: SplitDirection) => void,
+  onCloseTab: () => void,
 ): Promise<void> {
   await onMenuEvent("menu:open-folder", () => void openWorkspaceFolder());
   await onMenuEvent("menu:settings", () => openSettings());
@@ -79,4 +83,5 @@ export async function initMenuBar(
   await onMenuEvent("menu:help:report-issue", () =>
     openHelpLink("https://github.com/greerviau/atrium/issues/new"),
   );
+  await onMenuEvent("menu:close-tab", onCloseTab);
 }

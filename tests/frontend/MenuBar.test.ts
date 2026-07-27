@@ -33,6 +33,7 @@ describe("MenuBar help links", () => {
       () => {},
       () => {},
       () => {},
+      () => {},
     );
   });
 
@@ -75,6 +76,7 @@ describe("MenuBar save (issue #250)", () => {
       () => {},
       () => {},
       () => {},
+      () => {},
     );
   });
 
@@ -107,6 +109,7 @@ describe("MenuBar split-direction events (issue #156)", () => {
       () => {},
       () => {},
       onSplitDirection,
+      () => {},
     );
 
     handlers.get("menu:split-up")?.();
@@ -124,11 +127,28 @@ describe("MenuBar split-direction events (issue #156)", () => {
     handlers.clear();
     const onSplitTerminal = vi.fn();
     const onSplitDirection = vi.fn();
-    await initMenuBar(() => {}, onSplitTerminal, onSplitDirection);
+    await initMenuBar(() => {}, onSplitTerminal, onSplitDirection, () => {});
 
     handlers.get("menu:split-terminal")?.();
 
     expect(onSplitTerminal).toHaveBeenCalledTimes(1);
     expect(onSplitDirection).not.toHaveBeenCalled();
+  });
+});
+
+describe("MenuBar close-tab event (issue #279)", () => {
+  it("routes menu:close-tab through the onCloseTab callback", async () => {
+    handlers.clear();
+    const onCloseTab = vi.fn();
+    await initMenuBar(
+      () => {},
+      () => {},
+      () => {},
+      onCloseTab,
+    );
+
+    handlers.get("menu:close-tab")?.();
+
+    expect(onCloseTab).toHaveBeenCalledTimes(1);
   });
 });

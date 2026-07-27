@@ -23,6 +23,7 @@ export type MenuEventId =
   | "menu:open-folder"
   | "menu:save"
   | "menu:settings"
+  | "menu:close-tab"
   | "menu:new-terminal-tab"
   | "menu:split-terminal"
   | "menu:split-up"
