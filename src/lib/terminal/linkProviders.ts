@@ -2,7 +2,7 @@ import type { Terminal, ILink, ILinkProvider } from "@xterm/xterm";
 import { PR_LINK_REGEX } from "./prLinkRegex";
 import { FILE_PATH_REGEX } from "./filePathRegex";
 import { fsResolveCandidates, shellOpenExternal, type PathCandidate } from "../ipc/commands";
-import { openFile } from "../stores/tabs";
+import { openFileReportingErrors } from "../stores/tabs";
 import { showErrorToast, describeError } from "../stores/errorToast";
 
 /** Extracts an optional trailing `:<line>` or `:<line>:<col>` suffix from a matched candidate. */
@@ -146,9 +146,7 @@ class FilePathLinkProvider implements ILinkProvider {
             if (!(event.metaKey || event.ctrlKey)) {
               return;
             }
-            openFile(resolvedPath, targetLine ? { line: targetLine, col } : undefined).catch((err: unknown) => {
-              showErrorToast(`Couldn't open file: ${describeError(err)}`);
-            });
+            openFileReportingErrors(resolvedPath, targetLine ? { line: targetLine, col } : undefined);
           },
         });
       });

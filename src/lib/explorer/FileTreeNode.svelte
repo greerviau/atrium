@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { TreeNode } from "../stores/fileTree";
   import { toggleExpanded } from "../stores/fileTree";
-  import { openFile } from "../stores/tabs";
+  import { openFileReportingErrors } from "../stores/tabs";
   import { openContextMenu, treeActionRequest, type TreeActionRequest } from "./contextMenu";
   import { editingPath, pendingCreate, commitRename, commitCreate } from "./inlineEdit";
   import { beginExplorerDrag, dragOverTargetDir } from "./explorerDrag";
@@ -25,7 +25,7 @@
     if (node.entry.isDir) {
       void toggleExpanded(node);
     } else {
-      void openFile(node.entry.path);
+      openFileReportingErrors(node.entry.path);
     }
   }
 

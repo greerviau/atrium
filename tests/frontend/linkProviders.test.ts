@@ -3,7 +3,7 @@ import type { Terminal, ILink, ILinkProvider } from "@xterm/xterm";
 import { registerLinkProviders } from "../../src/lib/terminal/linkProviders";
 import { shellOpenExternal, fsResolveCandidates } from "../../src/lib/ipc/commands";
 import { showErrorToast } from "../../src/lib/stores/errorToast";
-import { openFile } from "../../src/lib/stores/tabs";
+import { openFileReportingErrors } from "../../src/lib/stores/tabs";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
   shellOpenExternal: vi.fn(),
@@ -16,7 +16,7 @@ vi.mock("../../src/lib/stores/errorToast", () => ({
 }));
 
 vi.mock("../../src/lib/stores/tabs", () => ({
-  openFile: vi.fn(),
+  openFileReportingErrors: vi.fn(),
 }));
 
 const modifierClick = (): MouseEvent => new MouseEvent("click", { metaKey: true });
@@ -116,13 +116,13 @@ describe("PrLinkProvider.activate", () => {
 describe("FilePathLinkProvider.activate", () => {
   beforeEach(() => {
     vi.mocked(fsResolveCandidates).mockReset();
-    vi.mocked(openFile).mockReset();
+    vi.mocked(openFileReportingErrors).mockReset();
     vi.mocked(showErrorToast).mockReset();
   });
 
   it("opens the resolved file with parsed line/col on a modifier click", async () => {
     vi.mocked(fsResolveCandidates).mockResolvedValue(["/repo/src/lib/foo.ts"]);
-    vi.mocked(openFile).mockResolvedValue(undefined);
+    vi.mocked(openFileReportingErrors).mockReturnValue(undefined);
     const { terminal, providers } = fakeTerminal("error at src/lib/foo.ts:42:7");
     registerLinkProviders(terminal, "local", "/repo");
 
@@ -130,10 +130,10 @@ describe("FilePathLinkProvider.activate", () => {
     link.activate(modifierClick(), link.text);
 
     await new Promise((r) => setTimeout(r, 0));
-    expect(openFile).toHaveBeenCalledWith("/repo/src/lib/foo.ts", { line: 42, col: 7 });
+    expect(openFileReportingErrors).toHaveBeenCalledWith("/repo/src/lib/foo.ts", { line: 42, col: 7 });
   });
 
-  it("does not call openFile on a plain click without a modifier", async () => {
+  it("does not call openFileReportingErrors on a plain click without a modifier", async () => {
     vi.mocked(fsResolveCandidates).mockResolvedValue(["/repo/src/lib/foo.ts"]);
     const { terminal, providers } = fakeTerminal("error at src/lib/foo.ts:42:7");
     registerLinkProviders(terminal, "local", "/repo");
@@ -142,19 +142,6 @@ describe("FilePathLinkProvider.activate", () => {
     link.activate(plainClick(), link.text);
 
     await new Promise((r) => setTimeout(r, 0));
-    expect(openFile).not.toHaveBeenCalled();
-  });
-
-  it("calls showErrorToast when openFile rejects", async () => {
-    vi.mocked(fsResolveCandidates).mockResolvedValue(["/repo/src/lib/foo.ts"]);
-    vi.mocked(openFile).mockRejectedValue(new Error("ENOENT: no such file or directory"));
-    const { terminal, providers } = fakeTerminal("error at src/lib/foo.ts:42:7");
-    registerLinkProviders(terminal, "local", "/repo");
-
-    const link = await getFirstLink(providers[1]);
-    link.activate(modifierClick(), link.text);
-
-    await new Promise((r) => setTimeout(r, 0));
-    expect(showErrorToast).toHaveBeenCalledWith(expect.stringContaining("ENOENT"));
+    expect(openFileReportingErrors).not.toHaveBeenCalled();
   });
 });

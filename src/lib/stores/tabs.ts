@@ -163,6 +163,19 @@ export async function openFile(path: string, selection?: PendingSelection): Prom
   }));
 }
 
+/**
+ * Fire-and-forget open entry point for a UI trigger with no dialog of its
+ * own to report a failure through (an explorer row click, a rendered
+ * markdown link, a terminal file-path link) — opens `path` and surfaces a
+ * failure through the shared error toast, the same channel a failed save
+ * already uses.
+ */
+export function openFileReportingErrors(path: string, selection?: PendingSelection): void {
+  openFile(path, selection).catch((err: unknown) => {
+    showErrorToast(`Couldn't open file: ${describeError(err)}`);
+  });
+}
+
 /** Flips a markdown tab's `viewMode` between `"rendered"` and `"source"`; a no-op for a non-markdown tab or an unknown path. */
 export function toggleMarkdownViewMode(path: string): void {
   tabsState.update((s) => ({

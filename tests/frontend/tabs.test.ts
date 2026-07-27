@@ -3,6 +3,7 @@ import { get } from "svelte/store";
 import {
   tabsState,
   openFile,
+  openFileReportingErrors,
   toggleMarkdownViewMode,
   markDirty,
   reconcileExternalChange,
@@ -158,6 +159,33 @@ describe("openFile", () => {
     expect(getRecentFiles("/proj")).toEqual(["/proj/existing.md"]);
 
     workspace.set({ id: "local", root: null });
+  });
+});
+
+describe("openFileReportingErrors", () => {
+  beforeEach(() => {
+    tabsState.set({ tabs: [], activeTabPath: null });
+    errorToast.set(null);
+  });
+
+  it("shows an error toast when the underlying open rejects", async () => {
+    vi.mocked(commands.fsReadFile).mockRejectedValueOnce(new Error("file is not valid UTF-8: /img.png"));
+
+    openFileReportingErrors("/img.png");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(get(errorToast)).toBe("Couldn't open file: file is not valid UTF-8: /img.png");
+  });
+
+  it("leaves the error toast untouched when the open succeeds", async () => {
+    vi.mocked(commands.fsReadFile).mockResolvedValueOnce("# Hello");
+
+    openFileReportingErrors("/notes.md");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(get(errorToast)).toBeNull();
   });
 });
 
