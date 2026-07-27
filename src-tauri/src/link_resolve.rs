@@ -85,10 +85,12 @@ mod tests {
     #[test]
     fn resolves_relative_to_cwd_hint() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("note.md"), "hi").unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("note.md"), "hi").unwrap();
         let candidate = PathCandidate {
             raw: "note.md".to_string(),
-            cwd_hint: dir.path().to_string_lossy().to_string(),
+            cwd_hint: sub.to_string_lossy().to_string(),
         };
         let resolved = resolve_candidate(&candidate, dir.path().to_string_lossy().as_ref());
         assert!(resolved.is_some());
@@ -114,10 +116,8 @@ mod tests {
             raw: outside_file.to_string_lossy().to_string(),
             cwd_hint: workspace_root.path().to_string_lossy().to_string(),
         };
-        let resolved = resolve_candidate(
-            &candidate,
-            workspace_root.path().to_string_lossy().as_ref(),
-        );
+        let resolved =
+            resolve_candidate(&candidate, workspace_root.path().to_string_lossy().as_ref());
         assert_eq!(resolved, None);
     }
 
@@ -131,10 +131,8 @@ mod tests {
             raw: inside_file.to_string_lossy().to_string(),
             cwd_hint: workspace_root.path().to_string_lossy().to_string(),
         };
-        let resolved = resolve_candidate(
-            &candidate,
-            workspace_root.path().to_string_lossy().as_ref(),
-        );
+        let resolved =
+            resolve_candidate(&candidate, workspace_root.path().to_string_lossy().as_ref());
         assert!(resolved.is_some());
     }
 
@@ -155,10 +153,8 @@ mod tests {
             raw: "escape-link/secret.txt".to_string(),
             cwd_hint: workspace_root.path().to_string_lossy().to_string(),
         };
-        let resolved = resolve_candidate(
-            &candidate,
-            workspace_root.path().to_string_lossy().as_ref(),
-        );
+        let resolved =
+            resolve_candidate(&candidate, workspace_root.path().to_string_lossy().as_ref());
         assert_eq!(resolved, None);
     }
 
@@ -180,10 +176,8 @@ mod tests {
             raw: "inside-link/inside.txt".to_string(),
             cwd_hint: workspace_root.path().to_string_lossy().to_string(),
         };
-        let resolved = resolve_candidate(
-            &candidate,
-            workspace_root.path().to_string_lossy().as_ref(),
-        );
+        let resolved =
+            resolve_candidate(&candidate, workspace_root.path().to_string_lossy().as_ref());
         assert!(resolved.is_some());
     }
 }
