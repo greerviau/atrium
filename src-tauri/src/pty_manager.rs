@@ -640,6 +640,29 @@ mod tests {
         (channel, titles)
     }
 
+    type ReceivedChunks = Arc<Mutex<Vec<Vec<u8>>>>;
+
+    /// Like the ad hoc `Data`-collecting channels used elsewhere in this
+    /// module, but keeps each decoded `Data` payload as its own entry
+    /// instead of flattening them into one buffer — needed by the
+    /// coalescing tests below, which assert on both the concatenated bytes
+    /// and how many separate `Data` events arrived.
+    fn data_chunks_channel() -> (Channel<PtyEvent>, ReceivedChunks) {
+        let chunks: ReceivedChunks = Arc::new(Mutex::new(Vec::new()));
+        let chunks_clone = chunks.clone();
+        let channel = Channel::new(move |body| {
+            if let InvokeResponseBody::Json(json) = body {
+                if let Ok(PtyEvent::Data { data }) = serde_json::from_str::<PtyEvent>(&json) {
+                    if let Ok(bytes) = STANDARD.decode(data) {
+                        chunks_clone.lock().unwrap().push(bytes);
+                    }
+                }
+            }
+            Ok(())
+        });
+        (channel, chunks)
+    }
+
     /// Spawns a real shell (no mocking — PTY line discipline, resizing, and
     /// EOF handling are exactly the kind of thing that's subtly wrong when
     /// mocked), writes a command, and asserts the marker shows up in the
@@ -1186,5 +1209,194 @@ mod tests {
         });
 
         manager.kill(&terminal_b).unwrap();
+    }
+
+    /// Regression test for issue #261: a fast, sustained burst of output
+    /// (far more than one 4096-byte `read()`'s worth) must be coalesced
+    /// into a handful of `Data` events by `flush_output_loop` instead of
+    /// one event per underlying read, while every byte still arrives
+    /// intact and in order.
+    #[test]
+    fn flood_output_is_coalesced_into_few_data_events() {
+        let manager = PtyManager::new();
+        let dir = tempfile::tempdir().unwrap();
+        let terminal_id = manager
+            .spawn(dir.path().to_string_lossy().to_string(), 80, 24, None)
+            .unwrap();
+
+        let (channel, chunks) = data_chunks_channel();
+        manager.subscribe(&terminal_id, channel).unwrap();
+
+        // `tr` over `/dev/zero` produces a fast, sustained burst with no
+        // embedded newlines, so the pty's output post-processing (which can
+        // rewrite `\n` to `\r\n`) can't perturb the byte count checked
+        // below. The fill byte is spelled as the octal escape `\101`
+        // rather than a literal `A` so the typed command line itself (which
+        // the pty echoes back verbatim as it's typed) contains no `A` to
+        // contaminate the count.
+        manager
+            .write(
+                &terminal_id,
+                "head -c 500000 /dev/zero | tr '\\000' '\\101'; echo atrium-flood-done\n",
+            )
+            .unwrap();
+
+        // The longest contiguous run of the fill byte, rather than its
+        // total count: a stray `A` can legitimately show up elsewhere in
+        // the stream (e.g. inside `tempfile::tempdir()`'s random directory
+        // name, echoed back as part of the shell prompt), but only an
+        // intact, unreordered delivery of the burst produces one unbroken
+        // run exactly `burst_len` long.
+        fn longest_run_of(bytes: &[u8], target: u8) -> usize {
+            let mut longest = 0;
+            let mut current = 0;
+            for &b in bytes {
+                if b == target {
+                    current += 1;
+                    longest = longest.max(current);
+                } else {
+                    current = 0;
+                }
+            }
+            longest
+        }
+
+        // Wait on the fill-byte run itself reaching the full burst size,
+        // rather than the `echo` marker's text: the marker's own text is
+        // echoed back the instant it's typed (before the shell has even
+        // started running the flood command), so gating on it would race
+        // the burst instead of waiting for it.
+        wait_for(
+            Duration::from_secs(10),
+            "flood output never fully arrived",
+            || {
+                let concatenated: Vec<u8> =
+                    chunks.lock().unwrap().iter().flatten().copied().collect();
+                longest_run_of(&concatenated, b'A') >= 500_000
+            },
+        );
+
+        let received = chunks.lock().unwrap();
+        let concatenated: Vec<u8> = received.iter().flatten().copied().collect();
+        assert_eq!(
+            longest_run_of(&concatenated, b'A'),
+            500_000,
+            "not all flood bytes arrived intact and in order — coalescing must not lose or reorder data"
+        );
+
+        // Without coalescing, 500,000 bytes at up to 4096 bytes per read
+        // would produce on the order of 122 separate `Data` events. The
+        // flush loop should collapse that down to a small number of larger
+        // sends instead, bounded by flush cadence rather than input size.
+        assert!(
+            received.len() < 40,
+            "expected the flood to be coalesced into a handful of Data events, got {}",
+            received.len()
+        );
+
+        manager.kill(&terminal_id).unwrap();
+    }
+
+    /// Regression test for issue #261: output still sitting in `pending`
+    /// when the reader thread hits EOF must be flushed before the `Exit`
+    /// event, not silently dropped.
+    #[test]
+    fn pending_output_flushed_before_exit_event() {
+        let manager = PtyManager::new();
+        let dir = tempfile::tempdir().unwrap();
+        let terminal_id = manager
+            .spawn(dir.path().to_string_lossy().to_string(), 80, 24, None)
+            .unwrap();
+
+        let received: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let received_clone = received.clone();
+        let exited = Arc::new(Mutex::new(false));
+        let exited_clone = exited.clone();
+        let channel = Channel::new(move |body| {
+            if let InvokeResponseBody::Json(json) = body {
+                match serde_json::from_str::<PtyEvent>(&json) {
+                    Ok(PtyEvent::Data { data }) => {
+                        if let Ok(bytes) = STANDARD.decode(data) {
+                            received_clone.lock().unwrap().extend_from_slice(&bytes);
+                        }
+                    }
+                    Ok(PtyEvent::Exit { .. }) => {
+                        *exited_clone.lock().unwrap() = true;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        });
+        manager.subscribe(&terminal_id, channel).unwrap();
+
+        manager
+            .write(&terminal_id, "echo atrium-exit-tail; exit\n")
+            .unwrap();
+
+        wait_for(Duration::from_secs(10), "shell never reported exit", || {
+            *exited.lock().unwrap()
+        });
+
+        let output = String::from_utf8_lossy(&received.lock().unwrap()).into_owned();
+        assert!(
+            output.contains("atrium-exit-tail"),
+            "final output before exit was dropped: {output}"
+        );
+
+        manager.kill(&terminal_id).unwrap();
+    }
+
+    /// Regression test for issue #261: the coalescing window must not turn
+    /// into a "stuck buffer" — a small write after an idle period should
+    /// still arrive within roughly one `FLUSH_INTERVAL`, not sit buffered
+    /// until some later event nudges it out.
+    #[test]
+    fn output_after_idle_period_arrives_within_roughly_one_flush_interval() {
+        let manager = PtyManager::new();
+        let dir = tempfile::tempdir().unwrap();
+        let terminal_id = manager
+            .spawn(dir.path().to_string_lossy().to_string(), 80, 24, None)
+            .unwrap();
+
+        let received: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let received_clone = received.clone();
+        let channel = Channel::new(move |body| {
+            if let InvokeResponseBody::Json(json) = body {
+                if let Ok(PtyEvent::Data { data }) = serde_json::from_str::<PtyEvent>(&json) {
+                    if let Ok(bytes) = STANDARD.decode(data) {
+                        received_clone.lock().unwrap().extend_from_slice(&bytes);
+                    }
+                }
+            }
+            Ok(())
+        });
+        manager.subscribe(&terminal_id, channel).unwrap();
+
+        // Let the pty settle into an idle prompt before measuring.
+        std::thread::sleep(Duration::from_millis(200));
+        received.lock().unwrap().clear();
+
+        let start = Instant::now();
+        manager
+            .write(&terminal_id, "echo atrium-idle-burst-marker\n")
+            .unwrap();
+
+        wait_for(
+            Duration::from_millis(500),
+            "output after an idle period took too long to arrive",
+            || {
+                String::from_utf8_lossy(&received.lock().unwrap())
+                    .contains("atrium-idle-burst-marker")
+            },
+        );
+
+        assert!(
+            start.elapsed() < Duration::from_millis(100),
+            "expected idle-then-burst output within roughly one flush interval, took {:?}",
+            start.elapsed()
+        );
+
+        manager.kill(&terminal_id).unwrap();
     }
 }
