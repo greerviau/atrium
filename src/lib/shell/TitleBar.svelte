@@ -78,6 +78,10 @@
 
 <style>
   .title-bar {
+    /* Native traffic lights are positioned independently via trafficLightPosition in
+       src-tauri/tauri.conf.json: x pairs with padding-left, y with this height. If height
+       changes, re-derive y ≈ 21 + (height - 38) / 2 — 21 is empirically calibrated for
+       this 38px bar, not a general offset formula to extrapolate from. */
     height: 38px;
     flex-shrink: 0;
     display: flex;
