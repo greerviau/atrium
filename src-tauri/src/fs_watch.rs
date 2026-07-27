@@ -25,6 +25,15 @@ pub fn watch(
         move |result: DebounceEventResult| match result {
             Ok(events) => {
                 for event in events {
+                    // TEMPORARY DIAGNOSTIC (removed before landing): dumps the
+                    // raw notify::EventKind reaching the debouncer, to confirm
+                    // exactly which variant macOS's FSEvents backend produces
+                    // for a same-directory rename and a plain delete before
+                    // committing to a specific #[ignore] reason.
+                    eprintln!(
+                        "[DIAG] kind={:?} paths={:?}",
+                        event.event.kind, event.event.paths
+                    );
                     // `notify-debouncer-full`'s own file-id/rename-cookie
                     // tracking already correlates a rename's `From`/`To`
                     // halves within the debounce window when it can,
