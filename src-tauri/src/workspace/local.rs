@@ -608,13 +608,32 @@ impl Workspace for LocalWorkspace {
             if is_default_ignored(&name) {
                 continue;
             }
-            let metadata = entry.metadata().await?;
+            let entry_path = entry.path();
+            // Non-following (equivalent to `lstat`, and free on most Unix
+            // platforms since it's cached from the `readdir` stream): answers
+            // "is this entry itself a symlink" without an extra syscall.
             let file_type = entry.file_type().await?;
+            let is_symlink = file_type.is_symlink();
+            // A symlink's own `is_dir` must reflect its *target*, not the link —
+            // `entry.metadata()` (used here previously) does not traverse
+            // symlinks on Unix and always reports `false` for one. Take a
+            // following stat only in this case; a dangling or unreadable target
+            // degrades to `is_dir: false` (rendered as a file, matching how an
+            // unreadable/dangling symlink-to-file already behaves) rather than
+            // failing the whole directory listing over one broken link.
+            let is_dir = if is_symlink {
+                tokio::fs::metadata(&entry_path)
+                    .await
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false)
+            } else {
+                file_type.is_dir()
+            };
             entries.push(DirEntry {
                 name,
-                path: entry.path().to_string_lossy().to_string(),
-                is_dir: metadata.is_dir(),
-                is_symlink: file_type.is_symlink(),
+                path: entry_path.to_string_lossy().to_string(),
+                is_dir,
+                is_symlink,
             });
         }
         entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
@@ -707,6 +726,13 @@ impl Workspace for LocalWorkspace {
         let metadata = tokio::fs::metadata(&target).await?;
         if metadata.is_dir() {
             if recursive {
+                // Safe against `target` itself being a symlink to a directory:
+                // `remove_dir_all` does an `lstat` at the top of the path, and
+                // if that's a symlink it unlinks the link and stops rather than
+                // following it and recursing into the target's contents. Same
+                // guarantee holds for a symlink encountered as a child while
+                // recursing into a real directory — the recursion never escapes
+                // through it.
                 tokio::fs::remove_dir_all(&target).await?;
             } else {
                 tokio::fs::remove_dir(&target).await?;
@@ -1020,6 +1046,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_removes_a_symlinked_directory_without_touching_its_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_dir("real_dir").await.unwrap();
+        ws.create_file("real_dir/inside.md").await.unwrap();
+        ws.write_file("real_dir/inside.md", "keep me")
+            .await
+            .unwrap();
+        std::os::unix::fs::symlink(dir.path().join("real_dir"), dir.path().join("link_dir"))
+            .unwrap();
+
+        // `recursive: true` is what the frontend now sends for a symlinked
+        // directory once `list_dir` reports its `is_dir` correctly.
+        ws.delete("link_dir", true).await.unwrap();
+
+        assert!(dir.path().join("link_dir").symlink_metadata().is_err());
+        assert!(dir.path().join("real_dir").exists());
+        assert_eq!(ws.read_file("real_dir/inside.md").await.unwrap(), "keep me");
+    }
+
+    #[tokio::test]
     async fn list_dir_sorts_dirs_first_then_alphabetical() {
         let dir = tempfile::tempdir().unwrap();
         let ws = workspace(dir.path());
@@ -1056,6 +1103,50 @@ mod tests {
         let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
 
         assert_eq!(names, vec![".gitignore"]);
+    }
+
+    #[tokio::test]
+    async fn list_dir_reports_a_symlinked_directory_as_a_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_dir("real_dir").await.unwrap();
+        ws.create_file("real_dir/inside.md").await.unwrap();
+        std::os::unix::fs::symlink(dir.path().join("real_dir"), dir.path().join("link_dir"))
+            .unwrap();
+
+        let entries = ws.list_dir(".").await.unwrap();
+        let link = entries.iter().find(|e| e.name == "link_dir").unwrap();
+
+        assert!(link.is_dir);
+        assert!(link.is_symlink);
+    }
+
+    #[tokio::test]
+    async fn list_dir_reports_a_symlinked_file_as_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("real.md").await.unwrap();
+        std::os::unix::fs::symlink(dir.path().join("real.md"), dir.path().join("link.md")).unwrap();
+
+        let entries = ws.list_dir(".").await.unwrap();
+        let link = entries.iter().find(|e| e.name == "link.md").unwrap();
+
+        assert!(!link.is_dir);
+        assert!(link.is_symlink);
+    }
+
+    #[tokio::test]
+    async fn list_dir_reports_a_dangling_symlink_as_not_a_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        std::os::unix::fs::symlink(dir.path().join("does_not_exist"), dir.path().join("broken"))
+            .unwrap();
+
+        let entries = ws.list_dir(".").await.unwrap();
+        let link = entries.iter().find(|e| e.name == "broken").unwrap();
+
+        assert!(!link.is_dir);
+        assert!(link.is_symlink);
     }
 
     fn options(case_sensitive: bool, regex: bool) -> SearchOptions {

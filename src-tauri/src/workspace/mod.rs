@@ -10,7 +10,10 @@ use tokio::sync::mpsc::UnboundedSender;
 pub struct DirEntry {
     pub name: String,
     pub path: String,
+    /// Whether the entry's *target* is a directory: follows a symlink to
+    /// classify what it points at, so a symlink to a directory reports `true`.
     pub is_dir: bool,
+    /// Whether the entry itself (not its target) is a symlink: never follows.
     pub is_symlink: bool,
 }
 
