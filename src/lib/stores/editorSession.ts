@@ -1,8 +1,7 @@
 import { fsReadFile, isAppError, localWorkspaceId } from "../ipc/commands";
 import { modeForPath } from "../editor/codeExtensions";
 import { findLeaf, listLeaves, pruneMissingTabs, type EditorLeafPane, type EditorPaneNode } from "../editor/editorPaneTree";
-import { tabsState, type Tab } from "./tabs";
-import { editorPaneTree, focusedEditorPaneId } from "./editorPanes";
+import type { Tab } from "./tabs";
 
 const STORAGE_PREFIX = "atrium.editorSession.";
 const SAVE_DEBOUNCE_MS = 400;
@@ -83,7 +82,12 @@ function writeEditorSession(root: string, session: PersistedEditorSession): void
   }
 }
 
-const pendingWrites = new Map<string, ReturnType<typeof setTimeout>>();
+interface PendingWrite {
+  timer: ReturnType<typeof setTimeout>;
+  session: PersistedEditorSession;
+}
+
+const pendingWrites = new Map<string, PendingWrite>();
 
 /**
  * Persists the editor session for `root`, debounced ~400ms per root.
@@ -94,14 +98,27 @@ const pendingWrites = new Map<string, ReturnType<typeof setTimeout>>();
  */
 export function saveEditorSession(root: string, session: PersistedEditorSession): void {
   const pending = pendingWrites.get(root);
-  if (pending) clearTimeout(pending);
-  pendingWrites.set(
-    root,
-    setTimeout(() => {
-      pendingWrites.delete(root);
-      writeEditorSession(root, session);
-    }, SAVE_DEBOUNCE_MS),
-  );
+  if (pending) clearTimeout(pending.timer);
+  const timer = setTimeout(() => {
+    pendingWrites.delete(root);
+    writeEditorSession(root, session);
+  }, SAVE_DEBOUNCE_MS);
+  pendingWrites.set(root, { timer, session });
+}
+
+/**
+ * Writes `root`'s pending debounced save immediately, instead of waiting out
+ * the rest of the debounce window. A no-op if nothing is pending. Called
+ * right before the app actually closes so a save scheduled just before
+ * quitting (e.g. a split resized, or a tab opened, moments before Cmd+Q)
+ * isn't silently dropped by the window closing out from under the timer.
+ */
+export function flushEditorSession(root: string): void {
+  const pending = pendingWrites.get(root);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pendingWrites.delete(root);
+  writeEditorSession(root, pending.session);
 }
 
 export interface RestoredEditorSession {
@@ -160,24 +177,25 @@ export function reconcileRestoredSession(
 }
 
 /**
- * Restores the persisted editor session for `root` into `tabsState`,
- * `editorPaneTree`, and `focusedEditorPaneId`: loads it, re-reads every
+ * Computes the restored editor session for `root`: loads it, re-reads every
  * distinct referenced path fresh off disk, and drops any path whose read
  * fails with `NOT_FOUND` (the file was deleted while the app was closed)
  * silently — reused below via `reconcileRestoredSession`/`pruneMissingTabs`
- * rather than duplicated. A no-op if nothing was persisted for `root` (a
- * brand-new project) — the caller's own reset already left
- * `tabsState`/`editorPaneTree` empty. Any other unexpected failure is
- * caught and logged rather than left as an unhandled rejection or a broken
- * project open — restore is a best-effort convenience, never a blocker.
+ * rather than duplicated. Returns `null` if nothing was persisted for `root`
+ * (a brand-new project) or an unexpected failure occurs (logged rather than
+ * left as an unhandled rejection or a broken project open — restore is a
+ * best-effort convenience, never a blocker).
  *
- * Sets `tabsState` before `editorPaneTree`/`focusedEditorPaneId` so the
- * tabsState/editorPaneTree reconciliation effect in `App.svelte` never
- * observes a tree referencing paths `tabsState` doesn't know about yet.
+ * Deliberately does *not* apply the result to `tabsState`/`editorPaneTree`/
+ * `focusedEditorPaneId` itself: the caller (`App.svelte`) owns applying it,
+ * guarded against a second, later project switch superseding this one
+ * before its `fsReadFile` calls resolve — see the project-switch effect's
+ * own switch-token comment for why that guard has to live there rather than
+ * in here.
  */
-export async function restoreEditorSession(root: string): Promise<void> {
+export async function restoreEditorSession(root: string): Promise<RestoredEditorSession | null> {
   const session = loadEditorSession(root);
-  if (!session || !session.paneTree) return;
+  if (!session || !session.paneTree) return null;
 
   try {
     const paths = [...new Set(listLeaves(session.paneTree).flatMap((leaf) => leaf.tabs))];
@@ -192,11 +210,9 @@ export async function restoreEditorSession(root: string): Promise<void> {
       }),
     );
 
-    const restored = reconcileRestoredSession(session, readable);
-    tabsState.set({ tabs: restored.tabs, activeTabPath: restored.activeTabPath });
-    editorPaneTree.set(restored.paneTree);
-    focusedEditorPaneId.set(restored.focusedPaneId);
+    return reconcileRestoredSession(session, readable);
   } catch (err) {
     console.error("Failed to restore editor session:", err);
+    return null;
   }
 }

@@ -50,7 +50,7 @@
     EXPLORER_WIDTH_MIN,
     EXPLORER_WIDTH_MAX,
   } from "./lib/stores/layout";
-  import { restoreEditorSession, saveEditorSession } from "./lib/stores/editorSession";
+  import { restoreEditorSession, saveEditorSession, flushEditorSession } from "./lib/stores/editorSession";
   import { folderName } from "./lib/terminal/tabTitle";
   import {
     splitPane,
@@ -113,6 +113,21 @@
   // the new root's not-yet-loaded persisted session with the transient empty
   // state `resetTabs()` produces mid-switch.
   let restoredForRoot: string | null = null;
+
+  // Bumped every time the project-switch effect below actually fires,
+  // capturing its value locally so a stale `restoreEditorSession(root)` call
+  // can tell it's been superseded by a later switch before it applies its
+  // result. Without this, switching A -> B before A's own `fsReadFile` calls
+  // resolve lets A's restore land *after* B's has already started (or
+  // finished): it would apply A's tabs/pane tree on top of B's now-current
+  // state, and — since `restoredForRoot` would already equal B by then — the
+  // persistence-write effect would immediately persist A's tree under B's
+  // storage key, corrupting B's own saved session. Comparing against this
+  // token is what lets a superseded restore recognize "I'm no longer the
+  // switch in progress" and discard its own result entirely, rather than
+  // just discarding the stores-write half and leaving `restoredForRoot`
+  // wrongly latched onto a root whose restore never actually applied.
+  let switchToken = 0;
 
   // Which of the two split-pane surfaces — the terminal dock or the
   // editor's own split panes — last had focus, so a global split-direction
@@ -580,11 +595,26 @@
     if (root === previousWorkspaceRoot) return;
     previousWorkspaceRoot = root;
     restoredForRoot = null;
+    switchToken += 1;
+    const token = switchToken;
     resetTabs();
     terminalPaneTree = null;
     focusedPaneId = null;
     if (root) {
-      void restoreEditorSession(root).finally(() => {
+      void restoreEditorSession(root).then((restored) => {
+        // A later switch started (and possibly already finished) while this
+        // one's `fsReadFile` calls were still in flight — see the
+        // `switchToken` comment above. Applying a stale restore here would
+        // overwrite whatever the current root's own effect already put in
+        // place, and latching `restoredForRoot` to this stale `root` would
+        // then let the persistence-write effect below persist this stale
+        // result under the *current* root's storage key.
+        if (token !== switchToken) return;
+        if (restored) {
+          tabsState.set({ tabs: restored.tabs, activeTabPath: restored.activeTabPath });
+          editorPaneTree.set(restored.paneTree);
+          focusedEditorPaneId.set(restored.focusedPaneId);
+        }
         restoredForRoot = root;
       });
     } else {
@@ -724,6 +754,7 @@
     void onCloseRequested(() => {
       const dirty = $tabsState.tabs.filter((t) => t.isDirty);
       if (dirty.length === 0) {
+        if ($workspace.root) flushEditorSession($workspace.root);
         void appConfirmClose();
         return;
       }

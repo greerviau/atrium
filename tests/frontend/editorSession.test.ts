@@ -1,14 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { get } from "svelte/store";
 import {
   loadEditorSession,
   saveEditorSession,
+  flushEditorSession,
   reconcileRestoredSession,
   restoreEditorSession,
   type PersistedEditorSession,
 } from "../../src/lib/stores/editorSession";
-import { tabsState } from "../../src/lib/stores/tabs";
-import { editorPaneTree, focusedEditorPaneId } from "../../src/lib/stores/editorPanes";
 import type { EditorLeafPane, EditorPaneNode, EditorSplitPane } from "../../src/lib/editor/editorPaneTree";
 import * as commands from "../../src/lib/ipc/commands";
 
@@ -66,6 +64,22 @@ describe("loadEditorSession / saveEditorSession", () => {
 
     vi.advanceTimersByTime(200);
     expect(loadEditorSession("/proj")).toEqual({ paneTree: leaf("L1", ["/proj/c.txt"]), focusedPaneId: "L1" });
+  });
+
+  it("flushEditorSession writes a pending save immediately instead of waiting out the debounce", () => {
+    saveEditorSession("/proj", { paneTree: leaf("L1", ["/proj/a.txt"]), focusedPaneId: "L1" });
+    flushEditorSession("/proj");
+
+    expect(loadEditorSession("/proj")).toEqual({ paneTree: leaf("L1", ["/proj/a.txt"]), focusedPaneId: "L1" });
+
+    // The timer it flushed doesn't fire again later and overwrite anything.
+    vi.advanceTimersByTime(400);
+    expect(loadEditorSession("/proj")).toEqual({ paneTree: leaf("L1", ["/proj/a.txt"]), focusedPaneId: "L1" });
+  });
+
+  it("flushEditorSession is a no-op when nothing is pending for that root", () => {
+    expect(() => flushEditorSession("/proj")).not.toThrow();
+    expect(loadEditorSession("/proj")).toBeNull();
   });
 
   it("keeps each workspace root's session separate", () => {
@@ -202,35 +216,30 @@ describe("reconcileRestoredSession", () => {
 describe("restoreEditorSession", () => {
   beforeEach(() => {
     localStorage.clear();
-    tabsState.set({ tabs: [], activeTabPath: null });
-    editorPaneTree.set(null);
-    focusedEditorPaneId.set(null);
     vi.mocked(commands.fsReadFile).mockReset();
   });
 
-  it("is a no-op when nothing was persisted for the root", async () => {
-    await restoreEditorSession("/proj");
-
-    expect(get(tabsState)).toEqual({ tabs: [], activeTabPath: null });
-    expect(get(editorPaneTree)).toBeNull();
-    expect(get(focusedEditorPaneId)).toBeNull();
+  it("returns null when nothing was persisted for the root", async () => {
+    expect(await restoreEditorSession("/proj")).toBeNull();
+    expect(commands.fsReadFile).not.toHaveBeenCalled();
   });
 
-  it("re-reads every referenced path fresh off disk and applies tabsState before editorPaneTree", async () => {
+  it("re-reads every referenced path fresh off disk and returns the reconciled session", async () => {
     localStorage.setItem(
       "atrium.editorSession./proj",
       JSON.stringify({ paneTree: leaf("L1", ["/proj/a.txt"], "/proj/a.txt"), focusedPaneId: "L1" }),
     );
     vi.mocked(commands.fsReadFile).mockResolvedValue("disk contents");
 
-    await restoreEditorSession("/proj");
+    const result = await restoreEditorSession("/proj");
 
-    expect(get(tabsState).tabs).toEqual([
+    expect(result?.tabs).toEqual([
       expect.objectContaining({ path: "/proj/a.txt", savedDoc: "disk contents", isDirty: false }),
     ]);
-    expect(get(tabsState).activeTabPath).toBe("/proj/a.txt");
-    expect(get(editorPaneTree)).toEqual(leaf("L1", ["/proj/a.txt"], "/proj/a.txt"));
-    expect(get(focusedEditorPaneId)).toBe("L1");
+    expect(result?.activeTabPath).toBe("/proj/a.txt");
+    expect(result?.paneTree).toEqual(leaf("L1", ["/proj/a.txt"], "/proj/a.txt"));
+    expect(result?.focusedPaneId).toBe("L1");
+    expect(commands.fsReadFile).toHaveBeenCalledWith("local", "/proj/a.txt");
   });
 
   it("silently drops a path whose read fails with NOT_FOUND", async () => {
@@ -246,13 +255,13 @@ describe("restoreEditorSession", () => {
       return "kept contents";
     });
 
-    await restoreEditorSession("/proj");
+    const result = await restoreEditorSession("/proj");
 
-    expect(get(tabsState).tabs.map((t) => t.path)).toEqual(["/proj/a.txt"]);
-    expect(get(editorPaneTree)).toEqual(leaf("L1", ["/proj/a.txt"], "/proj/a.txt"));
+    expect(result?.tabs.map((t) => t.path)).toEqual(["/proj/a.txt"]);
+    expect(result?.paneTree).toEqual(leaf("L1", ["/proj/a.txt"], "/proj/a.txt"));
   });
 
-  it("leaves state untouched and logs instead of throwing on an unexpected non-AppError failure", async () => {
+  it("returns null and logs instead of throwing on an unexpected non-AppError failure", async () => {
     localStorage.setItem(
       "atrium.editorSession./proj",
       JSON.stringify({ paneTree: leaf("L1", ["/proj/a.txt"], "/proj/a.txt"), focusedPaneId: "L1" }),
@@ -260,10 +269,8 @@ describe("restoreEditorSession", () => {
     vi.mocked(commands.fsReadFile).mockRejectedValue(new Error("boom"));
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await expect(restoreEditorSession("/proj")).resolves.toBeUndefined();
+    await expect(restoreEditorSession("/proj")).resolves.toBeNull();
 
-    expect(get(tabsState)).toEqual({ tabs: [], activeTabPath: null });
-    expect(get(editorPaneTree)).toBeNull();
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
   });
