@@ -611,6 +611,12 @@
         // result under the *current* root's storage key.
         if (token !== switchToken) return;
         if (restored) {
+          // tabsState first, then editorPaneTree/focusedEditorPaneId: the
+          // tabsState/editorPaneTree reconciliation effect further down
+          // prunes editorPaneTree against tabsState.tabs, so setting the
+          // tree first would have it observe a tree referencing paths
+          // tabsState doesn't know about yet and immediately prune them
+          // back out again.
           tabsState.set({ tabs: restored.tabs, activeTabPath: restored.activeTabPath });
           editorPaneTree.set(restored.paneTree);
           focusedEditorPaneId.set(restored.focusedPaneId);
