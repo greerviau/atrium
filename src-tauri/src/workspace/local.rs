@@ -436,11 +436,13 @@ fn display_path(root: &Path, path: &str) -> String {
 
 /// The only `Workspace` implementation in the MVP: a directory on the local
 /// filesystem. Every method resolves its `path` argument against `root` and
-/// rejects any path that would escape it (`..` components) — this is the
-/// access-control boundary referenced in the IPC contract's capabilities
-/// note (plan section 5): the capability file grants our own commands
-/// unconditionally, and it is `LocalWorkspace::resolve_within_root` alone
-/// that decides whether a given path is actually reachable.
+/// rejects any path that would escape it, whether the escape is spelled out
+/// lexically (`..` components) or happens through a symlink (dangling or
+/// not, at any path component) — this is the access-control boundary
+/// referenced in the IPC contract's capabilities note (plan section 5): the
+/// capability file grants our own commands unconditionally, and it is
+/// `LocalWorkspace::resolve_within_root`/`resolve_entry_within_root` alone
+/// that decide whether a given path is actually reachable.
 pub struct LocalWorkspace {
     root: PathBuf,
     workspace_id: String,
@@ -468,9 +470,13 @@ impl LocalWorkspace {
         }
     }
 
-    /// Resolves `path` (absolute, or relative to `root`) against `root`,
-    /// rejecting anything that would escape it.
-    fn resolve_within_root(&self, path: &str) -> Result<PathBuf, AppError> {
+    /// Shared walk behind `resolve_within_root`/`resolve_entry_within_root`,
+    /// differing only in whether the final path component gets dereferenced.
+    fn resolve_within_root_impl(
+        &self,
+        path: &str,
+        dereference_final: bool,
+    ) -> Result<PathBuf, AppError> {
         let candidate = Path::new(path);
         let joined = if candidate.is_absolute() {
             candidate.to_path_buf()
@@ -482,12 +488,73 @@ impl LocalWorkspace {
         let normalized_root = normalize(&self.root);
 
         if !normalized.starts_with(&normalized_root) {
-            return Err(AppError::InvalidPath(format!(
-                "path '{path}' escapes the workspace root"
-            )));
+            return Err(escapes_workspace_root(path));
         }
-        Ok(normalized)
+
+        // The lexical check above only catches a `..`-based escape. A symlink
+        // anywhere along the remaining path — including a dangling one, whose
+        // target doesn't exist yet — can still point outside `root` while its
+        // own spelling passes that check, so walk the remaining components one
+        // at a time from a symlink-resolved root, following each hop's symlink
+        // chain (if any) and re-checking containment after every hop. The root
+        // itself is resolved once up front: on macOS, `/tmp` and `/var` are
+        // themselves symlinks (to `/private/tmp`/`/private/var`), so a workspace
+        // opened under either needs its root resolved the same way as every
+        // path checked against it.
+        let real_root =
+            resolve_symlink_target(&normalized_root).map_err(|e| map_io_err(e, path))?;
+        let relative = normalized
+            .strip_prefix(&normalized_root)
+            .expect("normalized already checked to start with normalized_root above");
+        let components: Vec<_> = relative.components().collect();
+
+        let mut current = real_root.clone();
+        for (index, component) in components.iter().enumerate() {
+            current.push(component);
+            let is_final = index + 1 == components.len();
+            // `delete`/`rename` act on the directory entry itself and must not
+            // dereference their final component (matching `unlink(2)`/
+            // `rename(2)`, which never follow the last path component either) —
+            // see `resolve_entry_within_root`'s doc comment. Every other
+            // component, for every caller, is always dereferenced: an
+            // intermediate directory symlink is exactly as capable of escaping
+            // `root` as a final one.
+            if !is_final || dereference_final {
+                current = resolve_symlink_target(&current).map_err(|e| map_io_err(e, path))?;
+                if !current.starts_with(&real_root) {
+                    return Err(escapes_workspace_root(path));
+                }
+            }
+        }
+        Ok(current)
     }
+
+    /// Resolves `path` (absolute, or relative to `root`) against `root`,
+    /// rejecting anything that would escape it — including through a symlink,
+    /// dangling or not, at any position in the path. The returned path is fully
+    /// dereferenced: if `path` (or an ancestor) is itself a symlink, the result
+    /// is the real path it resolves to, not the link's own path. Used by every
+    /// operation that reads or writes through what the path resolves to.
+    fn resolve_within_root(&self, path: &str) -> Result<PathBuf, AppError> {
+        self.resolve_within_root_impl(path, true)
+    }
+
+    /// Like `resolve_within_root`, but leaves the final path component
+    /// un-dereferenced if it is itself a symlink — every ancestor is still
+    /// resolved through its symlink chain and checked for containment, but the
+    /// entry named by the final component is returned as-is. Matches
+    /// `unlink(2)`/`rmdir(2)`/`rename(2)`'s own behavior of never following the
+    /// last path component, and is what lets `delete`/`rename` keep acting on a
+    /// symlink entry itself (removing or moving the link) rather than on
+    /// whatever it points to, exactly as `LocalWorkspace::delete`'s recursive
+    /// branch already documents for a symlinked directory.
+    fn resolve_entry_within_root(&self, path: &str) -> Result<PathBuf, AppError> {
+        self.resolve_within_root_impl(path, false)
+    }
+}
+
+fn escapes_workspace_root(path: &str) -> AppError {
+    AppError::InvalidPath(format!("path '{path}' escapes the workspace root"))
 }
 
 /// Maps a filesystem `io::Error` to `AppError::NotFound` when its kind is
@@ -578,26 +645,26 @@ fn is_writable(path: &Path) -> bool {
 }
 
 /// Writes `contents` to `target` atomically and durably: writes to a fresh
-/// temp file in `target`'s real directory, `fsync`s it, renames it onto
-/// `target`'s real path, then `fsync`s the containing directory so the
-/// rename itself survives a crash. If `target` is a symlink, the symlink
-/// itself is left untouched — the temp file is written and renamed against
-/// whatever the symlink (chain) resolves to, so saving a symlinked file
-/// updates its target in place rather than replacing the link. An existing
-/// target that isn't writable fails with `PermissionDenied` up front, rather
-/// than being silently clobbered by a `rename(2)` that only checks the
-/// containing directory's permissions, not the file it's about to replace.
+/// temp file in `target`'s directory, `fsync`s it, renames it onto `target`,
+/// then `fsync`s the containing directory so the rename itself survives a
+/// crash. `target` is expected to already be resolved past any symlink by
+/// the caller (`resolve_within_root`) — if the original path a user saved
+/// through was itself a symlink, the symlink is left untouched and its
+/// target updated in place, since `target` here is already that real path,
+/// never the link's own path. An existing target that isn't writable fails
+/// with `PermissionDenied` up front, rather than being silently clobbered by
+/// a `rename(2)` that only checks the containing directory's permissions,
+/// not the file it's about to replace.
 fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
-    let real_target = resolve_symlink_target(target)?;
-    let dir = real_target.parent().ok_or_else(|| {
+    let dir = target.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "target has no parent directory",
         )
     })?;
 
-    let existing = std::fs::metadata(&real_target).ok();
-    if existing.is_some() && !is_writable(&real_target) {
+    let existing = std::fs::metadata(target).ok();
+    if existing.is_some() && !is_writable(target) {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             "target is not writable",
@@ -619,7 +686,7 @@ fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
     tmp.write_all(contents)?;
     fsync_full(tmp.as_file())?;
 
-    tmp.persist(&real_target).map_err(|e| e.error)?;
+    tmp.persist(target).map_err(|e| e.error)?;
 
     let dir_file = std::fs::File::open(dir)?;
     fsync_full(&dir_file)?;
@@ -800,8 +867,8 @@ impl Workspace for LocalWorkspace {
     }
 
     async fn rename(&self, from: &str, to: &str) -> Result<(), AppError> {
-        let from_path = self.resolve_within_root(from)?;
-        let to_path = self.resolve_within_root(to)?;
+        let from_path = self.resolve_entry_within_root(from)?;
+        let to_path = self.resolve_entry_within_root(to)?;
         // `tokio::fs::rename` (POSIX `rename(2)`) silently replaces an existing
         // destination, unlike `create_file`/`create_dir` above, so a rename onto an
         // existing name must be rejected the same way — except when the destination
@@ -843,7 +910,7 @@ impl Workspace for LocalWorkspace {
     }
 
     async fn delete(&self, path: &str, recursive: bool) -> Result<(), AppError> {
-        let target = self.resolve_within_root(path)?;
+        let target = self.resolve_entry_within_root(path)?;
         let metadata = tokio::fs::metadata(&target).await?;
         if metadata.is_dir() {
             if recursive {
@@ -1066,6 +1133,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_file_rejects_a_symlink_escaping_the_workspace_root() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "top secret").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        std::os::unix::fs::symlink(
+            outside.path().join("secret.txt"),
+            dir.path().join("link.txt"),
+        )
+        .unwrap();
+
+        let err = ws.read_file("link.txt").await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidPath(_)));
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("secret.txt")).unwrap(),
+            "top secret"
+        );
+    }
+
+    #[tokio::test]
     async fn write_file_into_a_deleted_directory_maps_to_not_found() {
         let dir = tempfile::tempdir().unwrap();
         let ws = workspace(dir.path());
@@ -1116,6 +1204,44 @@ mod tests {
         let link_meta = dir.path().join("link.md").symlink_metadata().unwrap();
         assert!(link_meta.file_type().is_symlink());
         assert_eq!(ws.read_file("missing.md").await.unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn write_file_rejects_a_symlink_escaping_the_workspace_root() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "original").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        std::os::unix::fs::symlink(
+            outside.path().join("secret.txt"),
+            dir.path().join("link.txt"),
+        )
+        .unwrap();
+
+        let err = ws.write_file("link.txt", "clobbered").await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidPath(_)));
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("secret.txt")).unwrap(),
+            "original"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_file_rejects_a_dangling_symlink_whose_target_escapes_the_workspace_root() {
+        let outside = tempfile::tempdir().unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        std::os::unix::fs::symlink(
+            outside.path().join("new_secret.txt"),
+            dir.path().join("link.txt"),
+        )
+        .unwrap();
+
+        let err = ws.write_file("link.txt", "hello").await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidPath(_)));
+        assert!(!outside.path().join("new_secret.txt").exists());
     }
 
     #[tokio::test]
@@ -1201,6 +1327,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_file_rejects_a_path_under_an_ancestor_symlink_that_escapes_the_workspace_root()
+    {
+        let outside = tempfile::tempdir().unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("escaping_link")).unwrap();
+
+        let err = ws.create_file("escaping_link/new.md").await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidPath(_)));
+        assert!(!outside.path().join("new.md").exists());
+    }
+
+    #[tokio::test]
     async fn rename_errors_if_destination_exists_instead_of_overwriting_it() {
         let dir = tempfile::tempdir().unwrap();
         let ws = workspace(dir.path());
@@ -1262,6 +1402,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rename_of_a_symlink_escaping_the_workspace_root_renames_the_link_entry() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "hi").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        std::os::unix::fs::symlink(
+            outside.path().join("secret.txt"),
+            dir.path().join("link.txt"),
+        )
+        .unwrap();
+
+        ws.rename("link.txt", "renamed.txt").await.unwrap();
+
+        assert!(dir.path().join("link.txt").symlink_metadata().is_err());
+        let renamed_meta = dir.path().join("renamed.txt").symlink_metadata().unwrap();
+        assert!(renamed_meta.file_type().is_symlink());
+        assert_eq!(
+            std::fs::read_link(dir.path().join("renamed.txt")).unwrap(),
+            outside.path().join("secret.txt")
+        );
+    }
+
+    #[tokio::test]
     async fn delete_requires_recursive_for_nonempty_dir() {
         let dir = tempfile::tempdir().unwrap();
         let ws = workspace(dir.path());
@@ -1291,6 +1455,28 @@ mod tests {
         assert!(dir.path().join("link_dir").symlink_metadata().is_err());
         assert!(dir.path().join("real_dir").exists());
         assert_eq!(ws.read_file("real_dir/inside.md").await.unwrap(), "keep me");
+    }
+
+    #[tokio::test]
+    async fn delete_of_a_symlink_escaping_the_workspace_root_only_unlinks_the_link() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "keep me").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        std::os::unix::fs::symlink(
+            outside.path().join("secret.txt"),
+            dir.path().join("link.txt"),
+        )
+        .unwrap();
+
+        ws.delete("link.txt", false).await.unwrap();
+
+        assert!(dir.path().join("link.txt").symlink_metadata().is_err());
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("secret.txt")).unwrap(),
+            "keep me"
+        );
     }
 
     #[tokio::test]
@@ -1374,6 +1560,19 @@ mod tests {
 
         assert!(!link.is_dir);
         assert!(link.is_symlink);
+    }
+
+    #[tokio::test]
+    async fn list_dir_rejects_a_directory_symlink_escaping_the_workspace_root() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "hi").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("link_dir")).unwrap();
+
+        let err = ws.list_dir("link_dir").await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidPath(_)));
     }
 
     fn options(case_sensitive: bool, regex: bool) -> SearchOptions {
@@ -1869,6 +2068,32 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, AppError::InvalidPath(_)));
+    }
+
+    #[tokio::test]
+    async fn import_external_rejects_a_dest_dir_that_is_a_symlink_escaping_the_workspace_root() {
+        let outside = tempfile::tempdir().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        std::fs::write(source_dir.path().join("a.txt"), "hi").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("escaping_dest")).unwrap();
+
+        let err = ws
+            .import_external(
+                "escaping_dest",
+                &[source_dir
+                    .path()
+                    .join("a.txt")
+                    .to_string_lossy()
+                    .to_string()],
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, AppError::InvalidPath(_)));
+        assert!(!outside.path().join("a.txt").exists());
     }
 
     #[tokio::test]
