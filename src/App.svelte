@@ -598,6 +598,12 @@
         markPathDeleted(event.path);
       } else if (event.kind === "rename" && event.fromPath) {
         renameOpenTabs(event.fromPath, event.path);
+        // A cross-directory move needs its *source* directory's listing
+        // refreshed too, not just the destination refreshed below — the
+        // old paired-rename shape emitted one wire event per path, so both
+        // directories got refreshed for free; this one event now only
+        // covers the destination on its own.
+        void refreshDirectoryContaining(event.fromPath);
       } else {
         void reconcileExternalChange(event.path);
       }

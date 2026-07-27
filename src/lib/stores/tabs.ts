@@ -320,6 +320,16 @@ export function markPathDeleted(path: string): void {
  * same way if it matched. Sets `tabRenameSignal` so `App.svelte`'s
  * reconciliation effect can re-key `editorPaneTree` and
  * `editorViewRegistry` to match.
+ *
+ * A tab already open at a computed destination is *displaced*: an in-app
+ * rename can never reach this (`LocalWorkspace::rename` rejects an existing
+ * destination), but an external rename has no such guard — the OS has
+ * already overwritten that file on disk by the time this runs. Two open
+ * tabs can't share one path (Svelte's keyed tab strip would throw on the
+ * duplicate key), so the displaced tab is dropped in favor of the renamed
+ * survivor; a dirty displaced tab is toasted so discarding its edits is
+ * never silent, mirroring `markPathDeleted`'s own toast for an auto-closed
+ * clean tab.
  */
 export function renameOpenTabs(oldPath: string, newPath: string): void {
   const state = get(tabsState);
@@ -329,15 +339,40 @@ export function renameOpenTabs(oldPath: string, newPath: string): void {
   }
 
   const rekey = (path: string): string => newPath + path.slice(oldPath.length);
+  let displacedDirtyNames: string[] = [];
 
-  tabsState.update((s) => ({
-    ...s,
-    tabs: s.tabs.map((t) => (isPathUnderOrEqual(t.path, oldPath) ? { ...t, path: rekey(t.path) } : t)),
-    activeTabPath:
-      s.activeTabPath && isPathUnderOrEqual(s.activeTabPath, oldPath)
-        ? rekey(s.activeTabPath)
-        : s.activeTabPath,
-  }));
+  tabsState.update((s) => {
+    const renamed = s.tabs.map((t) => {
+      const wasRenamed = isPathUnderOrEqual(t.path, oldPath);
+      return { tab: wasRenamed ? { ...t, path: rekey(t.path) } : t, wasRenamed };
+    });
+    const renamedDestinations = new Set(renamed.filter((r) => r.wasRenamed).map((r) => r.tab.path));
+
+    displacedDirtyNames = renamed
+      .filter((r) => !r.wasRenamed && renamedDestinations.has(r.tab.path) && r.tab.isDirty)
+      .map((r) => r.tab.path.split("/").pop() ?? r.tab.path);
+
+    const tabs = renamed.filter((r) => r.wasRenamed || !renamedDestinations.has(r.tab.path)).map((r) => r.tab);
+
+    let activeTabPath = s.activeTabPath;
+    if (activeTabPath && isPathUnderOrEqual(activeTabPath, oldPath)) {
+      activeTabPath = rekey(activeTabPath);
+    } else if (activeTabPath && !tabs.some((t) => t.path === activeTabPath)) {
+      // The active tab was the displaced one dropped above — fall back the
+      // same way closeTab/markPathDeleted do.
+      activeTabPath = tabs[tabs.length - 1]?.path ?? null;
+    }
+
+    return { tabs, activeTabPath };
+  });
+
+  if (displacedDirtyNames.length > 0) {
+    const message =
+      displacedDirtyNames.length === 1
+        ? `${displacedDirtyNames[0]} was overwritten by an external rename — its unsaved edits were discarded.`
+        : `${displacedDirtyNames.join(", ")} were overwritten by an external rename — their unsaved edits were discarded.`;
+    showErrorToast(message);
+  }
 
   tabRenameSignal.set({ from: oldPath, to: newPath });
 }

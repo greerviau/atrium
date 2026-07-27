@@ -6,7 +6,7 @@ import { EditorView } from "@codemirror/view";
 import App from "../../src/App.svelte";
 import { workspace } from "../../src/lib/stores/workspace";
 import { terminalVisible } from "../../src/lib/stores/layout";
-import { tabsState, openFile, requestSave } from "../../src/lib/stores/tabs";
+import { tabsState, openFile, requestSave, reconcileExternalChange, renameOpenTabs } from "../../src/lib/stores/tabs";
 import { focusedEditorPaneId, editorPaneTree } from "../../src/lib/stores/editorPanes";
 import { rename } from "../../src/lib/explorer/contextMenu";
 import * as commands from "../../src/lib/ipc/commands";
@@ -116,5 +116,90 @@ describe("App rename reconciliation (issue #249)", () => {
       "/proj/notes.md",
       expect.anything(),
     );
+  });
+
+  // Regression coverage for a review finding on this fix: `rekeyPath` alone
+  // isn't enough — the destroyed pane's own `onDestroy` still calls
+  // `unregisterView` with its stale, pre-rename `filePath` prop, which used
+  // to look up the wrong (already-vacated) registry entry and leave a dead,
+  // destroyed view registered under the new path forever. That dead view
+  // kept receiving `broadcastChange` dispatches, so any edit made to the
+  // renamed tab *after* a silent external reload (a "Modify" event on a
+  // clean tab, or the conflict banner's "Reload" action) would try to
+  // dispatch into the destroyed view and crash. This continues past the
+  // rename itself: reload, then edit again.
+  it("editing a renamed, clean tab after it silently reloads from an external change does not crash (dead-view regression)", async () => {
+    workspace.set({ id: "local", root: "/proj" });
+    const { container } = render(App);
+    await tick();
+
+    await openFile("/proj/notes.md");
+    await tick();
+    await tick();
+
+    await rename("/proj/notes.md", "notes-renamed.md");
+    await tick();
+    await tick();
+
+    expect(get(tabsState).tabs.map((t) => t.path)).toEqual(["/proj/notes-renamed.md"]);
+
+    vi.mocked(commands.fsReadFile).mockResolvedValueOnce("changed on disk\n");
+    await reconcileExternalChange("/proj/notes-renamed.md");
+    await tick();
+    await tick();
+
+    const view = findView(container);
+    expect(view.state.doc.toString()).toBe("changed on disk\n");
+
+    expect(() => {
+      view.dispatch({ changes: { from: 0, to: 0, insert: "x" } });
+    }).not.toThrow();
+    expect(view.state.doc.toString()).toBe("xchanged on disk\n");
+  });
+
+  it("renaming a file twice in a row (e.g. two quick explorer renames) leaves exactly one tab at the final path with content intact", async () => {
+    workspace.set({ id: "local", root: "/proj" });
+    const { container } = render(App);
+    await tick();
+
+    await openFile("/proj/notes.md");
+    await tick();
+    await tick();
+
+    await rename("/proj/notes.md", "notes-renamed-1.md");
+    await tick();
+    await tick();
+    await rename("/proj/notes-renamed-1.md", "notes-renamed-2.md");
+    await tick();
+    await tick();
+
+    expect(get(tabsState).tabs.map((t) => t.path)).toEqual(["/proj/notes-renamed-2.md"]);
+    const tabNames = [...container.querySelectorAll(".editor-panel .tab-name")].map((el) => el.textContent);
+    expect(tabNames.filter((t) => t?.includes("notes-renamed")).length).toBe(1);
+
+    const view = findView(container);
+    expect(() => {
+      view.dispatch({ changes: { from: 0, to: 0, insert: "still alive" } });
+    }).not.toThrow();
+  });
+
+  it("an external rename onto an already-open path drops the displaced tab instead of crashing the keyed tab strip", async () => {
+    workspace.set({ id: "local", root: "/proj" });
+    render(App);
+    await tick();
+
+    await openFile("/proj/a.md");
+    await tick();
+    await openFile("/proj/b.md");
+    await tick();
+    await tick();
+
+    expect(get(tabsState).tabs.map((t) => t.path)).toEqual(["/proj/a.md", "/proj/b.md"]);
+
+    expect(() => renameOpenTabs("/proj/a.md", "/proj/b.md")).not.toThrow();
+    await tick();
+    await tick();
+
+    expect(get(tabsState).tabs.map((t) => t.path)).toEqual(["/proj/b.md"]);
   });
 });

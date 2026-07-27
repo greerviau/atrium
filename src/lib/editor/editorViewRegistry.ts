@@ -5,6 +5,27 @@ export const syncAnnotation = Annotation.define<boolean>();
 
 const registry = new Map<string, Set<EditorView>>();
 
+/**
+ * Each registered view's *current* key in `registry`, independent of
+ * whatever `path` a caller later passes to `unregisterView`. A view mounted
+ * at one path can outlive a rename that moves its entry to a new key
+ * (`rekeyPath`), but the `EditorPane` instance being torn down as a result
+ * still only knows its own, now-stale `filePath` prop — without this,
+ * `unregisterView(staleOldPath, view)` would look up the already-vacated old
+ * key and find nothing there.
+ */
+const currentKeyForView = new WeakMap<EditorView, string>();
+
+/**
+ * Views whose owning pane has called `unregisterView`, but whose entry is
+ * still physically present in `registry` (see `unregisterView`'s deferred
+ * cleanup below). Consulted so a destroyed view never receives a
+ * `broadcastChange` dispatch — the actual crash the dead-view leak this
+ * bookkeeping exists to prevent produced — while still being readable by
+ * `liveDocFor` during the brief handoff window a rename's remount relies on.
+ */
+const destroyedViews = new WeakSet<EditorView>();
+
 export function registerView(path: string, view: EditorView): void {
   let views = registry.get(path);
   if (!views) {
@@ -12,15 +33,39 @@ export function registerView(path: string, view: EditorView): void {
     registry.set(path, views);
   }
   views.add(view);
+  currentKeyForView.set(view, path);
 }
 
+/**
+ * Marks `view` as gone. The actual removal from `registry` is deferred to
+ * the next microtask rather than done here synchronously: a rename's
+ * outgoing `EditorPane` unregisters its view *before* Svelte mounts the
+ * fresh replacement pane at the new key (empirically, for this codebase's
+ * keyed `{#each}` tab strip, destroy of the outgoing keyed element runs
+ * before create of the incoming one, not after) — and that fresh mount
+ * seeds itself from `liveDocFor(newPath)` before it ever calls
+ * `registerView` itself. Deleting the entry immediately here would empty
+ * (and, once empty, remove) the very set that mount is about to read,
+ * reintroducing exactly the data-loss hazard this whole registry exists to
+ * close: the fresh pane would find nothing and fall back to stale,
+ * last-saved content instead of the still-live buffer. Marking the view
+ * destroyed instead keeps its document readable for that one read, while
+ * `broadcastChange` below excludes every destroyed view from receiving a
+ * dispatch — the actual leak symptom — regardless of removal timing.
+ */
 export function unregisterView(path: string, view: EditorView): void {
-  const views = registry.get(path);
-  if (!views) return;
-  views.delete(view);
-  if (views.size === 0) {
-    registry.delete(path);
-  }
+  const key = currentKeyForView.get(view) ?? path;
+  destroyedViews.add(view);
+  queueMicrotask(() => {
+    const views = registry.get(key);
+    if (!views || !views.has(view)) return;
+    views.delete(view);
+    currentKeyForView.delete(view);
+    destroyedViews.delete(view);
+    if (views.size === 0) {
+      registry.delete(key);
+    }
+  });
 }
 
 /**
@@ -39,6 +84,9 @@ export function rekeyPath(oldPath: string, newPath: string): void {
   if (!views) return;
   registry.delete(oldPath);
   registry.set(newPath, views);
+  for (const view of views) {
+    currentKeyForView.set(view, newPath);
+  }
 }
 
 /**
@@ -46,12 +94,20 @@ export function rekeyPath(oldPath: string, newPath: string): void {
  * `null` if none is registered yet. Consulted at registration time so a
  * newly-mounted view seeds from a live sibling's buffer instead of
  * `savedDoc` — which can be stale the instant the path is already open
- * elsewhere with unsaved edits.
+ * elsewhere with unsaved edits. Prefers a non-destroyed view when one is
+ * present, but falls back to a destroyed one rather than `null` — the exact
+ * case right after a rename's outgoing pane has unregistered but before its
+ * replacement has registered, where a destroyed view's document is still
+ * the correct thing to seed the fresh mount from.
  */
 export function liveDocFor(path: string): string | null {
   const views = registry.get(path);
-  const first = views?.values().next().value;
-  return first ? first.state.doc.toString() : null;
+  if (!views || views.size === 0) return null;
+  for (const view of views) {
+    if (!destroyedViews.has(view)) return view.state.doc.toString();
+  }
+  const [fallback] = views;
+  return fallback.state.doc.toString();
 }
 
 function broadcastChange(path: string, sourceView: EditorView, tr: Transaction): void {
@@ -74,7 +130,7 @@ function broadcastChange(path: string, sourceView: EditorView, tr: Transaction):
     annotations: [syncAnnotation.of(true), Transaction.addToHistory.of(false)],
   };
   for (const view of [...views]) {
-    if (view === sourceView) continue;
+    if (view === sourceView || destroyedViews.has(view)) continue;
     view.dispatch(spec);
   }
 }

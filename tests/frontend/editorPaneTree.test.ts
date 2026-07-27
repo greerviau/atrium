@@ -239,4 +239,23 @@ describe("renamePathInTree", () => {
     const result = renamePathInTree(tree, "/notes.md", "/notes-renamed.md");
     expect(result).toBe(tree);
   });
+
+  it("drops a tab already open in the same leaf at the computed destination, instead of duplicating the keyed tab strip", () => {
+    const tree = leaf("L1", ["/a.md", "/b.md"]);
+
+    const result = renamePathInTree(tree, "/a.md", "/b.md");
+
+    expect(findLeaf(result, "L1")?.tabs).toEqual(["/b.md"]);
+  });
+
+  it("falls back activeTabPath to the last remaining tab when the active tab was the one displaced", () => {
+    let tree: EditorPaneNode = leaf("L1", ["/a.md", "/b.md"]);
+    tree = setActiveTabInLeaf(tree, "L1", "/b.md");
+
+    const result = renamePathInTree(tree, "/a.md", "/b.md");
+
+    const target = findLeaf(result, "L1")!;
+    expect(target.tabs).toEqual(["/b.md"]);
+    expect(target.activeTabPath).toBe("/b.md");
+  });
 });

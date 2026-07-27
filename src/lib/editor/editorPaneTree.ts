@@ -103,16 +103,32 @@ export function pruneMissingTabs(tree: EditorPaneNode, openPaths: ReadonlySet<st
  * `editorViewRegistry` to the new path before calling this, or the fresh
  * mount finds no live view registered under the new path and falls back to
  * stale, last-saved content.
+ *
+ * A path already open in the same leaf at a computed destination is
+ * displaced the same way `renameOpenTabs` displaces its own `tabsState`
+ * entry — dropped in favor of the renamed survivor, since a leaf's `tabs`
+ * array can't hold the same path twice without throwing the keyed
+ * `{#each}` block's own duplicate-key error.
  */
 export function renamePathInTree(tree: EditorPaneNode, oldPath: string, newPath: string): EditorPaneNode {
   let result = tree;
   for (const leaf of listLeaves(tree)) {
     if (!leaf.tabs.some((p) => isPathUnderOrEqual(p, oldPath))) continue;
-    const tabs = leaf.tabs.map((p) => (isPathUnderOrEqual(p, oldPath) ? newPath + p.slice(oldPath.length) : p));
-    const activeTabPath =
-      leaf.activeTabPath && isPathUnderOrEqual(leaf.activeTabPath, oldPath)
-        ? newPath + leaf.activeTabPath.slice(oldPath.length)
-        : leaf.activeTabPath;
+
+    const renamed = leaf.tabs.map((p) => {
+      const wasRenamed = isPathUnderOrEqual(p, oldPath);
+      return { path: wasRenamed ? newPath + p.slice(oldPath.length) : p, wasRenamed };
+    });
+    const renamedDestinations = new Set(renamed.filter((r) => r.wasRenamed).map((r) => r.path));
+    const tabs = renamed.filter((r) => r.wasRenamed || !renamedDestinations.has(r.path)).map((r) => r.path);
+
+    let activeTabPath = leaf.activeTabPath;
+    if (activeTabPath && isPathUnderOrEqual(activeTabPath, oldPath)) {
+      activeTabPath = newPath + activeTabPath.slice(oldPath.length);
+    } else if (activeTabPath && !tabs.includes(activeTabPath)) {
+      activeTabPath = tabs[tabs.length - 1] ?? null;
+    }
+
     result = mapLeaf(result, leaf.id, () => ({ ...leaf, tabs, activeTabPath }));
   }
   return result;

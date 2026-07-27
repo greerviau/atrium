@@ -419,6 +419,60 @@ describe("renameOpenTabs", () => {
 
     expect(get(tabRenameSignal)).toEqual({ from: "/notes.md", to: "/notes-renamed.md" });
   });
+
+  it("drops a clean tab already open at the computed destination, keeping only the renamed survivor (external rename onto an open path)", () => {
+    tabsState.set({
+      tabs: [codeTab("/a.md", { savedDoc: "a's content" }), codeTab("/b.md", { savedDoc: "b's content" })],
+      activeTabPath: "/a.md",
+    });
+
+    renameOpenTabs("/a.md", "/b.md");
+
+    const tabs = get(tabsState).tabs;
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].path).toBe("/b.md");
+    expect(tabs[0].savedDoc).toBe("a's content");
+  });
+
+  it("toasts when the displaced tab was dirty, since its unsaved edits are discarded", () => {
+    errorToast.set(null);
+    tabsState.set({
+      tabs: [codeTab("/a.md"), codeTab("/b.md", { isDirty: true, savedDoc: "unsaved" })],
+      activeTabPath: "/a.md",
+    });
+
+    renameOpenTabs("/a.md", "/b.md");
+
+    expect(get(errorToast)).toBe("b.md was overwritten by an external rename — its unsaved edits were discarded.");
+  });
+
+  it("does not toast when the displaced tab was clean", () => {
+    errorToast.set(null);
+    tabsState.set({
+      tabs: [codeTab("/a.md"), codeTab("/b.md")],
+      activeTabPath: "/a.md",
+    });
+
+    renameOpenTabs("/a.md", "/b.md");
+
+    expect(get(errorToast)).toBeNull();
+  });
+
+  it("falls back activeTabPath to the last remaining tab when the active tab was the one displaced", () => {
+    tabsState.set({
+      tabs: [codeTab("/a.md"), codeTab("/b.md")],
+      activeTabPath: "/b.md",
+    });
+
+    renameOpenTabs("/a.md", "/b.md");
+
+    expect(get(tabsState).activeTabPath).toBe("/b.md");
+    expect(get(tabsState).tabs).toHaveLength(1);
+    // The survivor at /b.md is the renamed tab (originally /a.md), not the
+    // displaced one — activeTabPath falls back to it since it's now the
+    // only tab left, not because it "matched" the old active path.
+    expect(get(tabsState).tabs[0].path).toBe("/b.md");
+  });
 });
 
 describe("reconcileExternalChange's NOT_FOUND catch", () => {

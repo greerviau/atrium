@@ -43,6 +43,20 @@ pub fn watch(
                                 kind: FsChangeKind::Rename,
                                 from_path: Some(from.to_string_lossy().to_string()),
                             });
+                        } else {
+                            // A `Both`-kind event should always carry exactly
+                            // two paths; if it somehow doesn't, fall back the
+                            // same way an unpaired rename half does — a plain
+                            // `Remove` per path, never a guessed rename —
+                            // rather than dropping the event on the floor.
+                            for path in &event.event.paths {
+                                let _ = tx.send(FsChangeEvent {
+                                    workspace_id: workspace_id.clone(),
+                                    path: path.to_string_lossy().to_string(),
+                                    kind: FsChangeKind::Remove,
+                                    from_path: None,
+                                });
+                            }
                         }
                         continue;
                     }

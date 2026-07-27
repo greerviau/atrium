@@ -46,6 +46,46 @@ describe("rekeyPath", () => {
     expect(() => rekeyPath("/missing.md", "/also-missing.md")).not.toThrow();
     expect(liveDocFor("/also-missing.md")).toBeNull();
   });
+
+  it("unregisterView (called with the stale, pre-rekey path) keeps the view briefly readable via liveDocFor, then removes it once no fresh mount claimed it", async () => {
+    const view = new EditorView({ doc: "hello" });
+    registerView("/old.md", view);
+
+    rekeyPath("/old.md", "/new.md");
+    // Simulates the real sequence: the pane being torn down as a result of
+    // the rename calls unregisterView with the *old* path, since a
+    // destroyed component instance's own props never change out from under
+    // it — only a fresh instance mounts with the new path. Empirically,
+    // for this codebase's keyed tab strip, that destroy runs *before* the
+    // fresh mount — so removal must not be synchronous here, or the fresh
+    // mount's own `liveDocFor` read (which runs before it registers itself)
+    // would find nothing and silently fall back to stale, last-saved
+    // content instead of this still-live buffer.
+    unregisterView("/old.md", view);
+    expect(liveDocFor("/new.md")).toBe("hello");
+
+    // Once the microtask queue drains with no fresh registration ever
+    // claiming this key (a genuine close, not a rename), the entry is
+    // actually cleaned up.
+    await Promise.resolve();
+    expect(liveDocFor("/new.md")).toBeNull();
+    view.destroy();
+  });
+
+  it("does not leave a dead view answering liveDocFor after the stale-path unregister, even with a live sibling still registered", () => {
+    const dead = new EditorView({ doc: "dead" });
+    registerView("/old.md", dead);
+    rekeyPath("/old.md", "/new.md");
+    unregisterView("/old.md", dead);
+    dead.destroy();
+
+    const alive = new EditorView({ doc: "alive" });
+    registerView("/new.md", alive);
+
+    expect(liveDocFor("/new.md")).toBe("alive");
+    unregisterView("/new.md", alive);
+    alive.destroy();
+  });
 });
 
 const PATH = "/shared.ts";
