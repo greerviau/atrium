@@ -66,17 +66,35 @@ describe("rendered markdown: scrolling down does not jump back up (issue #311)",
     // a manual trackpad-driven pass on real hardware (see the plan's Phase
     // 1, step 3) — a scripted action still can't fully reproduce a human's
     // uneven input timing.
-    const maxSteps = 400;
+    //
+    // The loop stops on the earlier of "reached the bottom" or "stopped
+    // making forward progress for a while" rather than a bare step count:
+    // async image/Mermaid rendering can grow `scrollHeight` mid-gesture, so
+    // a fixed step budget sized for the fixture's static height can run out
+    // before the (moving) bottom is actually reached.
+    const maxSteps = 600;
+    const stallLimit = 15;
     let atBottom = false;
+    let lastScrollTop = -1;
+    let stalledSteps = 0;
     for (let i = 0; i < maxSteps && !atBottom; i++) {
       await browser
         .action("wheel")
         .scroll({ x: point.x, y: point.y, deltaX: 0, deltaY: 600, duration: 50 })
         .perform();
 
-      atBottom = await browser.execute((el) => {
-        return el.scrollTop + el.clientHeight >= el.scrollHeight - 2;
+      const state = await browser.execute((el) => {
+        return { scrollTop: el.scrollTop, atBottom: el.scrollTop + el.clientHeight >= el.scrollHeight - 2 };
       }, scroller);
+      atBottom = state.atBottom;
+
+      if (state.scrollTop <= lastScrollTop + 0.5) {
+        stalledSteps++;
+        if (stalledSteps >= stallLimit) break;
+      } else {
+        stalledSteps = 0;
+      }
+      lastScrollTop = state.scrollTop;
     }
 
     // Let any in-flight decoration rebuild / async image or Mermaid render
@@ -90,16 +108,20 @@ describe("rendered markdown: scrolling down does not jump back up (issue #311)",
     });
 
     expect(samples.length).toBeGreaterThan(10);
-    expect(atBottom).toBe(true);
+    expect(atBottom, `expected the scroll gesture to reach the bottom of the fixture within ${maxSteps} steps`).toBe(
+      true,
+    );
 
     let maxSoFar = samples[0];
     let worstBackwardJump = 0;
-    let worstAt = -1;
+    let worstAtIndex = 0;
+    let worstAtValue = samples[0];
     for (let i = 1; i < samples.length; i++) {
       const backward = maxSoFar - samples[i];
       if (backward > worstBackwardJump) {
         worstBackwardJump = backward;
-        worstAt = i;
+        worstAtIndex = i;
+        worstAtValue = samples[i];
       }
       maxSoFar = Math.max(maxSoFar, samples[i]);
     }
@@ -107,8 +129,8 @@ describe("rendered markdown: scrolling down does not jump back up (issue #311)",
     expect(
       worstBackwardJump,
       `expected scrollTop to be monotonic (within ${BACKWARD_JITTER_TOLERANCE_PX}px jitter) while scrolling down, ` +
-        `but it jumped backward by ${worstBackwardJump}px at sample ${worstAt} of ${samples.length} ` +
-        `(scrollTop went from a high of ${maxSoFar}px down to ${samples[worstAt]}px)`,
+        `but it jumped backward by ${worstBackwardJump}px at sample ${worstAtIndex} of ${samples.length} ` +
+        `(scrollTop went from a high of ${maxSoFar}px down to ${worstAtValue}px)`,
     ).toBeLessThanOrEqual(BACKWARD_JITTER_TOLERANCE_PX);
   });
 });

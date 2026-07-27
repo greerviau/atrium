@@ -1,5 +1,5 @@
-import type { Extension, RangeSet, Transaction } from "@codemirror/state";
-import { Prec, StateEffect, StateField } from "@codemirror/state";
+import type { Extension, Transaction } from "@codemirror/state";
+import { Prec, RangeSet, StateEffect, StateField } from "@codemirror/state";
 import { BlockWrapper, Decoration, EditorView, ViewPlugin, ViewUpdate, keymap, lineNumbers, type DecorationSet } from "@codemirror/view";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -92,12 +92,13 @@ const focusTrackingHandlers = EditorView.domEventHandlers({
  * guard below would skip it and the drag tint would never appear.
  *
  * When a syntax-tree-identity change with no accompanying doc change
- * rebuilds `tableWraps`/`codeBlockWraps` (issue #311), the plugin preserves
- * the user's visual scroll position across it: such a change can
- * retroactively reclassify a block that's already scrolled above the
- * viewport, and CodeMirror's own height-change detection doesn't see it
- * (see the `update` method's own comment for the mechanism and why a direct
- * edit is excluded).
+ * actually changes `tableWraps`/`codeBlockWraps` (issue #311), the plugin
+ * tries to preserve the user's visual scroll position across it: such a
+ * change can retroactively reclassify a block that's already scrolled above
+ * the viewport, and CodeMirror's real, DOM-measured scroll-anchor
+ * compensation can't see that reclassification for content that's been
+ * virtualized away (see the `update` method's own comment for the exact
+ * mechanism, its limits, and why a direct edit is excluded).
  */
 function livePreviewPlugin(documentPath: string) {
   const plugin = ViewPlugin.fromClass(
@@ -155,42 +156,56 @@ function livePreviewPlugin(documentPath: string) {
           // a block that's already scrolled above the viewport from plain
           // text into a real `.cm-table-box`/`.cm-code-block-box` wrapper,
           // changing its rendered height at a moment entirely decoupled
-          // from the user's own scroll input. CodeMirror's built-in
-          // height-change detection only looks at `StateField`-registered
-          // decorations, not these `ViewPlugin`-supplied wraps (see
-          // `EditorPane.svelte`'s own comment on the view-mode-toggle case
-          // for the same limitation), so nothing else compensates the
-          // user's scroll position for it. A direct edit is excluded here:
-          // its own scroll handling (cursor-following, `scrollIntoView`
-          // from the transaction) already covers the doc-changed case, and
+          // from the user's own scroll input. CodeMirror's real scroll-anchor
+          // compensation (a later, DOM-measured pass, separate from the
+          // `StateField`-only detection that only drives the viewport
+          // recompute at update time) already handles this correctly for
+          // content that's still within the currently-drawn range — but a
+          // block reclassified while it's scrolled far enough to have been
+          // virtualized away never gets re-measured until it re-enters view,
+          // so that case is what this guards. A direct edit is excluded:
+          // its own scroll handling already covers the doc-changed case, and
           // `buildTableWrapRanges`/`buildCodeBlockWrapRanges` only ever
           // retroactively affect content the user *isn't* currently editing.
-          const preserveScroll = treeChanged && !update.docChanged;
-          const snapshot = preserveScroll ? update.view.scrollSnapshot() : null;
+          const backgroundReclassify = treeChanged && !update.docChanged;
+          const view = update.view;
+          const scrollTopAtCapture = backgroundReclassify ? view.scrollDOM.scrollTop : 0;
+          const snapshot = backgroundReclassify ? view.scrollSnapshot() : null;
 
-          this.tableWraps = buildTableWrapRanges(update.state);
-          this.codeBlockWraps = buildCodeBlockWrapRanges(update.state);
+          const newTableWraps = buildTableWrapRanges(update.state);
+          const newCodeBlockWraps = buildCodeBlockWrapRanges(update.state);
+          const wrapsChanged =
+            !RangeSet.eq([this.tableWraps], [newTableWraps]) ||
+            !RangeSet.eq([this.codeBlockWraps], [newCodeBlockWraps]);
+          this.tableWraps = newTableWraps;
+          this.codeBlockWraps = newCodeBlockWraps;
 
-          if (snapshot) {
-            // `view.dispatch()` cannot be called synchronously from inside
-            // a `ViewPlugin.update()` — CodeMirror throws "Calls to
+          if (snapshot && wrapsChanged) {
+            // `view.dispatch()` cannot be called synchronously from inside a
+            // `ViewPlugin.update()` — CodeMirror throws "Calls to
             // EditorView.update are not allowed while an update is in
             // progress" — so the restoring dispatch is deferred to a
-            // microtask, which still runs before the browser processes any
-            // further scroll input. `scrollSnapshot()`'s effect is
-            // anchor-relative (it restores "this document position stays
-            // at this pixel offset from the top"), not an absolute scroll
-            // position, so re-applying it when nothing above the anchor
-            // actually changed height is a no-op — safe to schedule on
-            // every qualifying update rather than only when a jump is
-            // suspected. `requestMeasure()` afterward matches the same
-            // final step the view-mode-toggle fix already uses.
-            const view = update.view;
-            Promise.resolve().then(() => {
-              if (this.destroyed) return;
-              view.dispatch({ effects: snapshot });
-              view.requestMeasure();
-            });
+            // microtask. But `scrollSnapshot()`'s effect is an *absolute*
+            // rewind, not a relative one (`DocView.scrollIntoView`'s
+            // snapshot branch force-writes `scrollDOM.scrollTop`), and it's
+            // only actually applied a full animation frame later, in
+            // CodeMirror's own measure pass — long enough for the user's own
+            // in-flight scrolling (native wheel/momentum input, which never
+            // goes through this plugin) to have moved `scrollDOM.scrollTop`
+            // in the meantime. Applying a now-stale snapshot on top of that
+            // would force the pane back to where it was at capture time,
+            // reproducing the exact backward jump this guards against. So
+            // the restore only goes through if `scrollTop` is still exactly
+            // what it was at capture: if the user has scrolled since, this
+            // bows out and leaves it to CodeMirror's own compensation rather
+            // than fighting it with a second, competing correction.
+            Promise.resolve()
+              .then(() => {
+                if (this.destroyed || view.scrollDOM.scrollTop !== scrollTopAtCapture) return;
+                view.dispatch({ effects: snapshot });
+                view.requestMeasure();
+              })
+              .catch(() => {});
           }
         }
       }

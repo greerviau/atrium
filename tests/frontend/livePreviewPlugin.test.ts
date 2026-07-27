@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, type MockInstance } from "vitest";
 import { EditorState, EditorSelection, type StateEffect } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { forceParsing } from "@codemirror/language";
@@ -215,16 +215,18 @@ describe("an empty table cell keeps its own slot, reachable and fillable (issue 
  * `editorHeight` — `EditorView`'s scroll application is gated behind one —
  * so asserting an actual `scrollDOM.scrollTop` value here can't distinguish
  * fixed from unfixed code. These tests instead verify the fix's mechanism
- * directly, the same way that file's `#87` test does: that a background
- * tree-completion with no doc or selection change (the same shape
- * `forceParsing` simulates for the #85 tests above, and the confirmed
- * mechanism from the issue #311 investigation — a table/code-block
- * reclassifying above the current viewport) schedules a scroll-anchor
- * restoring dispatch, and that an ordinary doc edit does not.
+ * directly, the same way that file's `#87` test does.
  */
 describe("live-preview preserves scroll position across a background wrap rebuild (issue #311)", () => {
   const padding = "x".repeat(4000) + "\n\n";
   const scrollAnchorType = effectTypeOf(EditorView.scrollIntoView(0, {}));
+
+  function dispatchedScrollAnchor(spy: MockInstance<EditorView["dispatch"]>): boolean {
+    return spy.mock.calls.some(([spec]) => {
+      const effects = Array.isArray(spec?.effects) ? spec.effects : spec?.effects ? [spec.effects] : [];
+      return effects.some((effect) => effectTypeOf(effect as StateEffect<unknown> | undefined) === scrollAnchorType);
+    });
+  }
 
   it("dispatches a scroll-anchor-restoring effect after a background parse reclassifies a table past the initial parse window", async () => {
     const doc = padding + "| Name | Role |\n| ---- | ---- |\n| Alice | Engineer |\n";
@@ -252,11 +254,7 @@ describe("live-preview preserves scroll position across a background wrap rebuil
     await Promise.resolve();
     await Promise.resolve();
 
-    const hasScrollAnchorDispatch = dispatchSpy.mock.calls.some(([spec]) => {
-      const effects = Array.isArray(spec?.effects) ? spec.effects : spec?.effects ? [spec.effects] : [];
-      return effects.some((effect) => effectTypeOf(effect as StateEffect<unknown> | undefined) === scrollAnchorType);
-    });
-    expect(hasScrollAnchorDispatch).toBe(true);
+    expect(dispatchedScrollAnchor(dispatchSpy)).toBe(true);
     expect(requestMeasureSpy).toHaveBeenCalled();
   });
 
@@ -282,10 +280,74 @@ describe("live-preview preserves scroll position across a background wrap rebuil
     await Promise.resolve();
     await Promise.resolve();
 
-    const hasScrollAnchorDispatch = dispatchSpy.mock.calls.some(([spec]) => {
-      const effects = Array.isArray(spec?.effects) ? spec.effects : spec?.effects ? [spec.effects] : [];
-      return effects.some((effect) => effectTypeOf(effect as StateEffect<unknown> | undefined) === scrollAnchorType);
+    expect(dispatchedScrollAnchor(dispatchSpy)).toBe(false);
+  });
+
+  it("does not dispatch when the background parse grows the tree but no table or code block is reclassified", async () => {
+    const doc = padding + "# Heading past the initial parse window\n";
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    view = new EditorView({
+      state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
+      parent: container,
     });
-    expect(hasScrollAnchorDispatch).toBe(false);
+
+    const dispatchSpy = vi.spyOn(view, "dispatch");
+    forceParsing(view, view.state.doc.length);
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The tree grew (the heading past the padding is now parsed) but
+    // `tableWraps`/`codeBlockWraps` are empty before and after — nothing for
+    // a restore to compensate, so it must not fire at all.
+    expect(dispatchedScrollAnchor(dispatchSpy)).toBe(false);
+  });
+
+  it("does not restore the scroll position if scrollTop has already moved by the time the restore would run", async () => {
+    const doc = padding + "| Name | Role |\n| ---- | ---- |\n| Alice | Engineer |\n";
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    view = new EditorView({
+      state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
+      parent: container,
+    });
+
+    const dispatchSpy = vi.spyOn(view, "dispatch");
+    forceParsing(view, view.state.doc.length);
+
+    // Simulate the user's own native scrolling landing between the snapshot
+    // being captured (synchronously, inside `update`) and the deferred
+    // restore actually running — the exact race that makes an unconditional
+    // restore reproduce issue #311's own symptom instead of fixing it.
+    view.scrollDOM.scrollTop = 250;
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(dispatchedScrollAnchor(dispatchSpy)).toBe(false);
+  });
+
+  it("does not act on the deferred restore if the view is destroyed before it runs", async () => {
+    const doc = padding + "| Name | Role |\n| ---- | ---- |\n| Alice | Engineer |\n";
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    view = new EditorView({
+      state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
+      parent: container,
+    });
+
+    const dispatchSpy = vi.spyOn(view, "dispatch");
+    forceParsing(view, view.state.doc.length);
+    view.destroy();
+
+    // The `destroyed` guard means `dispatch`/`requestMeasure` are never even
+    // called post-destroy — distinct from CodeMirror's own dispatch-on-a-
+    // destroyed-view handling, which no-ops rather than throwing and so
+    // wouldn't otherwise distinguish "guarded" from "unguarded" here.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(dispatchedScrollAnchor(dispatchSpy)).toBe(false);
   });
 });
