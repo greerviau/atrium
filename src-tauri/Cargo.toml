@@ -31,6 +31,7 @@ grep-matcher = "0.1"
 memchr = "2"
 nucleo-matcher = "0.3"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

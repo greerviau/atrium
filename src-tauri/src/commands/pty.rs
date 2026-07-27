@@ -11,7 +11,7 @@ pub fn pty_spawn(
     cols: u16,
     rows: u16,
 ) -> Result<String, AppError> {
-    state.pty.spawn(cwd, cols, rows)
+    state.pty.spawn(cwd, cols, rows, None)
 }
 
 #[tauri::command]
