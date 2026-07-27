@@ -40,20 +40,23 @@ export function addTabToLeaf(tree: EditorPaneNode, leafId: string, path: string)
 
 /**
  * Removes `path` from `leafId`'s tab strip. If it was the active tab, the
- * next active tab falls back to the new last tab (the same convention
- * `src/lib/stores/tabs.ts`'s `closeTab` uses for the flat, pre-split tab
- * strip). If `path` was the leaf's last tab, the whole leaf is removed from
- * the tree via `removePane` — returns `null` if that leaf was the tree's
- * only leaf, mirroring `removePane`'s own null case.
+ * next active tab falls back to its neighbour — the tab that shifted into
+ * its old index, or the new last tab if it was rightmost (the same
+ * convention `src/lib/stores/tabs.ts`'s `closeTab` uses for the flat,
+ * pre-split tab strip). If `path` was the leaf's last tab, the whole leaf is
+ * removed from the tree via `removePane` — returns `null` if that leaf was
+ * the tree's only leaf, mirroring `removePane`'s own null case.
  */
 export function closeTabInLeaf(tree: EditorPaneNode, leafId: string, path: string): EditorPaneNode | null {
   const leaf = findLeaf(tree, leafId);
   if (!leaf) return tree;
+  const closedIndex = leaf.tabs.indexOf(path);
   const tabs = leaf.tabs.filter((p) => p !== path);
   if (tabs.length === 0) {
     return removePane(tree, leafId);
   }
-  const activeTabPath = leaf.activeTabPath === path ? tabs[tabs.length - 1] : leaf.activeTabPath;
+  const activeTabPath =
+    leaf.activeTabPath === path ? tabs[Math.min(closedIndex, tabs.length - 1)] : leaf.activeTabPath;
   return mapLeaf(tree, leafId, () => ({ ...leaf, tabs, activeTabPath }));
 }
 
@@ -84,7 +87,10 @@ export function pruneMissingTabs(tree: EditorPaneNode, openPaths: ReadonlySet<st
       result = removePane(result, leaf.id);
       continue;
     }
-    const activeTabPath = leaf.activeTabPath && tabs.includes(leaf.activeTabPath) ? leaf.activeTabPath : tabs[tabs.length - 1];
+    const activeTabPath =
+      leaf.activeTabPath && tabs.includes(leaf.activeTabPath)
+        ? leaf.activeTabPath
+        : tabs[Math.min(Math.max(leaf.tabs.indexOf(leaf.activeTabPath ?? ""), 0), tabs.length - 1)];
     result = mapLeaf(result, leaf.id, () => ({ ...leaf, tabs, activeTabPath }));
   }
   return result;

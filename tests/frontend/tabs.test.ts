@@ -563,6 +563,39 @@ describe("requestCloseTab", () => {
     expect(get(tabsState).tabs).toHaveLength(1);
     expect(get(closePrompt)).toBeNull();
   });
+
+  it("activates the tab that shifted into the closed tab's position, not the last tab", () => {
+    tabsState.set({
+      tabs: [codeTab("/a.rs"), codeTab("/b.rs"), codeTab("/c.rs")],
+      activeTabPath: "/b.rs",
+    });
+
+    requestCloseTab("/b.rs");
+
+    expect(get(tabsState).activeTabPath).toBe("/c.rs");
+  });
+
+  it("activates the closed tab's right neighbour, not the last tab, when closing the first tab", () => {
+    tabsState.set({
+      tabs: [codeTab("/a.rs"), codeTab("/b.rs"), codeTab("/c.rs")],
+      activeTabPath: "/a.rs",
+    });
+
+    requestCloseTab("/a.rs");
+
+    expect(get(tabsState).activeTabPath).toBe("/b.rs");
+  });
+
+  it("activates the new last tab when closing the rightmost tab", () => {
+    tabsState.set({
+      tabs: [codeTab("/a.rs"), codeTab("/b.rs"), codeTab("/c.rs")],
+      activeTabPath: "/c.rs",
+    });
+
+    requestCloseTab("/c.rs");
+
+    expect(get(tabsState).activeTabPath).toBe("/b.rs");
+  });
 });
 
 describe("saveTab", () => {

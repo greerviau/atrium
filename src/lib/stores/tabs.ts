@@ -195,9 +195,12 @@ export function resetTabs(): void {
 
 export function closeTab(path: string): void {
   tabsState.update((s) => {
+    const closedIndex = s.tabs.findIndex((t) => t.path === path);
     const tabs = s.tabs.filter((t) => t.path !== path);
     const activeTabPath =
-      s.activeTabPath === path ? (tabs[tabs.length - 1]?.path ?? null) : s.activeTabPath;
+      s.activeTabPath === path
+        ? (tabs[Math.min(closedIndex, tabs.length - 1)]?.path ?? null)
+        : s.activeTabPath;
     return { tabs, activeTabPath };
   });
 }
