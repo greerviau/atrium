@@ -3,7 +3,8 @@ import { get } from "svelte/store";
 import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import EditorPanel from "../../src/lib/editor/EditorPanel.svelte";
 import type { EditorLeafPane } from "../../src/lib/editor/editorPaneTree";
-import { tabsState, saveRequest, type Tab } from "../../src/lib/stores/tabs";
+import { tabsState, saveRequest, notifySaveFailed, type Tab } from "../../src/lib/stores/tabs";
+import { errorToast } from "../../src/lib/stores/errorToast";
 
 vi.mock("../../src/lib/editor/EditorPane.svelte", async () => {
   const mod = await import("./EditorPaneStub.svelte");
@@ -150,6 +151,21 @@ describe("EditorPanel", () => {
     await fireEvent.click(save);
 
     expect(get(saveRequest)).toBe("/a.ts");
+  });
+
+  it("shows an error toast when the deleted banner's 'Save' fails, instead of an unhandled rejection", async () => {
+    errorToast.set(null);
+    tabsState.set({ tabs: [tab("/a.ts", { isDeleted: true })], activeTabPath: "/a.ts" });
+    const tree: EditorLeafPane = { type: "leaf", id: "p1", tabs: ["/a.ts"], activeTabPath: "/a.ts" };
+    const { findByText } = render(EditorPanel, { tree, ...baseProps });
+
+    const save = await findByText("Save");
+    await fireEvent.click(save);
+    notifySaveFailed("/a.ts", { code: "IO_ERROR", message: "No such file or directory" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(get(errorToast)).toBe("Couldn't save a.ts: No such file or directory");
   });
 
   it("'Close' on the deleted banner closes the tab outright", async () => {

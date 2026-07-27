@@ -488,6 +488,19 @@ impl LocalWorkspace {
     }
 }
 
+/// Maps a filesystem `io::Error` to `AppError::NotFound` when its kind is
+/// `NotFound`, so a deleted-file read/write surfaces to the frontend as the
+/// `NOT_FOUND` code it can act on (`markPathDeleted`), rather than the
+/// generic `IO_ERROR` every other I/O failure (permissions, disk full)
+/// serializes as.
+fn map_io_err(err: io::Error, path: &str) -> AppError {
+    if err.kind() == io::ErrorKind::NotFound {
+        AppError::NotFound(path.to_string())
+    } else {
+        AppError::Io(err)
+    }
+}
+
 /// Lexically normalizes a path (resolves `.`/`..` components without
 /// touching the filesystem, so it also works for paths that don't exist
 /// yet, e.g. `fs_create_file`).
@@ -614,13 +627,17 @@ impl Workspace for LocalWorkspace {
 
     async fn read_file(&self, path: &str) -> Result<String, AppError> {
         let file = self.resolve_within_root(path)?;
-        let bytes = tokio::fs::read(&file).await?;
+        let bytes = tokio::fs::read(&file)
+            .await
+            .map_err(|e| map_io_err(e, path))?;
         String::from_utf8(bytes).map_err(|_| AppError::NotUtf8(path.to_string()))
     }
 
     async fn write_file(&self, path: &str, contents: &str) -> Result<(), AppError> {
         let file = self.resolve_within_root(path)?;
-        tokio::fs::write(&file, contents).await?;
+        tokio::fs::write(&file, contents)
+            .await
+            .map_err(|e| map_io_err(e, path))?;
         Ok(())
     }
 
@@ -891,6 +908,24 @@ mod tests {
         let ws = workspace(dir.path());
         let err = ws.read_file("../outside.txt").await.unwrap_err();
         assert!(matches!(err, AppError::InvalidPath(_)));
+    }
+
+    #[tokio::test]
+    async fn read_file_of_a_missing_path_maps_to_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        let err = ws.read_file("missing.md").await.unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn write_file_into_a_deleted_directory_maps_to_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        tokio::fs::create_dir(dir.path().join("sub")).await.unwrap();
+        tokio::fs::remove_dir(dir.path().join("sub")).await.unwrap();
+        let err = ws.write_file("sub/note.md", "hello").await.unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
     }
 
     #[tokio::test]

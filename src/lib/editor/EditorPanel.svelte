@@ -11,6 +11,7 @@
   import EditorPane from "./EditorPane.svelte";
   import EditorSplitMenu from "./EditorSplitMenu.svelte";
   import { tooltip } from "../ui/tooltip";
+  import { showErrorToast, describeError } from "../stores/errorToast";
 
   /**
    * One leaf's full top bar (tab strip + controls) and its stack of
@@ -100,7 +101,15 @@
         {:else if tab?.isDeleted}
           <div class="conflict-banner deleted-banner">
             File was deleted.
-            <button onclick={() => requestSave(path)}>Save</button>
+            <button
+              onclick={() => {
+                void requestSave(path).catch((err) =>
+                  showErrorToast(`Couldn't save ${basename(path)}: ${describeError(err)}`),
+                );
+              }}
+            >
+              Save
+            </button>
             <button onclick={() => closeTab(path)}>Close</button>
           </div>
         {/if}

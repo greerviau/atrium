@@ -20,7 +20,7 @@ describe("EditorPane: line wrapping by file type", () => {
       savedDoc: "x = 1\n",
       isDirty: false,
       hasExternalConflict: false,
-    isDeleted: false,
+      isDeleted: false,
     });
     const { container } = render(EditorPane, { filePath: "/example.py", paneId: "pane-1" });
 
@@ -34,7 +34,7 @@ describe("EditorPane: line wrapping by file type", () => {
       savedDoc: "some prose\n",
       isDirty: false,
       hasExternalConflict: false,
-    isDeleted: false,
+      isDeleted: false,
       viewMode: "rendered",
     });
     const rendered = render(EditorPane, { filePath: "/notes.md", paneId: "pane-1" });
@@ -47,7 +47,7 @@ describe("EditorPane: line wrapping by file type", () => {
       savedDoc: "some prose\n",
       isDirty: false,
       hasExternalConflict: false,
-    isDeleted: false,
+      isDeleted: false,
       viewMode: "source",
     });
     const source = render(EditorPane, { filePath: "/notes.md", paneId: "pane-1" });
@@ -68,7 +68,7 @@ describe("EditorPane: scrollbar auto-hide", () => {
       savedDoc: "x = 1\n",
       isDirty: false,
       hasExternalConflict: false,
-    isDeleted: false,
+      isDeleted: false,
     });
     const { container } = render(EditorPane, { filePath: "/example.py", paneId: "pane-1" });
 

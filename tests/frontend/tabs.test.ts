@@ -292,6 +292,19 @@ describe("markPathDeleted", () => {
     expect(get(errorToast)).toBeNull();
   });
 
+  it("clears hasExternalConflict on a dirty tab it flags, so the deleted banner isn't masked by the conflict banner (modify-then-delete)", () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md", { isDirty: true, hasExternalConflict: true })],
+      activeTabPath: "/notes.md",
+    });
+
+    markPathDeleted("/notes.md");
+
+    const tab = get(tabsState).tabs[0];
+    expect(tab.isDeleted).toBe(true);
+    expect(tab.hasExternalConflict).toBe(false);
+  });
+
   it("cascades to every open tab nested under a deleted directory, mixing clean-close and dirty-flag outcomes", () => {
     tabsState.set({
       tabs: [

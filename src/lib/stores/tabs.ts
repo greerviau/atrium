@@ -270,11 +270,14 @@ export function markPathDeleted(path: string): void {
   }
 
   const closedPaths = new Set(affected.filter((t) => !t.isDirty).map((t) => t.path));
+  const flaggedPaths = new Set(affected.filter((t) => t.isDirty).map((t) => t.path));
 
   tabsState.update((s) => {
     const tabs = s.tabs
       .filter((t) => !closedPaths.has(t.path))
-      .map((t) => (t.isDirty && affected.some((a) => a.path === t.path) ? { ...t, isDeleted: true } : t));
+      .map((t) =>
+        flaggedPaths.has(t.path) ? { ...t, isDeleted: true, hasExternalConflict: false } : t,
+      );
     const activeTabPath =
       s.activeTabPath && closedPaths.has(s.activeTabPath)
         ? (tabs[tabs.length - 1]?.path ?? null)
