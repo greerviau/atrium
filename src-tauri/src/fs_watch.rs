@@ -80,6 +80,9 @@ pub fn watch(
                             kind: kind.clone(),
                             from_path: None,
                         });
+                        if matches!(kind, FsChangeKind::Create) {
+                            reconcile_new_directory(path, &workspace_id, &tx);
+                        }
                     }
                 }
             }
@@ -96,6 +99,49 @@ pub fn watch(
         .watch(Path::new(&root), RecursiveMode::Recursive)?;
 
     Ok(debouncer)
+}
+
+/// Closes the recursive-watch registration race: `notify`'s inotify backend
+/// only registers a watch on a newly created subdirectory *after* draining
+/// the batch of raw events that observed its `Create`, so any file written
+/// into that subdirectory before the watch is registered produces no
+/// inotify event at all (see issue #300). Rather than trying to close that
+/// window, this walks the directory's actual contents once its own `Create`
+/// event clears the debounce window (by which point the burst has settled)
+/// and synthesizes a `Create` for everything found inside, at every depth.
+/// Real events that did arrive through `notify` for the same paths become
+/// harmless duplicates downstream.
+///
+/// `symlink_metadata` (not `metadata`) is used deliberately so a symlink is
+/// treated as the single leaf entry it is, rather than being followed —
+/// matching how the rest of the explorer treats symlinks, and avoiding any
+/// risk of an infinite loop through a symlink cycle.
+fn reconcile_new_directory(path: &Path, workspace_id: &str, tx: &UnboundedSender<FsChangeEvent>) {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return;
+    };
+    if !metadata.is_dir() {
+        return;
+    }
+
+    let mut pending = vec![path.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            let _ = tx.send(FsChangeEvent {
+                workspace_id: workspace_id.to_string(),
+                path: entry_path.to_string_lossy().to_string(),
+                kind: FsChangeKind::Create,
+                from_path: None,
+            });
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                pending.push(entry_path);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -243,5 +289,90 @@ mod tests {
         let (tx, _rx) = unbounded_channel();
         let result = watch(missing.to_string_lossy().to_string(), "ws".to_string(), tx);
         assert!(result.is_err());
+    }
+
+    // REPRO for issue #300: simulates a `git pull` that introduces a brand
+    // new subdirectory full of files in one shot, exactly as git's checkout
+    // does (mkdir, then write every file into it back-to-back with no
+    // delay). Recursive `notify` watching on Linux (inotify) has to observe
+    // the mkdir's Create event and *then* register a fresh inotify watch on
+    // that new subdirectory before it can observe anything created inside
+    // it — if files land inside the new directory before that watch is
+    // registered, their Create events are lost at the kernel level, no
+    // matter how the debouncer or frontend behave afterward.
+    #[tokio::test]
+    async fn a_new_subdirectory_created_with_many_files_at_once_reports_every_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, mut rx) = unbounded_channel();
+        let _debouncer = watch(
+            dir.path().to_string_lossy().to_string(),
+            "ws".to_string(),
+            tx,
+        )
+        .unwrap();
+        sleep(Duration::from_millis(200)).await;
+
+        let sub = dir.path().join("newdir");
+        std::fs::create_dir(&sub).unwrap();
+        const N: usize = 50;
+        for i in 0..N {
+            std::fs::write(sub.join(format!("file{i}.txt")), "x").unwrap();
+        }
+
+        let events = drain_events(&mut rx, SETTLE_MS).await;
+        let expected: std::collections::HashSet<String> = (0..N)
+            .map(|i| sub.join(format!("file{i}.txt")).to_string_lossy().to_string())
+            .collect();
+        let seen: std::collections::HashSet<String> = events
+            .iter()
+            .filter(|e| matches!(e.kind, FsChangeKind::Create) && expected.contains(&e.path))
+            .map(|e| e.path.clone())
+            .collect();
+
+        assert_eq!(
+            seen.len(),
+            N,
+            "expected Create events for all {N} files in the new subdirectory, only saw {}: {:?}",
+            seen.len(),
+            events
+        );
+    }
+
+    // Control case: the same burst of file creations, but into a directory
+    // that already existed (and was already watched) before the watcher
+    // started, so there is no new-watch race to trigger. Distinguishes
+    // "recursive watches on brand new subdirectories race" from "any large
+    // simultaneous burst drops events regardless."
+    #[tokio::test]
+    async fn a_burst_of_files_in_an_already_watched_directory_reports_every_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, mut rx) = unbounded_channel();
+        let _debouncer = watch(
+            dir.path().to_string_lossy().to_string(),
+            "ws".to_string(),
+            tx,
+        )
+        .unwrap();
+        sleep(Duration::from_millis(200)).await;
+
+        const N: usize = 50;
+        for i in 0..N {
+            std::fs::write(dir.path().join(format!("file{i}.txt")), "x").unwrap();
+        }
+
+        let events = drain_events(&mut rx, SETTLE_MS).await;
+        let seen: std::collections::HashSet<String> = events
+            .iter()
+            .filter(|e| matches!(e.kind, FsChangeKind::Create))
+            .map(|e| e.path.clone())
+            .collect();
+
+        assert_eq!(
+            seen.len(),
+            N,
+            "expected Create events for all {N} files in the already-watched directory, only saw {}: {:?}",
+            seen.len(),
+            events
+        );
     }
 }
