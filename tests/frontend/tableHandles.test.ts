@@ -508,6 +508,38 @@ describe("nested tables get their header cells and phase-2 widgets inside .cm-ta
   });
 });
 
+// Issue #295: `.cm-table-scroll` (rank 60) nests as the `.cm-table-box`
+// (rank 50) wrapper's own outer ancestor now, carrying the `overflow-x:
+// auto` a `display: table` box can't take itself, with padding matching
+// each overlay widget's own outward offset so none of them gets clipped by
+// the new scroll container's padding box. jsdom has no layout engine (see
+// "drag-to-reposition" below), so this can only assert the DOM shape itself
+// — that `.cm-table-box` really is `.cm-table-scroll`'s own direct child,
+// and every overlay widget is still nested inside `.cm-table-box` the way
+// `measureTableGeometry`'s `box.querySelectorAll(...)` calls (tableHandles.ts)
+// depend on — not that the padding/offsets actually resolve to an unclipped
+// pixel rect, which needs a real browser (see the plan's manual-verification
+// steps).
+describe("the .cm-table-scroll wrapper nests around .cm-table-box without excluding phase 2's overlay widgets (issue #295)", () => {
+  it("wraps .cm-table-box as its own direct child, with every handle/bar/band still nested inside .cm-table-box", () => {
+    const view = makeView("| A | B |\n| --- | --- |\n| 1 | 2 |\n");
+
+    const scroll = view.dom.querySelector(".cm-table-scroll");
+    expect(scroll).toBeTruthy();
+    expect(scroll!.classList.contains("cm-table-scroll")).toBe(true);
+
+    const box = scroll!.querySelector(":scope > .cm-table-box");
+    expect(box).toBeTruthy();
+
+    expect(box!.querySelectorAll(".cm-table-row-handle")).toHaveLength(2);
+    expect(box!.querySelectorAll(".cm-table-col-bar")).toHaveLength(2);
+    expect(box!.querySelectorAll(".cm-table-add-row-band")).toHaveLength(1);
+    expect(box!.querySelectorAll(".cm-table-add-col-band")).toHaveLength(1);
+
+    view.destroy();
+  });
+});
+
 describe("drag-to-reposition (phase 4)", () => {
   // jsdom has no layout engine, so every element's getBoundingClientRect()
   // is zero by default; mocking it directly on the real handle elements is

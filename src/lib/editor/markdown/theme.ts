@@ -13,6 +13,7 @@ export const CLASS = {
   inlineCode: "cm-inline-code",
   link: "cm-link",
   tableBox: "cm-table-box",
+  tableScroll: "cm-table-scroll",
   tableRow: "cm-table-row",
   tableHeaderRow: "cm-table-header-row",
   tableCell: "cm-table-cell",

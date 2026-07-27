@@ -29,11 +29,13 @@
    mechanism that lets `100cqw` alone cap a box to the pane below.
    `margin-inline-start`/`margin-inline-end` (an explicit column inset,
    not `margin-inline: auto`) is what every one of the four selectors below
-   uses to align to the same left edge regardless of whether the box is
-   fill-available (a prose line, `.cm-code-block-box`, `.cm-mermaid-diagram`)
-   or shrink-to-fit (`.cm-table-box`, `display: table`) — `margin-inline:
-   auto` would instead *center* a shrink-to-fit box narrower than the
-   column, misaligning it against the other three.
+   uses to align to the same left edge — a prose line, `.cm-code-block-box`,
+   `.cm-mermaid-diagram`, and `.cm-table-scroll` are all fill-available
+   boxes. `.cm-table-scroll`'s own child, `.cm-table-box` (`display: table`,
+   shrink-to-fit), carries no inset of its own: sitting at
+   `.cm-table-scroll`'s padding-box origin already aligns it, since a
+   shrink-to-fit box's default margin doesn't center it the way
+   `margin-inline: auto` would.
 
    All four are scoped to `.cm-md-rendered` (a content-attribute marker
    `livePreviewPlugin.ts` adds only to the rendered pane, the same mechanism
@@ -86,34 +88,67 @@
 }
 
 /* `EditorView.blockWrappers` (`buildTableWrapRanges` in decorations.ts)
-   wraps every table's own line rows in a real `<div class="cm-table-box">`,
-   spanning the `Table` syntax node's full range. A run of consecutive
-   `display: table-row` children inside it gets grouped into that box's
-   anonymous `display: table` layout automatically — no per-row `<table>`
-   markup needed beyond the wrapper element itself. `max-width` (not
-   `width`) caps the box at the shared reading column (see the prose-line
-   rule's own comment above for why `min(var(--atrium-prose-max-width),
-   100cqw)`, resolved via the `container-type: inline-size` ancestor above),
-   while still letting the table shrink to its content when that's narrower
-   — `width` would instead be a *preferred* width that CSS's auto
-   table-layout algorithm stretches every table's columns out to fill,
-   padding a short table out to the full column regardless of its content.
-   Because a `display: table` box is shrink-to-fit, the column inset is an
-   explicit `margin-inline-start`/`margin-inline-end` rather than
-   `margin-inline: auto` — auto margins would *center* a table narrower than
-   the column instead of aligning its left edge to the column's own left
-   edge, same reasoning as the prose-line rule above. `position: relative`
-   gives phase 2's handles/bands a positioned ancestor to anchor to.
-   `border-top`/`border-left` supply the table's own top and left edges; the
-   existing per-cell `border-right` and per-row `border-bottom` below
-   already supply the right/bottom edges (including the outer ones, via the
-   last column/row), so no edge is doubled. */
-.cm-content.cm-md-rendered .cm-table-box {
-  display: table;
-  table-layout: auto;
+   pushes two overlapping wrappers over the same `Table` node range: this
+   `<div class="cm-table-scroll">` (rank 60) nesting *outside*
+   `<div class="cm-table-box">` (default rank 50, below) — lower-rank
+   wrappers nest inside higher-rank ones. A `display: table` box can't take
+   `overflow-x` itself (confirmed directly: it renders at its full natural
+   width regardless of the property), so the width cap and scroll
+   containment that traps a too-wide cell's content live on this plain
+   block-level wrapper instead, the same pattern `.cm-code-block-box`/
+   `.cm-mermaid-diagram` use below. `max-width`/`margin-inline-start`/
+   `margin-inline-end` are the same shared-reading-column values the
+   prose-line rule above explains; `overflow-x: auto` is what actually
+   stops a cell's one genuinely unbroken long token (a URL, a hash) from
+   inflating `.cm-content` sideways (issue #199) — `.cm-table-box` gains a
+   horizontal scrollbar instead.
+
+   `padding` on all four sides matches the outward offset of each of
+   `tableHandles.ts`'s overlay widgets — the row handle (`left: -22px`),
+   column bar (`top: -18px`), add-row band (`bottom: -10px`), and add-column
+   band (`right: -10px`), all positioned outside `.cm-table-box`'s own
+   border box since their DOM is necessarily nested inside it (anchored at
+   document positions inside the table's own lines). An `overflow-x: auto`
+   ancestor's scrollport clips to its own padding box and forces
+   `overflow-y` to resolve to `auto` too (per the CSS Overflow spec's
+   mixed-value resolution rule), so without this padding all four widgets —
+   positioned before the scrollport's origin — would be unreachable by
+   scrolling in either direction and simply never appear. Padding this box
+   out to match each offset instead brings all four inside the padding box,
+   with no unwanted scrollbar at rest (padding contributes to the box's own
+   size, not to scrollable overflow, as long as nothing exceeds the
+   padding-inclusive box) — at the cost of ~32px less content width
+   available to `.cm-table-box`, a small, acceptable trade for the overlay
+   widgets having dedicated room. `box-sizing: border-box` keeps that
+   padding inside `max-width` rather than adding to it. */
+.cm-content.cm-md-rendered .cm-table-scroll {
   max-width: min(var(--atrium-prose-max-width), 100cqw);
   margin-inline-start: max(0px, (100cqw - var(--atrium-prose-max-width)) / 2);
   margin-inline-end: auto;
+  overflow-x: auto;
+  box-sizing: border-box;
+  padding: 18px 10px 10px 22px;
+}
+
+/* The inner wrapper `.cm-table-scroll` above nests outside: wraps every
+   table's own line rows in a real `<div class="cm-table-box">`, spanning
+   the `Table` syntax node's full range. A run of consecutive
+   `display: table-row` children inside it gets grouped into that box's
+   anonymous `display: table` layout automatically — no per-row `<table>`
+   markup needed beyond the wrapper element itself. No `max-width`/margin of
+   its own: `.cm-table-scroll` already caps and insets the column, and a
+   shrink-to-fit `display: table` box's default (non-auto) margin doesn't
+   need an explicit inset to avoid centering the way the prose-line rule's
+   comment above describes. `position: relative` gives phase 2's
+   handles/bands a positioned ancestor to anchor to — `tableGeometryMeasurePlugin`
+   measures them relative to this box regardless of what wraps it
+   externally. `border-top`/`border-left` supply the table's own top and
+   left edges; the existing per-cell `border-right` and per-row
+   `border-bottom` below already supply the right/bottom edges (including
+   the outer ones, via the last column/row), so no edge is doubled. */
+.cm-content.cm-md-rendered .cm-table-box {
+  display: table;
+  table-layout: auto;
   position: relative;
   /* Stays in the separated borders model (the initial value) deliberately.
      `border-collapse: collapse` looks like the natural fix for the row rules
@@ -136,8 +171,8 @@
    `.cm-content.cm-lineWrapping` already sets (CodeMirror's own base theme)
    both preserves whitespace runs (so `posAtCoords`/`findTableContext`'s
    position mapping stays correct) and wraps long content, which is what
-   lets a long cell's text wrap inside `.cm-table-box`'s width cap instead of
-   stretching the row. */
+   lets a long cell's text wrap inside the table's width cap (`.cm-table-scroll`,
+   below) instead of stretching the row. */
 .cm-table-row {
   display: table-row !important;
 }
@@ -161,27 +196,27 @@
      today, so this is currently a no-op — kept explicit and defensive in
      case a future change ever scopes `.cm-table-cell` outside a
      `.cm-lineWrapping` ancestor. */
-  overflow-wrap: anywhere;
-  /* `anywhere` above (unlike `break-word`, which is otherwise identical at
-     render time) is the one CSS Text value whose soft-wrap opportunities
-     count toward min-content intrinsic size, so without a floor every cell
-     reports a min-content width of about one character — which licenses
-     `table-layout: auto` to crush any column of `.cm-table-box` down to a
-     single-character ribbon, mid-word, as soon as the table's content
-     exceeds the shared reading column. A `min-width` on a table cell raises
-     that column's own minimum contribution, so columns keep a sane floor
-     (and an empty cell's `EmptyCellWidget` stays wide enough to click)
-     while `anywhere` still serves as the overflow valve that keeps one long
-     unbroken token — a URL, a hash — from pushing the table past the column
-     cap and inflating `.cm-content` sideways (issue #199); `.cm-table-box`
-     has no `overflow-x: auto` of its own to trap that the way
-     `.cm-code-block-box` does, and being a `display: table` box it couldn't
-     use one, since `overflow` doesn't apply to table boxes. The floor costs
-     column budget: each column takes this plus the ~2ch its `0.6em` side
-     padding comes to at the editor's monospace metrics, so a table outgrows
-     `--atrium-prose-max-width` every ~7ch of it — around nine columns at
-     65ch, eleven at 80ch. */
-  min-width: 5ch;
+  overflow-wrap: break-word;
+  /* `break-word` (unlike `anywhere`, which is otherwise identical at render
+     time) leaves min-content intrinsic size anchored to each cell's real
+     word/hyphen-boundary chunks rather than dragging it down toward roughly
+     one character — `anywhere` counted its own soft-wrap opportunities
+     toward min-content, which handed `table-layout: auto`'s shrink-to-fit
+     algorithm free rein to crush whichever column had the least max-content
+     demand relative to its neighbors, well below what its own content
+     needed (issue #295). `break-word` still wraps a long word at a
+     reasonable boundary once a column is narrower than its own preferred
+     width; it just no longer inflates every column's "slack" to get there.
+     Containing one genuinely unbroken long token (a URL, a hash) so it
+     can't push `.cm-table-box` past the column cap and inflate `.cm-content`
+     sideways (issue #199) is now `.cm-table-scroll`'s job, via its own
+     `overflow-x: auto` above — not this property's. */
+  min-width: 3ch;
+  /* A much smaller defensive floor than `anywhere` needed, kept only so an
+     empty cell's `EmptyCellWidget` (`widgets.ts`, a bare `<span>` with no
+     content of its own) stays wide enough to click — it no longer has to
+     compensate for `overflow-wrap` deflating every column's min-content,
+     since `break-word` doesn't do that. */
   /* A table cell's initial `vertical-align` is `baseline`, which drops a
      short cell to the first-line baseline of a tall wrapped neighbor and
      leaves the row reading ragged. `top` aligns every cell in a row to the
@@ -464,24 +499,24 @@ body.cm-table-dragging-active * {
 /* `EditorView.blockWrappers` (`buildCodeBlockWrapRanges` in decorations.ts)
    wraps every non-mermaid fenced/indented code block's own lines in a real
    `<div class="cm-code-block-box scrollbar-autohide">`, mirroring
-   `.cm-table-box` above. `max-width` plus the same column inset caps the
+   `.cm-table-scroll` above. `max-width` plus the same column inset caps the
    box at the shared reading column, and `overflow-x: auto` is what actually
    traps a too-wide `.cm-code-block` line's overflow inside this box instead
    of letting it inflate `.cm-content` (the reported bug, issue #199) — a
-   plain block-level div is fill-available, not shrink-to-fit like
-   `.cm-table-box`, so `max-width` alone makes it *fill* the column rather
-   than shrink to its content, which is what lets even a short block paint a
-   full-column-width chrome band, matching Obsidian/Zed's fenced-code
-   rendering (`.cm-code-block` below carries the same chrome/inset as its
-   own defensive default — see its own comment — but the wrapper is what a
-   *wrapped* line's chrome/inset actually renders from, since the
-   `.cm-code-block-box .cm-code-block` override neutralizes the line's own
-   copy whenever a wrapper is present). Because `app.css` sets a
-   global `* { box-sizing: border-box }`, this padding/border sit *inside*
-   the wrapper's own `max-width` rather than adding to it, so the wrapper's
-   own chrome can never leak extra scroll range past the column cap. The
-   wrapper reuses the app's existing `.scrollbar-autohide` treatment
-   (app.css) via its own class list rather than duplicating those
+   plain block-level div is fill-available, not shrink-to-fit like the
+   `.cm-table-box` that `.cm-table-scroll` wraps, so `max-width` alone makes
+   it *fill* the column rather than shrink to its content, which is what
+   lets even a short block paint a full-column-width chrome band, matching
+   Obsidian/Zed's fenced-code rendering (`.cm-code-block` below carries the
+   same chrome/inset as its own defensive default — see its own comment —
+   but the wrapper is what a *wrapped* line's chrome/inset actually renders
+   from, since the `.cm-code-block-box .cm-code-block` override neutralizes
+   the line's own copy whenever a wrapper is present). Because `app.css`
+   sets a global `* { box-sizing: border-box }`, this padding/border sit
+   *inside* the wrapper's own `max-width` rather than adding to it, so the
+   wrapper's own chrome can never leak extra scroll range past the column
+   cap. The wrapper reuses the app's existing `.scrollbar-autohide`
+   treatment (app.css) via its own class list rather than duplicating those
    declarations here — its `:hover` reveal applies, though the active-scroll
    `data-scrolling` toggle (`scrollbarAutoHide.ts`) doesn't run against a
    CodeMirror-owned element, a real but narrow gap. `position: relative`
@@ -552,7 +587,7 @@ body.cm-table-dragging-active * {
 
 /* Block-level widget replacing a `mermaid` fenced code block. `text-align:
    center` centers the rendered <svg>. `max-width` plus the same shared
-   column inset as `.cm-code-block-box`/`.cm-table-box` above caps the
+   column inset as `.cm-code-block-box`/`.cm-table-scroll` above caps the
    diagram at the reading column, which is what turns `overflow-x: auto`
    from an inert fallback into a real cap — the same unconstrained-width
    defect code blocks had (issue #199), just not yet reported as its own

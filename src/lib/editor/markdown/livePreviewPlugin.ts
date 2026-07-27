@@ -73,15 +73,16 @@ const focusTrackingHandlers = EditorView.domEventHandlers({
  * cursor motion jumps over a hidden gap in one step instead of being able to
  * land inside it.
  *
- * And provides `EditorView.blockWrappers` with one `.cm-table-box` per
- * `Table` node (`buildTableWrapRanges`) and one `.cm-code-block-box` per
- * non-mermaid fenced/indented code block (`buildCodeBlockWrapRanges`), both
- * recomputed only on a doc change or syntax-tree-identity change — unlike
- * `decorations`, neither depends on the viewport, selection, or focus, since
- * a `BlockWrapper`'s range is a structural property of the block itself, not
- * of what's currently revealed. `EditorView.blockWrappers` is an ordinary
- * multi-input facet, so the two wrapper sets are provided as two separate
- * facet inputs below rather than merged into one `RangeSet` here.
+ * And provides `EditorView.blockWrappers` with a `.cm-table-scroll`/
+ * `.cm-table-box` pair per `Table` node (`buildTableWrapRanges`) and one
+ * `.cm-code-block-box` per non-mermaid fenced/indented code block
+ * (`buildCodeBlockWrapRanges`), all recomputed only on a doc change or
+ * syntax-tree-identity change — unlike `decorations`, neither depends on the
+ * viewport, selection, or focus, since a `BlockWrapper`'s range is a
+ * structural property of the block itself, not of what's currently
+ * revealed. `EditorView.blockWrappers` is an ordinary multi-input facet, so
+ * the two wrapper sets are provided as two separate facet inputs below
+ * rather than merged into one `RangeSet` here.
  *
  * Also rebuilds decorations on a `tableHoverField`/`tableSelectionField`/
  * `tableDragField` change, so hovering, clicking, or dragging a table
@@ -265,7 +266,7 @@ const linkClickHandler = EditorView.domEventHandlers({
  * pane's `.cm-content` (the same mechanism `EditorView.lineWrapping` itself
  * uses for `cm-lineWrapping`, and `combineAttrs` concatenates the two into
  * one space-joined class list) so `markdown.css`'s reading-column rules
- * (prose max-width, `.cm-code-block-box`, `.cm-table-box`,
+ * (prose max-width, `.cm-code-block-box`, `.cm-table-scroll`,
  * `.cm-mermaid-diagram`) can be scoped to the rendered pane only.
  * `markdownSourceExtensions` below gains no such marker, so the raw source
  * pane's `.cm-content` never matches those rules and keeps rendering exactly
