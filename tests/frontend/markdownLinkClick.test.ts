@@ -3,14 +3,14 @@ import { EditorState, EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { markdownExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
 import { openExternalLink } from "../../src/lib/ipc/commands";
-import { openFile } from "../../src/lib/stores/tabs";
+import { openFileReportingErrors } from "../../src/lib/stores/tabs";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
   openExternalLink: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("../../src/lib/stores/tabs", () => ({
-  openFile: vi.fn(),
+  openFileReportingErrors: vi.fn(),
 }));
 
 let view: EditorView | undefined;
@@ -45,7 +45,7 @@ afterEach(() => {
 describe("modifier+click on a rendered markdown link", () => {
   beforeEach(() => {
     vi.mocked(openExternalLink).mockReset().mockReturnValue(Promise.resolve());
-    vi.mocked(openFile).mockReset();
+    vi.mocked(openFileReportingErrors).mockReset();
   });
 
   it("cmd-click (metaKey) navigates via openExternalLink and leaves selection/decoration untouched", () => {
@@ -57,7 +57,7 @@ describe("modifier+click on a rendered markdown link", () => {
     link.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, metaKey: true }));
 
     expect(openExternalLink).toHaveBeenCalledWith("https://example.com");
-    expect(openFile).not.toHaveBeenCalled();
+    expect(openFileReportingErrors).not.toHaveBeenCalled();
     // Selection is untouched: the modifier-click never reached CodeMirror's
     // built-in cursor-placement handler, so it stays where it was set above.
     expect(view.state.selection.main.from).toBe(doc.length);
@@ -86,7 +86,7 @@ describe("modifier+click on a rendered markdown link", () => {
     link.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
 
     expect(openExternalLink).not.toHaveBeenCalled();
-    expect(openFile).not.toHaveBeenCalled();
+    expect(openFileReportingErrors).not.toHaveBeenCalled();
 
     // jsdom has no layout engine, so CodeMirror's own built-in mousedown
     // handler (which resolves click coordinates to a document position via
@@ -100,7 +100,7 @@ describe("modifier+click on a rendered markdown link", () => {
     expect(link.isConnected).toBe(false);
   });
 
-  it("a relative-path link resolves through openFile() on modifier-click, not openExternalLink", () => {
+  it("a relative-path link resolves through openFileReportingErrors() on modifier-click, not openExternalLink", () => {
     const doc = "See [my note](./notes/todo.md) for more.\nOther line, cursor starts here.";
     view = makeView(doc, "docs/index.md");
     view.dispatch({ selection: EditorSelection.cursor(doc.length) });
@@ -108,7 +108,7 @@ describe("modifier+click on a rendered markdown link", () => {
     const link = findLink(view);
     link.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, metaKey: true }));
 
-    expect(openFile).toHaveBeenCalledWith("docs/notes/todo.md");
+    expect(openFileReportingErrors).toHaveBeenCalledWith("docs/notes/todo.md");
     expect(openExternalLink).not.toHaveBeenCalled();
   });
 });

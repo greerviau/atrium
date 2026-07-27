@@ -1,6 +1,6 @@
 import { EditorView, WidgetType } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
-import { openFile } from "../../stores/tabs";
+import { openFileReportingErrors } from "../../stores/tabs";
 import { openExternalLink } from "../../ipc/commands";
 import { showErrorToast, describeError } from "../../stores/errorToast";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -277,8 +277,9 @@ function resolveImageSrc(url: string, documentPath: string): string {
 /**
  * Click handler shared by rendered markdown links: external URLs open via
  * the validated `open_external_link` command, relative paths that look
- * like local files open in a new editor tab via the same `openFile()` used
- * by the file explorer and terminal link provider.
+ * like local files open in a new editor tab via the same
+ * `openFileReportingErrors()` used by the file explorer and terminal link
+ * provider.
  */
 export function handleLinkClick(url: string, documentPath: string): void {
   if (/^https?:\/\//i.test(url)) {
@@ -288,5 +289,5 @@ export function handleLinkClick(url: string, documentPath: string): void {
     return;
   }
   const target = path.resolveRelative(path.dirname(documentPath), url);
-  void openFile(target);
+  openFileReportingErrors(target);
 }
