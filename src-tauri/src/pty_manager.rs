@@ -305,6 +305,14 @@ impl PtyManager {
     /// walking the process tree from its pid reaches all of it regardless of
     /// whether a given job was left in the foreground or backgrounded — see
     /// the "Signal sequence" section of the issue #251 fix plan.
+    ///
+    /// This deliberately also reaches a `nohup`/`disown`-ed job: it's still
+    /// a child of the shell, so the walk finds it, its `SIGHUP` is a no-op
+    /// (that's the point of `nohup`), and it gets `SIGKILL`ed in the same
+    /// pass as everything else. Closing a tab is exactly the kind of
+    /// deliberate action #251 wants to reap a dev server or build for, and
+    /// there's no way to tell "detached on purpose" apart from "just
+    /// forgotten" from here.
     fn kill_session(session: &mut PtySession, system: &mut System) {
         let Some(shell_pid) = session.shell_pid else {
             // No pid to walk from; fall back to the previous behavior.
@@ -328,10 +336,14 @@ impl PtyManager {
         }
 
         // portable_pty's `ChildKiller` impl for `std::process::Child` sends
-        // SIGHUP to the shell, polls up to five times over ~250ms, then
-        // falls back to SIGKILL. Reuse that same ~250ms window as the
-        // descendants' own grace period instead of adding a second sleep —
-        // the two run concurrently in wall-clock time.
+        // SIGHUP to the shell, then polls up to four times 50ms apart (up to
+        // ~200ms) before falling back to SIGKILL if the shell is still
+        // alive — but only spends any of that time if the shell doesn't die
+        // immediately, which a shell with no SIGHUP handler (e.g. `dash`)
+        // won't. Whatever time this call does take is reused as the
+        // descendants' own grace period instead of adding a second sleep,
+        // since the two run concurrently in wall-clock time; it isn't a
+        // guaranteed window.
         let _ = session.child.kill();
 
         if !descendants.is_empty() {
@@ -833,14 +845,22 @@ mod tests {
 
         manager.kill(&terminal_id).unwrap();
 
-        system.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[Pid::from_u32(sleep_pid)]),
-            true,
-            ProcessRefreshKind::nothing(),
-        );
-        assert!(
-            system.process(Pid::from_u32(sleep_pid)).is_none(),
-            "foreground sleep process {sleep_pid} still alive after kill()"
+        // `kill()` reaps the shell but doesn't wait for a descendant's own
+        // exit/reparent/reap by init — for a brief window after it returns,
+        // the pid is still in the process table as a zombie, which would
+        // read as "still alive" to a single immediate check. Poll instead of
+        // asserting once.
+        wait_for(
+            Duration::from_secs(5),
+            &format!("foreground sleep process {sleep_pid} still alive after kill()"),
+            || {
+                system.refresh_processes_specifics(
+                    ProcessesToUpdate::Some(&[Pid::from_u32(sleep_pid)]),
+                    true,
+                    ProcessRefreshKind::nothing(),
+                );
+                system.process(Pid::from_u32(sleep_pid)).is_none()
+            },
         );
     }
 
@@ -905,14 +925,20 @@ mod tests {
 
         manager.kill(&terminal_id).unwrap();
 
-        system.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[Pid::from_u32(sleep_pid)]),
-            true,
-            ProcessRefreshKind::nothing(),
-        );
-        assert!(
-            system.process(Pid::from_u32(sleep_pid)).is_none(),
-            "backgrounded sleep process {sleep_pid} still alive after kill()"
+        // See the identical comment in `foreground_descendant_reaped_on_kill`:
+        // the pid is briefly a zombie after `kill()` returns, so poll rather
+        // than asserting once.
+        wait_for(
+            Duration::from_secs(5),
+            &format!("backgrounded sleep process {sleep_pid} still alive after kill()"),
+            || {
+                system.refresh_processes_specifics(
+                    ProcessesToUpdate::Some(&[Pid::from_u32(sleep_pid)]),
+                    true,
+                    ProcessRefreshKind::nothing(),
+                );
+                system.process(Pid::from_u32(sleep_pid)).is_none()
+            },
         );
     }
 }
