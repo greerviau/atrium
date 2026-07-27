@@ -148,7 +148,7 @@ fn reconcile_new_directory(path: &Path, workspace_id: &str, tx: &UnboundedSender
 mod tests {
     use super::*;
     use tokio::sync::mpsc::unbounded_channel;
-    use tokio::time::{sleep, timeout, Duration as TokioDuration, Instant as TokioInstant};
+    use tokio::time::{timeout, Duration as TokioDuration, Instant as TokioInstant};
 
     /// Drains every event sent within `budget_ms` of this call, rather than
     /// waiting for exactly one: the debouncer can legitimately emit more than
@@ -174,27 +174,81 @@ mod tests {
         events
     }
 
-    // The debounce window is 150ms; every test waits well past that (plus
-    // slack for the watcher to actually start up before the first mutation)
-    // before asserting on what arrived.
-    const SETTLE_MS: u64 = 1000;
+    // The debounce window is 150ms; every test waits well past that before
+    // asserting on what arrived. `STARTUP_SETTLE_MS` is slack right after
+    // the watcher starts, drained (not just slept through) so any bleed
+    // from the watched root's own creation is discarded from `rx` before
+    // a test does anything else. GitHub Actions' macOS runners need
+    // noticeably more of it than a local machine or Linux's inotify does.
+    const STARTUP_SETTLE_MS: u64 = 500;
+    const SETTLE_MS: u64 = 2000;
+
+    /// Blocks until `rx` produces a `Create` event for exactly `path` (or
+    /// panics on timeout). A test that needs a file to exist before its
+    /// real mutation must create it *after* the watcher is already running
+    /// and wait for that creation to round-trip through here before
+    /// mutating it — not because of debouncer-level coalescing (already
+    /// handled by keeping operations in separate 150ms windows), but
+    /// because macOS's FSEvents itself coalesces multiple flags for the
+    /// *same path* into one summarized event when they're still in flight
+    /// on the OS side; a setup create landing in the same OS-level window
+    /// as the mutation under test can get folded into it (e.g. a create
+    /// immediately followed by a rename summarizing as a single plain
+    /// create for the destination, or a create-then-remove summarizing as
+    /// a single `Modify`). Waiting for the create to have already been
+    /// observed guarantees no such window remains open.
+    async fn wait_until_seen(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<FsChangeEvent>,
+        path: &Path,
+    ) {
+        let target = path.to_string_lossy().to_string();
+        let deadline = TokioInstant::now() + TokioDuration::from_millis(SETTLE_MS);
+        loop {
+            let remaining = deadline.saturating_duration_since(TokioInstant::now());
+            assert!(
+                !remaining.is_zero(),
+                "timed out waiting for a Create event for {target}"
+            );
+            match timeout(remaining, rx.recv()).await {
+                Ok(Some(event))
+                    if event.path == target && matches!(event.kind, FsChangeKind::Create) =>
+                {
+                    return
+                }
+                Ok(Some(_)) => continue,
+                _ => panic!("timed out waiting for a Create event for {target}"),
+            }
+        }
+    }
+
+    /// `/var` on macOS is itself a symlink to `/private/var`; `tempfile`
+    /// returns the unresolved `/var/...` form, but `notify`'s macOS backend
+    /// reports the OS-canonicalized `/private/var/...` path. Every path a
+    /// test builds to compare against a watch event goes through this so
+    /// the comparison is exact on macOS (a no-op elsewhere, since there's
+    /// no such symlink to resolve).
+    fn canonical_root(dir: &tempfile::TempDir) -> std::path::PathBuf {
+        dir.path().canonicalize().unwrap()
+    }
 
     #[tokio::test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "macOS: notify's FSEvents backend does not report this same-directory rename as any Rename-kind event, even with the setup file's own Create observed beforehand — the destination arrives as a plain Create and the source produces no event at all. See #313."
+    )]
     async fn a_same_directory_rename_arrives_as_one_paired_rename_event() {
         let dir = tempfile::tempdir().unwrap();
-        let from = dir.path().join("old.txt");
-        std::fs::write(&from, "hi").unwrap();
+        let root = canonical_root(&dir);
+        let from = root.join("old.txt");
 
         let (tx, mut rx) = unbounded_channel();
-        let _debouncer = watch(
-            dir.path().to_string_lossy().to_string(),
-            "ws".to_string(),
-            tx,
-        )
-        .unwrap();
-        sleep(Duration::from_millis(200)).await;
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
 
-        let to = dir.path().join("new.txt");
+        std::fs::write(&from, "hi").unwrap();
+        wait_until_seen(&mut rx, &from).await;
+
+        let to = root.join("new.txt");
         std::fs::rename(&from, &to).unwrap();
 
         let events = drain_events(&mut rx, SETTLE_MS).await;
@@ -216,19 +270,21 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "macOS: notify's FSEvents backend reports this deletion as Modify(Data(Content)), not a Remove-kind event, even with the file's own Create observed beforehand. See #313."
+    )]
     async fn a_delete_still_emits_a_plain_remove_with_no_from_path() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("gone.txt");
-        std::fs::write(&path, "bye").unwrap();
+        let root = canonical_root(&dir);
+        let path = root.join("gone.txt");
 
         let (tx, mut rx) = unbounded_channel();
-        let _debouncer = watch(
-            dir.path().to_string_lossy().to_string(),
-            "ws".to_string(),
-            tx,
-        )
-        .unwrap();
-        sleep(Duration::from_millis(200)).await;
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
+
+        std::fs::write(&path, "bye").unwrap();
+        wait_until_seen(&mut rx, &path).await;
 
         std::fs::remove_file(&path).unwrap();
 
@@ -253,20 +309,18 @@ mod tests {
     #[ignore = "platform-dependent: relies on notify observing an out-of-root move as an unpaired rename half"]
     async fn a_rename_out_of_the_watched_root_surfaces_as_remove_for_the_source() {
         let dir = tempfile::tempdir().unwrap();
+        let root = canonical_root(&dir);
         let outside = tempfile::tempdir().unwrap();
-        let from = dir.path().join("leaving.txt");
-        std::fs::write(&from, "hi").unwrap();
+        let from = root.join("leaving.txt");
 
         let (tx, mut rx) = unbounded_channel();
-        let _debouncer = watch(
-            dir.path().to_string_lossy().to_string(),
-            "ws".to_string(),
-            tx,
-        )
-        .unwrap();
-        sleep(Duration::from_millis(200)).await;
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
 
-        let to = outside.path().join("leaving.txt");
+        std::fs::write(&from, "hi").unwrap();
+        wait_until_seen(&mut rx, &from).await;
+
+        let to = canonical_root(&outside).join("leaving.txt");
         std::fs::rename(&from, &to).unwrap();
 
         let events = drain_events(&mut rx, SETTLE_MS).await;
@@ -303,16 +357,12 @@ mod tests {
     #[tokio::test]
     async fn a_new_subdirectory_created_with_many_files_at_once_reports_every_file() {
         let dir = tempfile::tempdir().unwrap();
+        let root = canonical_root(&dir);
         let (tx, mut rx) = unbounded_channel();
-        let _debouncer = watch(
-            dir.path().to_string_lossy().to_string(),
-            "ws".to_string(),
-            tx,
-        )
-        .unwrap();
-        sleep(Duration::from_millis(200)).await;
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
 
-        let sub = dir.path().join("newdir");
+        let sub = root.join("newdir");
         std::fs::create_dir(&sub).unwrap();
         const N: usize = 50;
         for i in 0..N {
@@ -321,7 +371,11 @@ mod tests {
 
         let events = drain_events(&mut rx, SETTLE_MS).await;
         let expected: std::collections::HashSet<String> = (0..N)
-            .map(|i| sub.join(format!("file{i}.txt")).to_string_lossy().to_string())
+            .map(|i| {
+                sub.join(format!("file{i}.txt"))
+                    .to_string_lossy()
+                    .to_string()
+            })
             .collect();
         let seen: std::collections::HashSet<String> = events
             .iter()
@@ -346,18 +400,14 @@ mod tests {
     #[tokio::test]
     async fn a_burst_of_files_in_an_already_watched_directory_reports_every_file() {
         let dir = tempfile::tempdir().unwrap();
+        let root = canonical_root(&dir);
         let (tx, mut rx) = unbounded_channel();
-        let _debouncer = watch(
-            dir.path().to_string_lossy().to_string(),
-            "ws".to_string(),
-            tx,
-        )
-        .unwrap();
-        sleep(Duration::from_millis(200)).await;
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
 
         const N: usize = 50;
         for i in 0..N {
-            std::fs::write(dir.path().join(format!("file{i}.txt")), "x").unwrap();
+            std::fs::write(root.join(format!("file{i}.txt")), "x").unwrap();
         }
 
         let events = drain_events(&mut rx, SETTLE_MS).await;
