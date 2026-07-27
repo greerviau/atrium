@@ -71,6 +71,13 @@
   const isSaveOwner = $derived($editorPaneTree !== null && saveOwnerLeafId($editorPaneTree, filePath, $focusedEditorPaneId) === paneId);
 
   let container: HTMLDivElement;
+  // `view` is an imperative handle to the CodeMirror instance: assigned once
+  // in onMount and never reassigned again (only destroyed on unmount). The
+  // table-edit context-menu buttons below read `view.state` directly, but
+  // they only render once `menu` is set, and `menu` is only ever set after
+  // `view` already exists (see `onContextMenu`) — so there's no reactive
+  // update being missed here for svelte-check to warn about.
+  // svelte-ignore non_reactive_update
   let view: EditorView;
   let detachScrollbarAutoHide: (() => void) | undefined;
   const themeCompartment = new Compartment();
