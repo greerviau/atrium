@@ -24,6 +24,24 @@ export function unregisterView(path: string, view: EditorView): void {
 }
 
 /**
+ * Moves the registered view set at `oldPath` (if any) to `newPath`. Must run
+ * before a rename re-keys the pane tree's own `tabs` array: that re-keying
+ * forces Svelte's keyed `{#each}` to destroy the old `EditorPane` and mount
+ * a fresh one at the new path, and the fresh mount seeds its doc from
+ * `liveDocFor(newPath)` — which only finds the still-live buffer if this
+ * registry already knows the view by its new key. Rekeying after the
+ * remount is too late: the mount would find nothing at `newPath` and fall
+ * back to the tab's last-saved content, silently discarding any unsaved
+ * edit.
+ */
+export function rekeyPath(oldPath: string, newPath: string): void {
+  const views = registry.get(oldPath);
+  if (!views) return;
+  registry.delete(oldPath);
+  registry.set(newPath, views);
+}
+
+/**
  * The current document content of any already-registered view of `path`, or
  * `null` if none is registered yet. Consulted at registration time so a
  * newly-mounted view seeds from a live sibling's buffer instead of

@@ -54,10 +54,10 @@ function resetStores(): void {
   errorToast.set(null);
 }
 
-function fsChangedHandler(): (event: { path: string; kind: string }) => void {
+function fsChangedHandler(): (event: { path: string; kind: string; fromPath?: string }) => void {
   const handler = vi.mocked(onFsChanged).mock.calls.at(-1)?.[0];
   if (!handler) throw new Error("expected onFsChanged to have been called by App.svelte's onMount");
-  return handler as (event: { path: string; kind: string }) => void;
+  return handler as (event: { path: string; kind: string; fromPath?: string }) => void;
 }
 
 describe("App fs:changed routing (issue #253)", () => {
@@ -104,5 +104,38 @@ describe("App fs:changed routing (issue #253)", () => {
     expect(tabs).toHaveLength(1);
     expect(tabs[0].isDeleted).toBe(true);
     expect(tabs[0].isDirty).toBe(true);
+  });
+
+  it("a rename-kind event with a paired fromPath re-keys the open tab to the new path (issue #249, mechanism 2)", async () => {
+    workspace.set({ id: "local", root: "/projects/demo" });
+    render(App);
+    await tick();
+
+    await openFile("/projects/demo/notes.md");
+    await tick();
+
+    fsChangedHandler()({
+      path: "/projects/demo/notes-renamed.md",
+      kind: "rename",
+      fromPath: "/projects/demo/notes.md",
+    });
+    await tick();
+
+    expect(get(tabsState).tabs.map((t) => t.path)).toEqual(["/projects/demo/notes-renamed.md"]);
+  });
+
+  it("a rename-kind event with no fromPath (an unpaired rename half never reaches the frontend, but this guards the fallback) falls through to reconcileExternalChange instead of guessing", async () => {
+    workspace.set({ id: "local", root: "/projects/demo" });
+    render(App);
+    await tick();
+
+    await openFile("/projects/demo/notes.md");
+    await tick();
+
+    fsChangedHandler()({ path: "/projects/demo/notes.md", kind: "rename" });
+    await tick();
+
+    // No fromPath means no rekey — the tab stays exactly where it was.
+    expect(get(tabsState).tabs.map((t) => t.path)).toEqual(["/projects/demo/notes.md"]);
   });
 });

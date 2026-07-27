@@ -8,6 +8,7 @@ import {
 } from "../ipc/commands";
 import { loadChildren } from "../stores/fileTree";
 import { pruneRecentFiles } from "../stores/recentFiles";
+import { renameOpenTabs, markPathDeleted } from "../stores/tabs";
 import { workspace } from "../stores/workspace";
 import { basename, dirOf } from "../util/path";
 
@@ -60,8 +61,10 @@ export async function newFolder(dirPath: string, name: string): Promise<void> {
 export async function rename(path: string, newName: string): Promise<void> {
   const workspaceId = localWorkspaceId();
   const dir = dirOf(path);
-  await fsRename(workspaceId, path, `${dir}/${newName}`);
+  const newPath = `${dir}/${newName}`;
+  await fsRename(workspaceId, path, newPath);
   pruneRecents(path);
+  renameOpenTabs(path, newPath);
   await loadChildren(dir);
 }
 
@@ -72,6 +75,7 @@ export async function movePath(sourcePath: string, destDir: string): Promise<voi
   const newPath = `${destDir}/${basename(sourcePath)}`;
   await fsRename(workspaceId, sourcePath, newPath);
   pruneRecents(sourcePath);
+  renameOpenTabs(sourcePath, newPath);
   await Promise.all([loadChildren(sourceDir), loadChildren(destDir)]);
 }
 
@@ -84,6 +88,7 @@ export async function deletePath(path: string, isDir: boolean): Promise<void> {
   const workspaceId = localWorkspaceId();
   await fsDelete(workspaceId, path, isDir);
   pruneRecents(path);
+  markPathDeleted(path);
   await loadChildren(dirOf(path));
 }
 

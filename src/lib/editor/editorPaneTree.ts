@@ -9,6 +9,7 @@
 // flat `tabs: Tab[]` keyed by path, exactly as before split panes existed. A
 // leaf just orders and selects among that global set of open paths.
 import { mapLeaf, removePane, findLeaf, listLeaves, type PaneNode as GenericPaneNode, type SplitPane as GenericSplitPane } from "../panes/paneTree";
+import { isPathUnderOrEqual } from "../util/path";
 
 export type { SplitAxis, SplitDirection } from "../panes/paneTree";
 export { splitPane, removePane, resizeSplit, listLeaves, findLeaf, nextActivePane, PANE_MIN_PX } from "../panes/paneTree";
@@ -84,6 +85,34 @@ export function pruneMissingTabs(tree: EditorPaneNode, openPaths: ReadonlySet<st
       continue;
     }
     const activeTabPath = leaf.activeTabPath && tabs.includes(leaf.activeTabPath) ? leaf.activeTabPath : tabs[tabs.length - 1];
+    result = mapLeaf(result, leaf.id, () => ({ ...leaf, tabs, activeTabPath }));
+  }
+  return result;
+}
+
+/**
+ * Reconciles the tree for a path renamed or moved at the `tabsState` level
+ * (`renameOpenTabs`, triggered by an explorer rename/move or an inferred
+ * external rename): remaps any `tabs` entry (and `activeTabPath`, if it
+ * matches) at or under `oldPath` to its counterpart under `newPath`, in
+ * every leaf. A no-op (returns `tree` itself) when nothing matches.
+ *
+ * Re-keying a leaf's `tabs` array changes the key `EditorPanel.svelte`'s
+ * keyed `{#each}` block uses for the corresponding `EditorPane`, forcing
+ * Svelte to destroy and remount it at the new key. Callers must rekey
+ * `editorViewRegistry` to the new path before calling this, or the fresh
+ * mount finds no live view registered under the new path and falls back to
+ * stale, last-saved content.
+ */
+export function renamePathInTree(tree: EditorPaneNode, oldPath: string, newPath: string): EditorPaneNode {
+  let result = tree;
+  for (const leaf of listLeaves(tree)) {
+    if (!leaf.tabs.some((p) => isPathUnderOrEqual(p, oldPath))) continue;
+    const tabs = leaf.tabs.map((p) => (isPathUnderOrEqual(p, oldPath) ? newPath + p.slice(oldPath.length) : p));
+    const activeTabPath =
+      leaf.activeTabPath && isPathUnderOrEqual(leaf.activeTabPath, oldPath)
+        ? newPath + leaf.activeTabPath.slice(oldPath.length)
+        : leaf.activeTabPath;
     result = mapLeaf(result, leaf.id, () => ({ ...leaf, tabs, activeTabPath }));
   }
   return result;

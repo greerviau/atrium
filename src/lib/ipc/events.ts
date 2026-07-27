@@ -8,6 +8,8 @@ export interface FsChangeEvent {
   workspaceId: string;
   path: string;
   kind: FsChangeKind;
+  /** Only set when `kind === "rename"`: the path this entry was renamed from. */
+  fromPath?: string;
 }
 
 export function onFsChanged(

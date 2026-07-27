@@ -13,6 +13,8 @@ import {
   notifySaveComplete,
   notifySaveFailed,
   markPathDeleted,
+  renameOpenTabs,
+  tabRenameSignal,
   saveTab,
   type Tab,
 } from "../../src/lib/stores/tabs";
@@ -341,6 +343,81 @@ describe("markPathDeleted", () => {
 
     expect(get(tabsState).tabs).toHaveLength(1);
     expect(get(errorToast)).toBeNull();
+  });
+});
+
+describe("renameOpenTabs", () => {
+  beforeEach(() => {
+    tabsState.set({ tabs: [], activeTabPath: null });
+    tabRenameSignal.set(null);
+  });
+
+  it("re-keys an exact-match tab, preserving savedDoc/isDirty/viewMode", () => {
+    tabsState.set({
+      tabs: [markdownTab("/notes.md", { savedDoc: "unsaved edit", isDirty: true, viewMode: "source" })],
+      activeTabPath: "/notes.md",
+    });
+
+    renameOpenTabs("/notes.md", "/notes-renamed.md");
+
+    const tabs = get(tabsState).tabs;
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].path).toBe("/notes-renamed.md");
+    expect(tabs[0].savedDoc).toBe("unsaved edit");
+    expect(tabs[0].isDirty).toBe(true);
+    expect(tabs[0].viewMode).toBe("source");
+  });
+
+  it("re-keys every tab nested under a renamed directory", () => {
+    tabsState.set({
+      tabs: [
+        codeTab("/dir/a.md"),
+        codeTab("/dir/nested/b.md"),
+        codeTab("/other.md"),
+      ],
+      activeTabPath: "/dir/a.md",
+    });
+
+    renameOpenTabs("/dir", "/renamed");
+
+    const paths = get(tabsState).tabs.map((t) => t.path);
+    expect(paths).toEqual(["/renamed/a.md", "/renamed/nested/b.md", "/other.md"]);
+  });
+
+  it("re-keys activeTabPath when it matches the renamed path", () => {
+    tabsState.set({ tabs: [codeTab("/notes.md")], activeTabPath: "/notes.md" });
+
+    renameOpenTabs("/notes.md", "/notes-renamed.md");
+
+    expect(get(tabsState).activeTabPath).toBe("/notes-renamed.md");
+  });
+
+  it("leaves activeTabPath untouched when it doesn't match the renamed path", () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md"), codeTab("/other.md")],
+      activeTabPath: "/other.md",
+    });
+
+    renameOpenTabs("/notes.md", "/notes-renamed.md");
+
+    expect(get(tabsState).activeTabPath).toBe("/other.md");
+  });
+
+  it("is a no-op for an unrelated path, including not setting tabRenameSignal", () => {
+    tabsState.set({ tabs: [codeTab("/other.md")], activeTabPath: "/other.md" });
+
+    renameOpenTabs("/notes.md", "/notes-renamed.md");
+
+    expect(get(tabsState).tabs).toEqual([codeTab("/other.md")]);
+    expect(get(tabRenameSignal)).toBeNull();
+  });
+
+  it("sets tabRenameSignal to the from/to pair when a rename actually applies", () => {
+    tabsState.set({ tabs: [codeTab("/notes.md")], activeTabPath: "/notes.md" });
+
+    renameOpenTabs("/notes.md", "/notes-renamed.md");
+
+    expect(get(tabRenameSignal)).toEqual({ from: "/notes.md", to: "/notes-renamed.md" });
   });
 });
 

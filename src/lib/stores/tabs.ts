@@ -5,6 +5,7 @@ import { closePrompt } from "./closePrompt";
 import { workspace } from "./workspace";
 import { recordFileOpened } from "./recentFiles";
 import { showErrorToast } from "./errorToast";
+import { isPathUnderOrEqual } from "../util/path";
 
 export interface PendingSelection {
   line: number;
@@ -48,6 +49,21 @@ export const tabsState = writable<TabsState>({ tabs: [], activeTabPath: null });
  * view). The pane clears it back to `null` once it has acted on it.
  */
 export const saveRequest = writable<string | null>(null);
+
+export interface TabRenameEvent {
+  from: string;
+  to: string;
+}
+
+/**
+ * A one-shot signal set by `renameOpenTabs`, consumed by `App.svelte`'s
+ * rename-reconciliation effect to re-key `editorPaneTree` and
+ * `editorViewRegistry` to match — those two live outside `tabsState` and
+ * have no other way to learn a path moved. Cleared back to `null` by the
+ * consuming effect once it has acted on it, the same one-shot convention
+ * `saveRequest` uses.
+ */
+export const tabRenameSignal = writable<TabRenameEvent | null>(null);
 
 interface SaveWaiter {
   resolve: () => void;
@@ -293,6 +309,37 @@ export function markPathDeleted(path: string): void {
         : `${names.join(", ")} were deleted — their tabs were closed.`;
     showErrorToast(message);
   }
+}
+
+/**
+ * Reacts to a path being renamed or moved, in-app or externally: every open
+ * tab at or under `oldPath` (a directory rename cascades to its open
+ * descendants) is re-keyed to its counterpart under `newPath` by prefix
+ * substitution, preserving every other field (`savedDoc`, `isDirty`,
+ * `viewMode`, `isDeleted`, etc.) unchanged. `activeTabPath` is re-keyed the
+ * same way if it matched. Sets `tabRenameSignal` so `App.svelte`'s
+ * reconciliation effect can re-key `editorPaneTree` and
+ * `editorViewRegistry` to match.
+ */
+export function renameOpenTabs(oldPath: string, newPath: string): void {
+  const state = get(tabsState);
+  const affected = state.tabs.some((t) => isPathUnderOrEqual(t.path, oldPath));
+  if (!affected) {
+    return;
+  }
+
+  const rekey = (path: string): string => newPath + path.slice(oldPath.length);
+
+  tabsState.update((s) => ({
+    ...s,
+    tabs: s.tabs.map((t) => (isPathUnderOrEqual(t.path, oldPath) ? { ...t, path: rekey(t.path) } : t)),
+    activeTabPath:
+      s.activeTabPath && isPathUnderOrEqual(s.activeTabPath, oldPath)
+        ? rekey(s.activeTabPath)
+        : s.activeTabPath,
+  }));
+
+  tabRenameSignal.set({ from: oldPath, to: newPath });
 }
 
 /** "Keep mine" action on the conflict banner: dismiss the banner, keep editing. */
