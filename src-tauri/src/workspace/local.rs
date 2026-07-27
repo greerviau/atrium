@@ -1051,7 +1051,9 @@ mod tests {
         let ws = workspace(dir.path());
         ws.create_dir("real_dir").await.unwrap();
         ws.create_file("real_dir/inside.md").await.unwrap();
-        ws.write_file("real_dir/inside.md", "keep me").await.unwrap();
+        ws.write_file("real_dir/inside.md", "keep me")
+            .await
+            .unwrap();
         std::os::unix::fs::symlink(dir.path().join("real_dir"), dir.path().join("link_dir"))
             .unwrap();
 
@@ -1061,10 +1063,7 @@ mod tests {
 
         assert!(dir.path().join("link_dir").symlink_metadata().is_err());
         assert!(dir.path().join("real_dir").exists());
-        assert_eq!(
-            ws.read_file("real_dir/inside.md").await.unwrap(),
-            "keep me"
-        );
+        assert_eq!(ws.read_file("real_dir/inside.md").await.unwrap(), "keep me");
     }
 
     #[tokio::test]
@@ -1127,8 +1126,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ws = workspace(dir.path());
         ws.create_file("real.md").await.unwrap();
-        std::os::unix::fs::symlink(dir.path().join("real.md"), dir.path().join("link.md"))
-            .unwrap();
+        std::os::unix::fs::symlink(dir.path().join("real.md"), dir.path().join("link.md")).unwrap();
 
         let entries = ws.list_dir(".").await.unwrap();
         let link = entries.iter().find(|e| e.name == "link.md").unwrap();
