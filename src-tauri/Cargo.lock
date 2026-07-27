@@ -238,6 +238,7 @@ dependencies = [
  "grep-regex",
  "grep-searcher",
  "ignore",
+ "libc",
  "memchr",
  "notify",
  "notify-debouncer-full",

@@ -132,7 +132,18 @@ impl PtyManager {
         Self { sessions }
     }
 
-    pub fn spawn(&self, cwd: String, cols: u16, rows: u16) -> Result<String, AppError> {
+    /// `shell_override`, when set, is used in place of `$SHELL`/the `/bin/zsh`
+    /// fallback. Production callers always pass `None`; it exists so tests
+    /// can spawn a specific shell (e.g. `dash`) without mutating the
+    /// process-global `SHELL` env var, which would race other tests running
+    /// in the same binary.
+    pub fn spawn(
+        &self,
+        cwd: String,
+        cols: u16,
+        rows: u16,
+        shell_override: Option<String>,
+    ) -> Result<String, AppError> {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
@@ -143,7 +154,9 @@ impl PtyManager {
             })
             .map_err(|e| AppError::Other(format!("failed to open pty: {e}")))?;
 
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        let shell = shell_override
+            .or_else(|| std::env::var("SHELL").ok())
+            .unwrap_or_else(|| "/bin/zsh".to_string());
         let mut cmd = CommandBuilder::new(shell);
         cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");
@@ -268,18 +281,104 @@ impl PtyManager {
     pub fn kill(&self, terminal_id: &str) -> Result<(), AppError> {
         let mut sessions = self.sessions.lock().unwrap();
         if let Some(mut session) = sessions.remove(terminal_id) {
-            let _ = session.child.kill();
+            let mut system = System::new();
+            Self::kill_session(&mut session, &mut system);
         }
         Ok(())
     }
 
     /// Kills every remaining session; called from the window-close handler
-    /// so no shells are orphaned when the app quits.
+    /// so no shells are orphaned when the app quits. Shares one `System`
+    /// across every session being drained, rather than allocating one per
+    /// session, since several tabs are commonly still open at quit.
     pub fn kill_all(&self) {
         let mut sessions = self.sessions.lock().unwrap();
+        let mut system = System::new();
         for (_, mut session) in sessions.drain() {
-            let _ = session.child.kill();
+            Self::kill_session(&mut session, &mut system);
         }
+    }
+
+    /// Kills every live descendant of `session`'s shell, then the shell
+    /// itself, then reaps it. A terminal's shell is only ever the direct
+    /// ancestor of whatever it forked (a dev server, a build, `sleep &`), so
+    /// walking the process tree from its pid reaches all of it regardless of
+    /// whether a given job was left in the foreground or backgrounded — see
+    /// the "Signal sequence" section of the issue #251 fix plan.
+    ///
+    /// This deliberately also reaches a `nohup`/`disown`-ed job: it's still
+    /// a child of the shell, so the walk finds it, its `SIGHUP` is a no-op
+    /// (that's the point of `nohup`), and it gets `SIGKILL`ed in the same
+    /// pass as everything else. Closing a tab is exactly the kind of
+    /// deliberate action #251 wants to reap a dev server or build for, and
+    /// there's no way to tell "detached on purpose" apart from "just
+    /// forgotten" from here.
+    fn kill_session(session: &mut PtySession, system: &mut System) {
+        let Some(shell_pid) = session.shell_pid else {
+            // No pid to walk from; fall back to the previous behavior.
+            let _ = session.child.kill();
+            let _ = session.child.wait();
+            return;
+        };
+
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        let descendants = Self::collect_descendants(system, shell_pid);
+
+        // Best-effort: a descendant may have already exited on its own.
+        for &pid in &descendants {
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGHUP);
+            }
+        }
+
+        // portable_pty's `ChildKiller` impl for `std::process::Child` sends
+        // SIGHUP to the shell, then polls up to four times 50ms apart (up to
+        // ~200ms) before falling back to SIGKILL if the shell is still
+        // alive — but only spends any of that time if the shell doesn't die
+        // immediately, which a shell with no SIGHUP handler (e.g. `dash`)
+        // won't. Whatever time this call does take is reused as the
+        // descendants' own grace period instead of adding a second sleep,
+        // since the two run concurrently in wall-clock time; it isn't a
+        // guaranteed window.
+        let _ = session.child.kill();
+
+        if !descendants.is_empty() {
+            let pids: Vec<Pid> = descendants.iter().copied().map(Pid::from_u32).collect();
+            system.refresh_processes_specifics(
+                ProcessesToUpdate::Some(&pids),
+                true,
+                ProcessRefreshKind::nothing(),
+            );
+            for &pid in &descendants {
+                if system.process(Pid::from_u32(pid)).is_some() {
+                    unsafe {
+                        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                    }
+                }
+            }
+        }
+
+        let _ = session.child.wait();
+    }
+
+    /// Transitive walk over `system`'s process table, collecting every pid
+    /// whose parent chain leads back to `root` (not including `root` itself).
+    fn collect_descendants(system: &System, root: u32) -> Vec<u32> {
+        let mut descendants = Vec::new();
+        let mut frontier = vec![Pid::from_u32(root)];
+        while let Some(parent) = frontier.pop() {
+            for (pid, process) in system.processes() {
+                if process.parent() == Some(parent) {
+                    descendants.push(pid.as_u32());
+                    frontier.push(*pid);
+                }
+            }
+        }
+        descendants
     }
 
     /// Runs for the app's entire lifetime on its own thread, re-checking
@@ -456,7 +555,7 @@ mod tests {
         let manager = PtyManager::new();
         let dir = tempfile::tempdir().unwrap();
         let terminal_id = manager
-            .spawn(dir.path().to_string_lossy().to_string(), 80, 24)
+            .spawn(dir.path().to_string_lossy().to_string(), 80, 24, None)
             .unwrap();
 
         let received: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
@@ -496,7 +595,7 @@ mod tests {
         let manager = PtyManager::new();
         let dir = tempfile::tempdir().unwrap();
         let terminal_id = manager
-            .spawn(dir.path().to_string_lossy().to_string(), 80, 24)
+            .spawn(dir.path().to_string_lossy().to_string(), 80, 24, None)
             .unwrap();
 
         let received: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
@@ -533,7 +632,7 @@ mod tests {
         let manager = PtyManager::new();
         let dir = tempfile::tempdir().unwrap();
         let terminal_id = manager
-            .spawn(dir.path().to_string_lossy().to_string(), 80, 24)
+            .spawn(dir.path().to_string_lossy().to_string(), 80, 24, None)
             .unwrap();
 
         let received: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
@@ -580,7 +679,7 @@ mod tests {
         let manager = PtyManager::new();
         let dir = tempfile::tempdir().unwrap();
         let terminal_id = manager
-            .spawn(dir.path().to_string_lossy().to_string(), 80, 24)
+            .spawn(dir.path().to_string_lossy().to_string(), 80, 24, None)
             .unwrap();
 
         let (channel, titles) = title_events_channel();
@@ -626,7 +725,7 @@ mod tests {
         let target_canonical = std::fs::canonicalize(target_dir.path()).unwrap();
 
         let terminal_id = manager
-            .spawn(start_dir.path().to_string_lossy().to_string(), 80, 24)
+            .spawn(start_dir.path().to_string_lossy().to_string(), 80, 24, None)
             .unwrap();
 
         let (channel, titles) = title_events_channel();
@@ -661,7 +760,7 @@ mod tests {
         let manager = PtyManager::new();
         let dir = tempfile::tempdir().unwrap();
         let terminal_id = manager
-            .spawn(dir.path().to_string_lossy().to_string(), 80, 24)
+            .spawn(dir.path().to_string_lossy().to_string(), 80, 24, None)
             .unwrap();
 
         let (channel, titles) = title_events_channel();
@@ -687,5 +786,159 @@ mod tests {
         );
 
         manager.kill(&terminal_id).unwrap();
+    }
+
+    /// Proves #251's fix for the foreground case: a `sleep 600` typed at the
+    /// prompt is gone after `kill()`, not left running as an orphan. This
+    /// case happened to already work before the fix (the kernel's own
+    /// controlling-terminal-hangup behavior reaches a foreground process
+    /// group on its own), so it's kept as a baseline alongside
+    /// `backgrounded_descendant_reaped_under_dash_with_no_job_hangup_of_its_own`
+    /// below, which is the one that actually exercises the tree walk.
+    #[test]
+    fn foreground_descendant_reaped_on_kill() {
+        let manager = PtyManager::new();
+        let dir = tempfile::tempdir().unwrap();
+        let terminal_id = manager
+            .spawn(dir.path().to_string_lossy().to_string(), 80, 24, None)
+            .unwrap();
+
+        let (channel, titles) = title_events_channel();
+        manager.subscribe(&terminal_id, channel).unwrap();
+
+        manager.write(&terminal_id, "sleep 600\n").unwrap();
+
+        wait_for(
+            Duration::from_secs(10),
+            "no Title event ever reported program: Some(\"sleep\") while it was running",
+            || {
+                titles
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(_, program)| program.as_deref() == Some("sleep"))
+            },
+        );
+
+        let shell_pid = manager
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&terminal_id)
+            .unwrap()
+            .shell_pid
+            .unwrap();
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        let sleep_pid = PtyManager::collect_descendants(&system, shell_pid)
+            .into_iter()
+            .find(|&pid| {
+                system
+                    .process(Pid::from_u32(pid))
+                    .is_some_and(|process| process.name().to_str() == Some("sleep"))
+            })
+            .expect("sleep process not found among the shell's descendants");
+
+        manager.kill(&terminal_id).unwrap();
+
+        // `kill()` reaps the shell but doesn't wait for a descendant's own
+        // exit/reparent/reap by init — for a brief window after it returns,
+        // the pid is still in the process table as a zombie, which would
+        // read as "still alive" to a single immediate check. Poll instead of
+        // asserting once.
+        wait_for(
+            Duration::from_secs(5),
+            &format!("foreground sleep process {sleep_pid} still alive after kill()"),
+            || {
+                system.refresh_processes_specifics(
+                    ProcessesToUpdate::Some(&[Pid::from_u32(sleep_pid)]),
+                    true,
+                    ProcessRefreshKind::nothing(),
+                );
+                system.process(Pid::from_u32(sleep_pid)).is_none()
+            },
+        );
+    }
+
+    /// Proves #251's fix for the backgrounded case: a `sleep 300 &`, under a
+    /// shell with no job-hangup behavior of its own, is gone after `kill()`.
+    /// This is the case that was confirmed to leak before the fix — `dash`
+    /// has no job table to forward a received `SIGHUP` through, and the
+    /// kernel's automatic hangup only ever reaches the terminal's *current
+    /// foreground* process group, which a backgrounded job isn't part of —
+    /// so this is the test that actually proves the tree-walk fix, unlike
+    /// the foreground case above, which already passed by accident.
+    ///
+    /// The session's shell is set to `/bin/dash` via `PtyManager::spawn`'s
+    /// `shell_override` parameter rather than the process-global `SHELL` env
+    /// var, so this test can't race any other test in this binary.
+    #[test]
+    fn backgrounded_descendant_reaped_under_dash_with_no_job_hangup_of_its_own() {
+        let manager = PtyManager::new();
+        let dir = tempfile::tempdir().unwrap();
+        let terminal_id = manager
+            .spawn(
+                dir.path().to_string_lossy().to_string(),
+                80,
+                24,
+                Some("/bin/dash".to_string()),
+            )
+            .unwrap();
+
+        let shell_pid = manager
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&terminal_id)
+            .unwrap()
+            .shell_pid
+            .unwrap();
+
+        manager.write(&terminal_id, "sleep 300 &\n").unwrap();
+
+        let mut system = System::new();
+        let mut sleep_pid = None;
+        wait_for(
+            Duration::from_secs(10),
+            "backgrounded sleep process never appeared as a descendant of the shell",
+            || {
+                system.refresh_processes_specifics(
+                    ProcessesToUpdate::All,
+                    true,
+                    ProcessRefreshKind::nothing(),
+                );
+                sleep_pid = PtyManager::collect_descendants(&system, shell_pid)
+                    .into_iter()
+                    .find(|&pid| {
+                        system
+                            .process(Pid::from_u32(pid))
+                            .is_some_and(|process| process.name().to_str() == Some("sleep"))
+                    });
+                sleep_pid.is_some()
+            },
+        );
+        let sleep_pid = sleep_pid.unwrap();
+
+        manager.kill(&terminal_id).unwrap();
+
+        // See the identical comment in `foreground_descendant_reaped_on_kill`:
+        // the pid is briefly a zombie after `kill()` returns, so poll rather
+        // than asserting once.
+        wait_for(
+            Duration::from_secs(5),
+            &format!("backgrounded sleep process {sleep_pid} still alive after kill()"),
+            || {
+                system.refresh_processes_specifics(
+                    ProcessesToUpdate::Some(&[Pid::from_u32(sleep_pid)]),
+                    true,
+                    ProcessRefreshKind::nothing(),
+                );
+                system.process(Pid::from_u32(sleep_pid)).is_none()
+            },
+        );
     }
 }
