@@ -418,6 +418,141 @@ describe("SearchOverlay", () => {
     expect(container.querySelector(".search-empty")).toBeNull();
   });
 
+  it("renders the inline error state for a non-regex AppError in content mode instead of an empty results list", async () => {
+    vi.mocked(commands.searchWorkspace).mockRejectedValue({
+      code: "IO_ERROR",
+      message: "failed to read directory",
+    });
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+
+    const input = await screen.findByPlaceholderText(PLACEHOLDER);
+    await fireEvent.input(input, { target: { value: "needle" } });
+    await vi.advanceTimersByTimeAsync(150);
+    await tick();
+
+    expect(await screen.findByText("failed to read directory")).toBeTruthy();
+    expect(container.querySelector(".search-empty")).toBeNull();
+  });
+
+  it("renders the inline error state in files mode instead of an empty results list", async () => {
+    vi.mocked(commands.findFiles).mockRejectedValue({
+      code: "IO_ERROR",
+      message: "failed to walk workspace",
+    });
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+
+    const input = await screen.findByPlaceholderText(FILES_PLACEHOLDER);
+    await fireEvent.input(input, { target: { value: "needle" } });
+    await vi.advanceTimersByTimeAsync(150);
+    await tick();
+
+    expect(await screen.findByText("failed to walk workspace")).toBeTruthy();
+    expect(screen.queryByText("No matching files")).toBeNull();
+  });
+
+  it("logs to the console for a non-regex content-mode failure and for any files-mode failure, but not for INVALID_REGEX", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    vi.mocked(commands.searchWorkspace).mockRejectedValue({
+      code: "INVALID_REGEX",
+      message: "invalid regex: unterminated",
+    });
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+    await fireEvent.click(screen.getByLabelText("Use regular expression"));
+    const contentInput = await screen.findByPlaceholderText(PLACEHOLDER);
+    await fireEvent.input(contentInput, { target: { value: "(unterminated" } });
+    await vi.advanceTimersByTimeAsync(150);
+    await tick();
+    await screen.findByText("invalid regex: unterminated");
+
+    expect(consoleErrorSpy).not.toHaveBeenCalled();
+    cleanup();
+
+    vi.mocked(commands.searchWorkspace).mockRejectedValue({
+      code: "IO_ERROR",
+      message: "failed to read directory",
+    });
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+    const nonRegexInput = await screen.findByPlaceholderText(PLACEHOLDER);
+    await fireEvent.input(nonRegexInput, { target: { value: "needle" } });
+    await vi.advanceTimersByTimeAsync(150);
+    await tick();
+    await screen.findByText("failed to read directory");
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith("atrium: search failed", {
+      code: "IO_ERROR",
+      message: "failed to read directory",
+    });
+    consoleErrorSpy.mockClear();
+    cleanup();
+
+    vi.mocked(commands.findFiles).mockRejectedValue({
+      code: "IO_ERROR",
+      message: "failed to walk workspace",
+    });
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    const filesInput = await screen.findByPlaceholderText(FILES_PLACEHOLDER);
+    await fireEvent.input(filesInput, { target: { value: "needle" } });
+    await vi.advanceTimersByTimeAsync(150);
+    await tick();
+    await screen.findByText("failed to walk workspace");
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith("atrium: find files failed", {
+      code: "IO_ERROR",
+      message: "failed to walk workspace",
+    });
+  });
+
+  it("does not fire a toast for content-mode or files-mode inline search errors", async () => {
+    vi.mocked(commands.searchWorkspace).mockRejectedValue({
+      code: "INVALID_REGEX",
+      message: "invalid regex: unterminated",
+    });
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+    await fireEvent.click(screen.getByLabelText("Use regular expression"));
+    const regexInput = await screen.findByPlaceholderText(PLACEHOLDER);
+    await fireEvent.input(regexInput, { target: { value: "(unterminated" } });
+    await vi.advanceTimersByTimeAsync(150);
+    await tick();
+    await screen.findByText("invalid regex: unterminated");
+    expect(get(errorToast)).toBeNull();
+
+    vi.mocked(commands.searchWorkspace).mockRejectedValue({
+      code: "IO_ERROR",
+      message: "failed to read directory",
+    });
+    await fireEvent.input(regexInput, { target: { value: "needle" } });
+    await vi.advanceTimersByTimeAsync(150);
+    await tick();
+    await screen.findByText("failed to read directory");
+    expect(get(errorToast)).toBeNull();
+
+    vi.mocked(commands.findFiles).mockRejectedValue({
+      code: "IO_ERROR",
+      message: "failed to walk workspace",
+    });
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    const filesInput = await screen.findByPlaceholderText(FILES_PLACEHOLDER);
+    await fireEvent.input(filesInput, { target: { value: "needle" } });
+    await vi.advanceTimersByTimeAsync(150);
+    await tick();
+    await screen.findByText("failed to walk workspace");
+    expect(get(errorToast)).toBeNull();
+  });
+
   it("has no in-panel control to switch modes — Content and Files are exclusive views", async () => {
     const { container } = render(SearchOverlay);
     searchOverlay.set({ open: true, mode: "content" });

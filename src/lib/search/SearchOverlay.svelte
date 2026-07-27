@@ -140,12 +140,10 @@
         isSearching = false;
       } catch (err) {
         if (myRequestId !== requestId) return;
-        if (isAppError(err) && err.code === "INVALID_REGEX") {
-          errorMessage = err.message;
-        } else {
+        if (!(isAppError(err) && err.code === "INVALID_REGEX")) {
           console.error("atrium: search failed", err);
-          errorMessage = null;
         }
+        errorMessage = describeError(err);
         results = [];
         truncated = false;
         hasSearched = true;
@@ -170,7 +168,7 @@
         console.error("atrium: find files failed", err);
         fileResults = [];
         truncated = false;
-        errorMessage = null;
+        errorMessage = describeError(err);
         hasSearched = true;
         isSearching = false;
       }
