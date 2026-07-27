@@ -100,6 +100,38 @@ export function setTerminalPosition(position: TerminalPosition): void {
   saveTerminalLayout({ position, height, width });
 }
 
+const EXPLORER_STORAGE_KEY = "atrium.layout.explorer";
+
+export const EXPLORER_WIDTH_MIN = 140;
+export const EXPLORER_WIDTH_MAX = 600;
+const EXPLORER_WIDTH_DEFAULT = 240;
+
+function clampExplorerWidth(w: number): number {
+  return Math.max(EXPLORER_WIDTH_MIN, Math.min(EXPLORER_WIDTH_MAX, w));
+}
+
+/** Reads the persisted explorer sidebar width, clamping to range. Falls back to the default on any missing/malformed data. */
+export function loadExplorerWidth(): number {
+  try {
+    const raw = localStorage.getItem(EXPLORER_STORAGE_KEY);
+    if (!raw) return EXPLORER_WIDTH_DEFAULT;
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "number" || !Number.isFinite(parsed)) return EXPLORER_WIDTH_DEFAULT;
+    return clampExplorerWidth(parsed);
+  } catch {
+    return EXPLORER_WIDTH_DEFAULT;
+  }
+}
+
+/** Persists the explorer sidebar width. Swallows quota/availability errors since this persistence is a best-effort convenience. */
+export function saveExplorerWidth(width: number): void {
+  try {
+    localStorage.setItem(EXPLORER_STORAGE_KEY, JSON.stringify(width));
+  } catch {
+    // localStorage unavailable or quota exceeded; width simply won't persist.
+  }
+}
+
 export interface PanelVisibility {
   explorerVisible: boolean;
   terminalVisible: boolean;

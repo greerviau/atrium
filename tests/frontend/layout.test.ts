@@ -7,10 +7,15 @@ import {
   clampWidth,
   clampToContainer,
   WIDTH_MIN,
+  loadExplorerWidth,
+  saveExplorerWidth,
+  EXPLORER_WIDTH_MIN,
+  EXPLORER_WIDTH_MAX,
 } from "../../src/lib/stores/layout";
 
 const STORAGE_KEY = "atrium.layout.terminal";
 const PANELS_STORAGE_KEY = "atrium.layout.panels";
+const EXPLORER_STORAGE_KEY = "atrium.layout.explorer";
 
 beforeEach(() => {
   localStorage.clear();
@@ -226,6 +231,45 @@ describe("panel visibility", () => {
 
     expect(() => toggleExplorerVisible()).not.toThrow();
 
+    setItem.mockRestore();
+  });
+});
+
+describe("loadExplorerWidth / saveExplorerWidth", () => {
+  it("returns the default width when nothing is stored", () => {
+    expect(loadExplorerWidth()).toBe(240);
+  });
+
+  it("round-trips a saved width", () => {
+    saveExplorerWidth(320);
+    expect(loadExplorerWidth()).toBe(320);
+  });
+
+  it("clamps below the minimum on load", () => {
+    localStorage.setItem(EXPLORER_STORAGE_KEY, JSON.stringify(10));
+    expect(loadExplorerWidth()).toBe(EXPLORER_WIDTH_MIN);
+  });
+
+  it("clamps above the maximum on load", () => {
+    localStorage.setItem(EXPLORER_STORAGE_KEY, JSON.stringify(9999));
+    expect(loadExplorerWidth()).toBe(EXPLORER_WIDTH_MAX);
+  });
+
+  it("falls back to the default on malformed JSON", () => {
+    localStorage.setItem(EXPLORER_STORAGE_KEY, "not json{");
+    expect(loadExplorerWidth()).toBe(240);
+  });
+
+  it("falls back to the default when the stored value isn't a number", () => {
+    localStorage.setItem(EXPLORER_STORAGE_KEY, JSON.stringify("240"));
+    expect(loadExplorerWidth()).toBe(240);
+  });
+
+  it("swallows a write error instead of throwing", () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("QuotaExceededError");
+    });
+    expect(() => saveExplorerWidth(300)).not.toThrow();
     setItem.mockRestore();
   });
 });
