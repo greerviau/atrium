@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { get } from "svelte/store";
-import { workspace, openWorkspacePath } from "../../src/lib/stores/workspace";
+import { workspace, openWorkspacePath, confirmWorkspaceSwitch } from "../../src/lib/stores/workspace";
 import { recents } from "../../src/lib/stores/recents";
+import { tabsState, type Tab } from "../../src/lib/stores/tabs";
+import { closePrompt } from "../../src/lib/stores/closePrompt";
 import * as commands from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
@@ -13,11 +15,24 @@ vi.mock("../../src/lib/ipc/commands", () => ({
 
 const project = { path: "/projects/demo", name: "demo", lastOpenedAt: 1 };
 
+function dirtyTab(path: string): Tab {
+  return {
+    path,
+    mode: "code",
+    savedDoc: "",
+    isDirty: true,
+    hasExternalConflict: false,
+    isDeleted: false,
+  };
+}
+
 describe("openWorkspacePath", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     workspace.set({ id: "local", root: null });
     recents.set([]);
+    tabsState.set({ tabs: [], activeTabPath: null });
+    closePrompt.set(null);
   });
 
   it("calls workspaceSetRoot and updates the workspace store", async () => {
@@ -46,6 +61,50 @@ describe("openWorkspacePath", () => {
     vi.mocked(commands.workspaceGetRecents).mockRejectedValue(new Error("disk full"));
 
     await expect(openWorkspacePath(project.path)).resolves.toBeUndefined();
+    expect(get(workspace)).toEqual({ id: "local", root: project.path });
+  });
+
+  it("is a no-op when re-selecting the already-open root", async () => {
+    workspace.set({ id: "local", root: project.path });
+
+    await openWorkspacePath(project.path);
+
+    expect(commands.workspaceSetRoot).not.toHaveBeenCalled();
+    expect(commands.workspaceGetRecents).not.toHaveBeenCalled();
+  });
+
+  it("raises the workspace unsaved-changes prompt instead of switching when a tab is dirty", async () => {
+    workspace.set({ id: "local", root: "/projects/old" });
+    tabsState.set({ tabs: [dirtyTab("/a.md"), dirtyTab("/b.md")], activeTabPath: "/a.md" });
+
+    await openWorkspacePath(project.path);
+
+    expect(commands.workspaceSetRoot).not.toHaveBeenCalled();
+    expect(get(workspace)).toEqual({ id: "local", root: "/projects/old" });
+    expect(get(closePrompt)).toEqual({
+      kind: "workspace",
+      paths: ["/a.md", "/b.md"],
+      targetPath: project.path,
+    });
+  });
+});
+
+describe("confirmWorkspaceSwitch", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    workspace.set({ id: "local", root: "/projects/old" });
+    recents.set([]);
+    tabsState.set({ tabs: [dirtyTab("/a.md")], activeTabPath: "/a.md" });
+    closePrompt.set({ kind: "workspace", paths: ["/a.md"], targetPath: project.path });
+  });
+
+  it("performs the switch unconditionally, ignoring any dirty tabs", async () => {
+    vi.mocked(commands.workspaceSetRoot).mockResolvedValue(undefined);
+    vi.mocked(commands.workspaceGetRecents).mockResolvedValue([project]);
+
+    await confirmWorkspaceSwitch(project.path);
+
+    expect(commands.workspaceSetRoot).toHaveBeenCalledWith("local", project.path);
     expect(get(workspace)).toEqual({ id: "local", root: project.path });
   });
 });

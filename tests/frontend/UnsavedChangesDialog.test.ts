@@ -12,12 +12,16 @@ import {
   type Tab,
 } from "../../src/lib/stores/tabs";
 import { errorToast } from "../../src/lib/stores/errorToast";
+import { workspace } from "../../src/lib/stores/workspace";
 import * as commands from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
   fsWriteFile: vi.fn(),
   localWorkspaceId: () => "local",
   appConfirmClose: vi.fn(),
+  workspaceSetRoot: vi.fn(),
+  workspaceOpenFolderDialog: vi.fn(),
+  workspaceGetRecents: vi.fn(),
   isAppError: (value: unknown): value is { code: string; message: string } =>
     typeof value === "object" &&
     value !== null &&
@@ -72,6 +76,9 @@ describe("UnsavedChangesDialog", () => {
     vi.clearAllMocks();
     vi.mocked(commands.fsWriteFile).mockResolvedValue(undefined);
     vi.mocked(commands.appConfirmClose).mockResolvedValue(undefined);
+    vi.mocked(commands.workspaceSetRoot).mockResolvedValue(undefined);
+    vi.mocked(commands.workspaceGetRecents).mockResolvedValue([]);
+    workspace.set({ id: "local", root: "/projects/old" });
     tabsState.set({ tabs: [], activeTabPath: null });
     closePrompt.set(null);
     saveRequest.set(null);
@@ -260,6 +267,86 @@ describe("UnsavedChangesDialog", () => {
       expect(commands.fsWriteFile).toHaveBeenCalledWith("local", "/a.md", "");
       expect(commands.fsWriteFile).toHaveBeenCalledWith("local", "/b.md", "");
       expect(commands.appConfirmClose).not.toHaveBeenCalled();
+      expect(get(closePrompt)).not.toBeNull();
+      expect(await screen.findByText(/disk full/)).toBeTruthy();
+    });
+  });
+
+  describe("kind: workspace", () => {
+    const targetPath = "/projects/new";
+
+    beforeEach(() => {
+      tabsState.set({
+        tabs: [dirtyTab("/a.md"), dirtyTab("/b.md")],
+        activeTabPath: "/a.md",
+      });
+      closePrompt.set({ kind: "workspace", paths: ["/a.md", "/b.md"], targetPath });
+    });
+
+    it("lists every affected file and names switching projects in the confirmation message", async () => {
+      render(UnsavedChangesDialog);
+      await tick();
+
+      expect(await screen.findByText(/a\.md.*b\.md/)).toBeTruthy();
+      expect(await screen.findByText(/switching projects/)).toBeTruthy();
+    });
+
+    it("Save All writes every listed file before the switch completes", async () => {
+      render(UnsavedChangesDialog);
+      await tick();
+
+      await fireEvent.click(screen.getByText("Save All"));
+      await flush();
+      await flush();
+
+      expect(commands.fsWriteFile).toHaveBeenCalledWith("local", "/a.md", "");
+      expect(commands.fsWriteFile).toHaveBeenCalledWith("local", "/b.md", "");
+      expect(commands.workspaceSetRoot).toHaveBeenCalledWith("local", targetPath);
+      expect(get(workspace).root).toBe(targetPath);
+      expect(get(closePrompt)).toBeNull();
+    });
+
+    it("Don't Save switches directly, writing no file", async () => {
+      render(UnsavedChangesDialog);
+      await tick();
+
+      await fireEvent.click(screen.getByText("Don't Save"));
+      await flush();
+
+      expect(commands.fsWriteFile).not.toHaveBeenCalled();
+      expect(commands.workspaceSetRoot).toHaveBeenCalledWith("local", targetPath);
+      expect(get(workspace).root).toBe(targetPath);
+      expect(get(closePrompt)).toBeNull();
+    });
+
+    it("Cancel invokes neither fsWriteFile nor workspaceSetRoot, leaving the root unchanged", async () => {
+      render(UnsavedChangesDialog);
+      await tick();
+
+      await fireEvent.click(screen.getByText("Cancel"));
+      await flush();
+
+      expect(commands.fsWriteFile).not.toHaveBeenCalled();
+      expect(commands.workspaceSetRoot).not.toHaveBeenCalled();
+      expect(get(workspace).root).toBe("/projects/old");
+      expect(get(closePrompt)).toBeNull();
+    });
+
+    it("Save All stops and shows an error if a write fails, without switching", async () => {
+      vi.mocked(commands.fsWriteFile).mockImplementation((_workspaceId, path) =>
+        path === "/b.md" ? Promise.reject(new Error("disk full")) : Promise.resolve(undefined),
+      );
+      render(UnsavedChangesDialog);
+      await tick();
+
+      await fireEvent.click(screen.getByText("Save All"));
+      await flush();
+      await flush();
+
+      expect(commands.fsWriteFile).toHaveBeenCalledWith("local", "/a.md", "");
+      expect(commands.fsWriteFile).toHaveBeenCalledWith("local", "/b.md", "");
+      expect(commands.workspaceSetRoot).not.toHaveBeenCalled();
+      expect(get(workspace).root).toBe("/projects/old");
       expect(get(closePrompt)).not.toBeNull();
       expect(await screen.findByText(/disk full/)).toBeTruthy();
     });

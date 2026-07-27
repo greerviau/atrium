@@ -188,6 +188,11 @@ export function toggleMarkdownViewMode(path: string): void {
   }));
 }
 
+/** Clears every open tab and the active-tab pointer — used when switching projects. */
+export function resetTabs(): void {
+  tabsState.set({ tabs: [], activeTabPath: null });
+}
+
 export function closeTab(path: string): void {
   tabsState.update((s) => {
     const tabs = s.tabs.filter((t) => t.path !== path);

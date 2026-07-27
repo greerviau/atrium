@@ -2,6 +2,7 @@
   import { closePrompt } from "../stores/closePrompt";
   import { closeTab, requestSave } from "../stores/tabs";
   import { appConfirmClose, isAppError } from "../ipc/commands";
+  import { confirmWorkspaceSwitch } from "../stores/workspace";
 
   let panelEl: HTMLDivElement | undefined = $state();
   let errorMessage = $state<string | null>(null);
@@ -70,6 +71,29 @@
     closePrompt.set(null);
   }
 
+  async function saveAllThenSwitch(paths: string[], targetPath: string): Promise<void> {
+    saving = true;
+    try {
+      for (const path of paths) {
+        try {
+          await requestSave(path);
+        } catch (err) {
+          errorMessage = `Couldn't save ${basename(path)}: ${describeError(err)}`;
+          return;
+        }
+      }
+      await confirmWorkspaceSwitch(targetPath);
+    } finally {
+      saving = false;
+    }
+    closePrompt.set(null);
+  }
+
+  async function discardAllThenSwitch(targetPath: string): Promise<void> {
+    await confirmWorkspaceSwitch(targetPath);
+    closePrompt.set(null);
+  }
+
   function cancel(): void {
     closePrompt.set(null);
   }
@@ -121,7 +145,7 @@
             Save
           </button>
         </div>
-      {:else}
+      {:else if prompt.kind === "window"}
         <p class="close-prompt-message">
           You have unsaved changes in {prompt.paths.length} file{prompt.paths.length === 1
             ? ""
@@ -143,6 +167,33 @@
           <button
             class="close-prompt-btn primary"
             onclick={() => void saveAllThenClose(prompt.paths)}
+            disabled={saving}
+          >
+            Save All
+          </button>
+        </div>
+      {:else}
+        <p class="close-prompt-message">
+          You have unsaved changes in {prompt.paths.length} file{prompt.paths.length === 1
+            ? ""
+            : "s"}: {prompt.paths.map(basename).join(", ")}. Do you want to save your changes
+          before switching projects?
+        </p>
+        {#if errorMessage}
+          <p class="close-prompt-error">{errorMessage}</p>
+        {/if}
+        <div class="close-prompt-actions">
+          <button class="close-prompt-btn" onclick={cancel} disabled={saving}>Cancel</button>
+          <button
+            class="close-prompt-btn danger"
+            onclick={() => void discardAllThenSwitch(prompt.targetPath)}
+            disabled={saving}
+          >
+            Don't Save
+          </button>
+          <button
+            class="close-prompt-btn primary"
+            onclick={() => void saveAllThenSwitch(prompt.paths, prompt.targetPath)}
             disabled={saving}
           >
             Save All

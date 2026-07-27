@@ -21,6 +21,7 @@
     markPathDeleted,
     renameOpenTabs,
     tabRenameSignal,
+    resetTabs,
   } from "./lib/stores/tabs";
   import { closePrompt } from "./lib/stores/closePrompt";
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
@@ -92,6 +93,12 @@
   // commands with no pane of their own act on.
   let terminalPaneTree = $state<PaneNode | null>(null);
   let focusedPaneId = $state<string | null>(null);
+
+  // Tracks the workspace root across renders so the reset effect below can
+  // tell a genuine project switch apart from every other reason `$workspace`
+  // might update (e.g. the initial mount, or the id/root pair being set to
+  // the same root again).
+  let previousWorkspaceRoot: string | null = get(workspace).root;
 
   // Which of the two split-pane surfaces — the terminal dock or the
   // editor's own split panes — last had focus, so a global split-direction
@@ -520,6 +527,26 @@
   let mainSlotOrder = $derived<MainSlot[]>(
     $terminalPosition === "left" ? ["terminal", "resizer", "editor"] : ["editor", "resizer", "terminal"],
   );
+
+  // A genuine project switch tears down every tab, editor pane, and
+  // terminal session left over from the previous project — none of it
+  // belongs to the new root. Clearing `tabsState.tabs` is enough to reset
+  // the editor pane tree too, via the prune effect above
+  // (`pruneMissingTabs` collapses it to `null` once `openPaths` is empty,
+  // the same path already exercised by closing tabs one at a time).
+  // `terminalPaneTree`/`focusedPaneId` are local `$state`, not stores, so
+  // they can't be reset from `workspace.ts` and are nulled directly here
+  // instead; unmounting every `TerminalPane` runs each one's existing
+  // `onDestroy` (`ptyKill`), the same per-session cleanup a manual tab
+  // close already relies on.
+  $effect(() => {
+    const root = $workspace.root;
+    if (root === previousWorkspaceRoot) return;
+    previousWorkspaceRoot = root;
+    resetTabs();
+    terminalPaneTree = null;
+    focusedPaneId = null;
+  });
 
   // Toggling the dock visible or opening a workspace are themselves
   // explicit "give me a terminal" gestures, so each always gets a fresh
