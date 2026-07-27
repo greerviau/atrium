@@ -15,6 +15,8 @@ use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher as FuzzyMatcher, Utf32Str};
 use std::future::Future;
 use std::io;
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -518,6 +520,87 @@ fn normalize(path: &Path) -> PathBuf {
     out
 }
 
+/// Follows `path` through its symlink chain (if any) to the real file it
+/// ultimately names, without requiring that file to exist — a dangling
+/// symlink's target is still returned, so writing through one still creates
+/// its target, matching `tokio::fs::write`'s previous behavior. Bounded at 40
+/// hops (matching Linux's own `ELOOP` limit) against a symlink cycle.
+fn resolve_symlink_target(path: &Path) -> io::Result<PathBuf> {
+    let mut current = path.to_path_buf();
+    for _ in 0..40 {
+        match std::fs::symlink_metadata(&current) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let raw_target = std::fs::read_link(&current)?;
+                let joined = if raw_target.is_absolute() {
+                    raw_target
+                } else {
+                    current
+                        .parent()
+                        .map(|p| p.join(&raw_target))
+                        .unwrap_or(raw_target)
+                };
+                current = normalize(&joined);
+            }
+            _ => return Ok(current),
+        }
+    }
+    Err(io::Error::other("too many levels of symbolic links"))
+}
+
+/// `fsync`s `file`, using macOS's `F_FULLFSYNC` when available for a true
+/// flush-to-media guarantee (`fsync(2)` on macOS only flushes to the drive's
+/// write cache, not the physical medium — the same gap SQLite works around
+/// the same way). Falls back to a plain `fsync` if `F_FULLFSYNC` isn't
+/// supported on the target filesystem (some network/removable volumes return
+/// `ENOTSUP`) rather than failing the save over it.
+fn fsync_full(file: &std::fs::File) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::io::AsRawFd;
+        let rc = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_FULLFSYNC) };
+        if rc == 0 {
+            return Ok(());
+        }
+    }
+    file.sync_all()
+}
+
+/// Writes `contents` to `target` atomically and durably: writes to a fresh
+/// temp file in `target`'s real directory, `fsync`s it, renames it onto
+/// `target`'s real path, then `fsync`s the containing directory so the
+/// rename itself survives a crash. If `target` is a symlink, the symlink
+/// itself is left untouched — the temp file is written and renamed against
+/// whatever the symlink (chain) resolves to, so saving a symlinked file
+/// updates its target in place rather than replacing the link.
+fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
+    let real_target = resolve_symlink_target(target)?;
+    let dir = real_target.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "target has no parent directory",
+        )
+    })?;
+
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".atrium-save-");
+    if let Ok(existing) = std::fs::metadata(&real_target) {
+        builder.permissions(existing.permissions());
+    } else {
+        builder.permissions(std::fs::Permissions::from_mode(0o644));
+    }
+
+    let mut tmp = builder.tempfile_in(dir)?;
+    tmp.write_all(contents)?;
+    fsync_full(tmp.as_file())?;
+
+    tmp.persist(&real_target).map_err(|e| e.error)?;
+
+    let dir_file = std::fs::File::open(dir)?;
+    fsync_full(&dir_file)?;
+
+    Ok(())
+}
+
 /// Picks a collision-free path for `name` inside `dest_dir`: `dest_dir/name`
 /// itself if nothing is there yet, otherwise `"{stem} copy{.ext}"`, then
 /// `"{stem} copy 2{.ext}"`, `"{stem} copy 3{.ext}"`, ... — mirroring macOS
@@ -652,10 +735,22 @@ impl Workspace for LocalWorkspace {
         String::from_utf8(bytes).map_err(|_| AppError::NotUtf8(path.to_string()))
     }
 
+    /// Writes `contents` atomically and durably: the new content lands via a
+    /// temp-file-write-fsync-rename sequence (see `atomic_write`), so a crash
+    /// or power loss mid-save never leaves the file truncated or partially
+    /// written. If `path` is a symlink, the symlink itself is preserved and
+    /// its target is updated in place, matching every other symlink-aware
+    /// operation in this file. A missing path (with an existing parent
+    /// directory) is created, matching the previous `tokio::fs::write`
+    /// behavior — this is relied on by the externally-deleted-file recovery
+    /// flow, where a dirty tab is kept open and a later save recreates the
+    /// file.
     async fn write_file(&self, path: &str, contents: &str) -> Result<(), AppError> {
         let file = self.resolve_within_root(path)?;
-        tokio::fs::write(&file, contents)
+        let contents = contents.as_bytes().to_vec();
+        tokio::task::spawn_blocking(move || atomic_write(&file, &contents))
             .await
+            .map_err(|err| AppError::Other(format!("save task panicked: {err}")))?
             .map_err(|e| map_io_err(e, path))?;
         Ok(())
     }
@@ -962,6 +1057,77 @@ mod tests {
         ws.write_file("note.md", "hello").await.unwrap();
         let contents = ws.read_file("note.md").await.unwrap();
         assert_eq!(contents, "hello");
+    }
+
+    #[tokio::test]
+    async fn write_file_replaces_a_symlinks_target_and_preserves_the_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("real.md").await.unwrap();
+        ws.write_file("real.md", "original").await.unwrap();
+        std::os::unix::fs::symlink(dir.path().join("real.md"), dir.path().join("link.md")).unwrap();
+
+        ws.write_file("link.md", "updated").await.unwrap();
+
+        let link_meta = dir.path().join("link.md").symlink_metadata().unwrap();
+        assert!(link_meta.file_type().is_symlink());
+        assert_eq!(
+            std::fs::read_link(dir.path().join("link.md")).unwrap(),
+            dir.path().join("real.md")
+        );
+        assert_eq!(ws.read_file("real.md").await.unwrap(), "updated");
+    }
+
+    #[tokio::test]
+    async fn write_file_through_a_dangling_symlink_creates_its_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        std::os::unix::fs::symlink(dir.path().join("missing.md"), dir.path().join("link.md"))
+            .unwrap();
+
+        ws.write_file("link.md", "hello").await.unwrap();
+
+        let link_meta = dir.path().join("link.md").symlink_metadata().unwrap();
+        assert!(link_meta.file_type().is_symlink());
+        assert_eq!(ws.read_file("missing.md").await.unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn write_file_preserves_existing_file_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("script.sh").await.unwrap();
+        std::fs::set_permissions(
+            dir.path().join("script.sh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+
+        ws.write_file("script.sh", "#!/bin/sh\necho hi")
+            .await
+            .unwrap();
+
+        let mode = std::fs::metadata(dir.path().join("script.sh"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o755);
+    }
+
+    #[tokio::test]
+    async fn write_file_leaves_no_temp_file_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("note.md").await.unwrap();
+
+        ws.write_file("note.md", "hello").await.unwrap();
+
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, vec![std::ffi::OsString::from("note.md")]);
     }
 
     #[tokio::test]
