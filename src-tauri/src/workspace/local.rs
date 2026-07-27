@@ -565,13 +565,28 @@ fn fsync_full(file: &std::fs::File) -> io::Result<()> {
     file.sync_all()
 }
 
+/// Reports whether the current process can write to `path`, via `access(2)`
+/// — the same check `open(2)` itself makes, and more faithful than
+/// `Permissions::readonly()` (which only inspects the mode bits and ignores
+/// the process's actual effective uid/gid).
+fn is_writable(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    unsafe { libc::access(c_path.as_ptr(), libc::W_OK) == 0 }
+}
+
 /// Writes `contents` to `target` atomically and durably: writes to a fresh
 /// temp file in `target`'s real directory, `fsync`s it, renames it onto
 /// `target`'s real path, then `fsync`s the containing directory so the
 /// rename itself survives a crash. If `target` is a symlink, the symlink
 /// itself is left untouched — the temp file is written and renamed against
 /// whatever the symlink (chain) resolves to, so saving a symlinked file
-/// updates its target in place rather than replacing the link.
+/// updates its target in place rather than replacing the link. An existing
+/// target that isn't writable fails with `PermissionDenied` up front, rather
+/// than being silently clobbered by a `rename(2)` that only checks the
+/// containing directory's permissions, not the file it's about to replace.
 fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
     let real_target = resolve_symlink_target(target)?;
     let dir = real_target.parent().ok_or_else(|| {
@@ -581,15 +596,26 @@ fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
         )
     })?;
 
+    let existing = std::fs::metadata(&real_target).ok();
+    if existing.is_some() && !is_writable(&real_target) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "target is not writable",
+        ));
+    }
+    let permissions = existing
+        .map(|meta| meta.permissions())
+        .unwrap_or_else(|| std::fs::Permissions::from_mode(0o644));
+
     let mut builder = tempfile::Builder::new();
     builder.prefix(".atrium-save-");
-    if let Ok(existing) = std::fs::metadata(&real_target) {
-        builder.permissions(existing.permissions());
-    } else {
-        builder.permissions(std::fs::Permissions::from_mode(0o644));
-    }
 
     let mut tmp = builder.tempfile_in(dir)?;
+    // `Builder::permissions` would only feed the mode to `open(2)`, which the
+    // process umask then masks — using `set_permissions` (`fchmod`) here
+    // instead applies the mode directly, so the target's permissions (or the
+    // `0o644` default for a new file) survive intact regardless of umask.
+    tmp.as_file().set_permissions(permissions)?;
     tmp.write_all(contents)?;
     fsync_full(tmp.as_file())?;
 
@@ -1097,9 +1123,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ws = workspace(dir.path());
         ws.create_file("script.sh").await.unwrap();
+        // 0o666 (rather than e.g. 0o755) deliberately includes bits a common
+        // process umask (022 or 002) would mask off if the temp file's mode
+        // were merely passed to `open(2)` instead of `fchmod`'d afterward —
+        // 0o755 has no write-for-other/group bit to clear, so it can't catch
+        // that class of bug.
         std::fs::set_permissions(
             dir.path().join("script.sh"),
-            std::fs::Permissions::from_mode(0o755),
+            std::fs::Permissions::from_mode(0o666),
         )
         .unwrap();
 
@@ -1112,7 +1143,37 @@ mod tests {
             .permissions()
             .mode()
             & 0o777;
-        assert_eq!(mode, 0o755);
+        assert_eq!(mode, 0o666);
+    }
+
+    #[tokio::test]
+    async fn write_file_over_a_read_only_target_fails_and_leaves_it_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("locked.md").await.unwrap();
+        ws.write_file("locked.md", "original").await.unwrap();
+        std::fs::set_permissions(
+            dir.path().join("locked.md"),
+            std::fs::Permissions::from_mode(0o444),
+        )
+        .unwrap();
+
+        let err = ws.write_file("locked.md", "clobbered").await.unwrap_err();
+        assert!(matches!(err, AppError::Io(_)));
+        assert_eq!(ws.read_file("locked.md").await.unwrap(), "original");
+        let mode = std::fs::metadata(dir.path().join("locked.md"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o444);
+
+        // Restore write permission so the tempdir can clean itself up.
+        std::fs::set_permissions(
+            dir.path().join("locked.md"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
     }
 
     #[tokio::test]
