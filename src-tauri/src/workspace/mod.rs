@@ -130,6 +130,20 @@ pub fn is_default_ignored(name: &str) -> bool {
 /// is written against this trait, not against `std::fs` directly, so adding a
 /// remote implementation later only grows this module — it never touches
 /// `commands/fs.rs` or the frontend.
+///
+/// Whatever mechanism an implementation uses to resolve a `path` argument
+/// against its own root, that resolution is the implementation's
+/// access-control boundary, and it must reject a path that escapes the root
+/// through a symlink (dangling or not, at any path component), not only
+/// through a lexical `..`. `LocalWorkspace::resolve_within_root` and
+/// `resolve_entry_within_root` are the reference behavior to match: every
+/// path component is resolved through its symlink chain and checked for
+/// containment, except that an operation acting on a directory entry itself
+/// (`delete`, `rename`) leaves the final component un-dereferenced, matching
+/// `unlink(2)`/`rename(2)`'s own semantics. A `RemoteWorkspace` will need its
+/// own mechanism for this — appropriate to wherever it resolves paths (on the
+/// remote host, not the client) — since this containment logic is private to
+/// `LocalWorkspace` and isn't part of this trait.
 #[async_trait]
 pub trait Workspace: Send + Sync {
     async fn list_dir(&self, path: &str) -> Result<Vec<DirEntry>, AppError>;
