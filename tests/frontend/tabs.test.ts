@@ -12,17 +12,22 @@ import {
   requestSave,
   notifySaveComplete,
   notifySaveFailed,
+  markPathDeleted,
+  saveTab,
   type Tab,
 } from "../../src/lib/stores/tabs";
 import { closePrompt } from "../../src/lib/stores/closePrompt";
 import { workspace } from "../../src/lib/stores/workspace";
 import { getRecentFiles } from "../../src/lib/stores/recentFiles";
+import { errorToast } from "../../src/lib/stores/errorToast";
 import * as commands from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
   fsReadFile: vi.fn(),
   fsWriteFile: vi.fn(),
   localWorkspaceId: () => "local",
+  isAppError: (value: unknown): value is { code: string; message: string } =>
+    typeof value === "object" && value !== null && "code" in value && "message" in value,
 }));
 
 function markdownTab(path: string, overrides: Partial<Tab> = {}): Tab {
@@ -32,6 +37,7 @@ function markdownTab(path: string, overrides: Partial<Tab> = {}): Tab {
     savedDoc: "",
     isDirty: false,
     hasExternalConflict: false,
+    isDeleted: false,
     viewMode: "rendered",
     ...overrides,
   };
@@ -44,6 +50,7 @@ function codeTab(path: string, overrides: Partial<Tab> = {}): Tab {
     savedDoc: "",
     isDirty: false,
     hasExternalConflict: false,
+    isDeleted: false,
     ...overrides,
   };
 }
@@ -204,6 +211,18 @@ describe("reconcileExternalChange / reloadFromDisk / dismissConflict", () => {
     expect(tab.hasExternalConflict).toBe(false);
   });
 
+  it("reloadFromDisk clears isDeleted along with isDirty and hasExternalConflict", async () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md", { savedDoc: "unsaved", isDirty: true, isDeleted: true })],
+      activeTabPath: "/notes.md",
+    });
+    vi.mocked(commands.fsReadFile).mockResolvedValue("disk contents");
+
+    await reloadFromDisk("/notes.md");
+
+    expect(get(tabsState).tabs[0].isDeleted).toBe(false);
+  });
+
   it("dismissConflict on a conflicted tab clears only hasExternalConflict, keeping the local edit", () => {
     tabsState.set({
       tabs: [
@@ -241,6 +260,104 @@ describe("reconcileExternalChange / reloadFromDisk / dismissConflict", () => {
   });
 });
 
+describe("markPathDeleted", () => {
+  beforeEach(() => {
+    tabsState.set({ tabs: [], activeTabPath: null });
+    errorToast.set(null);
+  });
+
+  it("closes a clean tab outright and toasts that it was closed", () => {
+    tabsState.set({ tabs: [codeTab("/notes.md")], activeTabPath: "/notes.md" });
+
+    markPathDeleted("/notes.md");
+
+    expect(get(tabsState).tabs).toHaveLength(0);
+    expect(get(tabsState).activeTabPath).toBeNull();
+    expect(get(errorToast)).toBe("notes.md was deleted — its tab was closed.");
+  });
+
+  it("flags a dirty tab isDeleted instead of closing it, and does not toast", () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md", { isDirty: true, savedDoc: "unsaved" })],
+      activeTabPath: "/notes.md",
+    });
+
+    markPathDeleted("/notes.md");
+
+    const tabs = get(tabsState).tabs;
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].isDeleted).toBe(true);
+    expect(tabs[0].isDirty).toBe(true);
+    expect(tabs[0].savedDoc).toBe("unsaved");
+    expect(get(errorToast)).toBeNull();
+  });
+
+  it("cascades to every open tab nested under a deleted directory, mixing clean-close and dirty-flag outcomes", () => {
+    tabsState.set({
+      tabs: [
+        codeTab("/dir/clean.md"),
+        codeTab("/dir/dirty.md", { isDirty: true }),
+        codeTab("/dir/nested/deep.md"),
+        codeTab("/other.md"),
+      ],
+      activeTabPath: "/dir/clean.md",
+    });
+
+    markPathDeleted("/dir");
+
+    const tabs = get(tabsState).tabs;
+    expect(tabs.map((t) => t.path)).toEqual(["/dir/dirty.md", "/other.md"]);
+    expect(tabs.find((t) => t.path === "/dir/dirty.md")?.isDeleted).toBe(true);
+  });
+
+  it("falls back to the last remaining tab when the active tab was closed", () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md"), codeTab("/other.md")],
+      activeTabPath: "/notes.md",
+    });
+
+    markPathDeleted("/notes.md");
+
+    expect(get(tabsState).activeTabPath).toBe("/other.md");
+  });
+
+  it("is a no-op for a path with no open tabs at or under it", () => {
+    tabsState.set({ tabs: [codeTab("/other.md")], activeTabPath: "/other.md" });
+
+    markPathDeleted("/missing.md");
+
+    expect(get(tabsState).tabs).toHaveLength(1);
+    expect(get(errorToast)).toBeNull();
+  });
+});
+
+describe("reconcileExternalChange's NOT_FOUND catch", () => {
+  beforeEach(() => {
+    tabsState.set({ tabs: [], activeTabPath: null });
+    errorToast.set(null);
+    vi.mocked(commands.fsReadFile).mockReset();
+  });
+
+  it("calls markPathDeleted instead of throwing when fsReadFile rejects with NOT_FOUND", async () => {
+    tabsState.set({ tabs: [codeTab("/notes.md")], activeTabPath: "/notes.md" });
+    vi.mocked(commands.fsReadFile).mockRejectedValue({ code: "NOT_FOUND", message: "not found" });
+
+    await expect(reconcileExternalChange("/notes.md")).resolves.toBeUndefined();
+
+    expect(get(tabsState).tabs).toHaveLength(0);
+    expect(get(errorToast)).toBe("notes.md was deleted — its tab was closed.");
+  });
+
+  it("still rejects for a non-NOT_FOUND error", async () => {
+    tabsState.set({ tabs: [codeTab("/notes.md")], activeTabPath: "/notes.md" });
+    const error = { code: "PERMISSION_DENIED", message: "denied" };
+    vi.mocked(commands.fsReadFile).mockRejectedValue(error);
+
+    await expect(reconcileExternalChange("/notes.md")).rejects.toBe(error);
+    expect(get(tabsState).tabs).toHaveLength(1);
+  });
+});
+
 describe("requestCloseTab", () => {
   beforeEach(() => {
     tabsState.set({ tabs: [], activeTabPath: null });
@@ -272,6 +389,27 @@ describe("requestCloseTab", () => {
 
     expect(get(tabsState).tabs).toHaveLength(1);
     expect(get(closePrompt)).toBeNull();
+  });
+});
+
+describe("saveTab", () => {
+  beforeEach(() => {
+    tabsState.set({ tabs: [], activeTabPath: null });
+    vi.mocked(commands.fsWriteFile).mockReset().mockResolvedValue(undefined);
+  });
+
+  it("clears isDeleted along with isDirty and hasExternalConflict on a successful save", async () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md", { isDirty: true, isDeleted: true })],
+      activeTabPath: "/notes.md",
+    });
+
+    await saveTab("/notes.md", "new contents");
+
+    const tab = get(tabsState).tabs[0];
+    expect(tab.isDeleted).toBe(false);
+    expect(tab.isDirty).toBe(false);
+    expect(tab.savedDoc).toBe("new contents");
   });
 });
 

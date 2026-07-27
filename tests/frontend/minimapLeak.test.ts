@@ -26,6 +26,7 @@ function seedTab(): Tab {
     savedDoc: "line one\nline two\n",
     isDirty: false,
     hasExternalConflict: false,
+    isDeleted: false,
     viewMode: "rendered",
   };
   tabsState.set({ tabs: [tab], activeTabPath: PATH });

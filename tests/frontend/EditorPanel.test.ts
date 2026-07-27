@@ -3,7 +3,7 @@ import { get } from "svelte/store";
 import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import EditorPanel from "../../src/lib/editor/EditorPanel.svelte";
 import type { EditorLeafPane } from "../../src/lib/editor/editorPaneTree";
-import { tabsState, type Tab } from "../../src/lib/stores/tabs";
+import { tabsState, saveRequest, type Tab } from "../../src/lib/stores/tabs";
 
 vi.mock("../../src/lib/editor/EditorPane.svelte", async () => {
   const mod = await import("./EditorPaneStub.svelte");
@@ -16,7 +16,15 @@ afterEach(() => {
 });
 
 function tab(path: string, patch: Partial<Tab> = {}): Tab {
-  return { path, mode: "code", savedDoc: "", isDirty: false, hasExternalConflict: false, ...patch };
+  return {
+    path,
+    mode: "code",
+    savedDoc: "",
+    isDirty: false,
+    hasExternalConflict: false,
+    isDeleted: false,
+    ...patch,
+  };
 }
 
 const TWO_TABS: EditorLeafPane = {
@@ -128,6 +136,31 @@ describe("EditorPanel", () => {
 
     expect(get(tabsState).tabs.find((t) => t.path === "/a.ts")?.hasExternalConflict).toBe(false);
     expect(container.querySelector(".conflict-banner")).toBeNull();
+  });
+
+  it("shows a deleted banner for a path with isDeleted, and 'Save' requests a save for it", async () => {
+    saveRequest.set(null);
+    tabsState.set({ tabs: [tab("/a.ts", { isDeleted: true })], activeTabPath: "/a.ts" });
+    const tree: EditorLeafPane = { type: "leaf", id: "p1", tabs: ["/a.ts"], activeTabPath: "/a.ts" };
+    const { container, findByText } = render(EditorPanel, { tree, ...baseProps });
+
+    expect(container.querySelector(".deleted-banner")).not.toBeNull();
+
+    const save = await findByText("Save");
+    await fireEvent.click(save);
+
+    expect(get(saveRequest)).toBe("/a.ts");
+  });
+
+  it("'Close' on the deleted banner closes the tab outright", async () => {
+    tabsState.set({ tabs: [tab("/a.ts", { isDeleted: true })], activeTabPath: "/a.ts" });
+    const tree: EditorLeafPane = { type: "leaf", id: "p1", tabs: ["/a.ts"], activeTabPath: "/a.ts" };
+    const { findByText } = render(EditorPanel, { tree, ...baseProps });
+
+    const close = await findByText("Close");
+    await fireEvent.click(close);
+
+    expect(get(tabsState).tabs.find((t) => t.path === "/a.ts")).toBeUndefined();
   });
 
   it("passes this leaf's own id as paneId to each stacked EditorPane", () => {

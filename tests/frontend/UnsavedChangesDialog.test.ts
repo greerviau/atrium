@@ -31,6 +31,7 @@ function dirtyTab(path: string): Tab {
     savedDoc: "",
     isDirty: true,
     hasExternalConflict: false,
+    isDeleted: false,
   };
 }
 

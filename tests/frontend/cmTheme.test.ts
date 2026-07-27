@@ -99,7 +99,16 @@ describe("EditorPane theming (regression guard against section 2.4 recurring)", 
     ["Atrium High Contrast", atriumHighContrast],
   ] as const)("mounts .cm-gutters with %s's gutter colors, not CM6's un-themed default", async (_name, theme) => {
     tabsState.set({
-      tabs: [{ path: "sample.ts", mode: "code", savedDoc: "const x = 1;\n", isDirty: false, hasExternalConflict: false }],
+      tabs: [
+        {
+          path: "sample.ts",
+          mode: "code",
+          savedDoc: "const x = 1;\n",
+          isDirty: false,
+          hasExternalConflict: false,
+          isDeleted: false,
+        },
+      ],
       activeTabPath: "sample.ts",
     });
     const themeModule = await import("../../src/lib/stores/theme");

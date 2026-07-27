@@ -15,8 +15,8 @@ const PANE_ID = "pane-1";
 
 function seedTabs(activeTabPath: string): void {
   const tabs: Tab[] = [
-    { path: ACTIVE_PATH, mode: "markdown", savedDoc: DOC, isDirty: false, hasExternalConflict: false, viewMode: "source" },
-    { path: BACKGROUND_PATH, mode: "markdown", savedDoc: DOC, isDirty: false, hasExternalConflict: false, viewMode: "source" },
+    { path: ACTIVE_PATH, mode: "markdown", savedDoc: DOC, isDirty: false, hasExternalConflict: false, isDeleted: false, viewMode: "source" },
+    { path: BACKGROUND_PATH, mode: "markdown", savedDoc: DOC, isDirty: false, hasExternalConflict: false, isDeleted: false, viewMode: "source" },
   ];
   tabsState.set({ tabs, activeTabPath });
   focusedEditorPaneId.set(PANE_ID);
@@ -84,7 +84,17 @@ describe("EditorPane: cursor position tracking", () => {
 
   it("clears the store when the last tab closes", async () => {
     tabsState.set({
-      tabs: [{ path: ACTIVE_PATH, mode: "markdown", savedDoc: DOC, isDirty: false, hasExternalConflict: false, viewMode: "source" }],
+      tabs: [
+        {
+          path: ACTIVE_PATH,
+          mode: "markdown",
+          savedDoc: DOC,
+          isDirty: false,
+          hasExternalConflict: false,
+          isDeleted: false,
+          viewMode: "source",
+        },
+      ],
       activeTabPath: ACTIVE_PATH,
     });
     focusedEditorPaneId.set(PANE_ID);

@@ -37,6 +37,7 @@ function seedMarkdownTab(): Tab {
     savedDoc: FIXTURE_DOC,
     isDirty: false,
     hasExternalConflict: false,
+    isDeleted: false,
     viewMode: "rendered",
   };
   tabsState.set({ tabs: [tab], activeTabPath: FILE_PATH });

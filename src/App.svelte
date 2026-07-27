@@ -13,7 +13,13 @@
   import StatusBar from "./lib/shell/StatusBar.svelte";
   import TitleBar from "./lib/shell/TitleBar.svelte";
   import { workspace, openWorkspacePath } from "./lib/stores/workspace";
-  import { tabsState, setActiveTab, requestCloseTab, reconcileExternalChange } from "./lib/stores/tabs";
+  import {
+    tabsState,
+    setActiveTab,
+    requestCloseTab,
+    reconcileExternalChange,
+    markPathDeleted,
+  } from "./lib/stores/tabs";
   import { closePrompt } from "./lib/stores/closePrompt";
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
   import { get } from "svelte/store";
@@ -535,7 +541,11 @@
     }
     void initMenuBar(newTerminalTab, () => splitFocusedPane("right"), splitFocusedSurface);
     void onFsChanged((event) => {
-      void reconcileExternalChange(event.path);
+      if (event.kind === "remove") {
+        markPathDeleted(event.path);
+      } else {
+        void reconcileExternalChange(event.path);
+      }
       void refreshDirectoryContaining(event.path);
     });
     void onDockOpenPath((path) => void openWorkspacePath(path));
