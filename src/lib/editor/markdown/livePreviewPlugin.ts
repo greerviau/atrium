@@ -90,6 +90,14 @@ const focusTrackingHandlers = EditorView.domEventHandlers({
  * it's dispatched in — a transaction carrying only one of these effects
  * changes no doc, selection, viewport, or focus, so without this the rebuild
  * guard below would skip it and the drag tint would never appear.
+ *
+ * When a syntax-tree-identity change with no accompanying doc change
+ * rebuilds `tableWraps`/`codeBlockWraps` (issue #311), the plugin preserves
+ * the user's visual scroll position across it: such a change can
+ * retroactively reclassify a block that's already scrolled above the
+ * viewport, and CodeMirror's own height-change detection doesn't see it
+ * (see the `update` method's own comment for the mechanism and why a direct
+ * edit is excluded).
  */
 function livePreviewPlugin(documentPath: string) {
   const plugin = ViewPlugin.fromClass(
@@ -97,6 +105,7 @@ function livePreviewPlugin(documentPath: string) {
       decorations: DecorationSet;
       tableWraps: RangeSet<BlockWrapper>;
       codeBlockWraps: RangeSet<BlockWrapper>;
+      private destroyed = false;
 
       constructor(view: EditorView) {
         this.decorations = buildDecorations(
@@ -137,10 +146,57 @@ function livePreviewPlugin(documentPath: string) {
             update.state.field(tableDragField),
           );
         }
-        if (update.docChanged || syntaxTree(update.startState) !== syntaxTree(update.state)) {
+
+        const treeChanged = syntaxTree(update.startState) !== syntaxTree(update.state);
+        if (update.docChanged || treeChanged) {
+          // A background-parser tree completion (no doc change, no
+          // selection change — the same shape of transaction `forceParsing`
+          // simulates for the #85 tests above) can retroactively reclassify
+          // a block that's already scrolled above the viewport from plain
+          // text into a real `.cm-table-box`/`.cm-code-block-box` wrapper,
+          // changing its rendered height at a moment entirely decoupled
+          // from the user's own scroll input. CodeMirror's built-in
+          // height-change detection only looks at `StateField`-registered
+          // decorations, not these `ViewPlugin`-supplied wraps (see
+          // `EditorPane.svelte`'s own comment on the view-mode-toggle case
+          // for the same limitation), so nothing else compensates the
+          // user's scroll position for it. A direct edit is excluded here:
+          // its own scroll handling (cursor-following, `scrollIntoView`
+          // from the transaction) already covers the doc-changed case, and
+          // `buildTableWrapRanges`/`buildCodeBlockWrapRanges` only ever
+          // retroactively affect content the user *isn't* currently editing.
+          const preserveScroll = treeChanged && !update.docChanged;
+          const snapshot = preserveScroll ? update.view.scrollSnapshot() : null;
+
           this.tableWraps = buildTableWrapRanges(update.state);
           this.codeBlockWraps = buildCodeBlockWrapRanges(update.state);
+
+          if (snapshot) {
+            // `view.dispatch()` cannot be called synchronously from inside
+            // a `ViewPlugin.update()` — CodeMirror throws "Calls to
+            // EditorView.update are not allowed while an update is in
+            // progress" — so the restoring dispatch is deferred to a
+            // microtask, which still runs before the browser processes any
+            // further scroll input. `scrollSnapshot()`'s effect is
+            // anchor-relative (it restores "this document position stays
+            // at this pixel offset from the top"), not an absolute scroll
+            // position, so re-applying it when nothing above the anchor
+            // actually changed height is a no-op — safe to schedule on
+            // every qualifying update rather than only when a jump is
+            // suspected. `requestMeasure()` afterward matches the same
+            // final step the view-mode-toggle fix already uses.
+            const view = update.view;
+            Promise.resolve().then(() => {
+              if (this.destroyed) return;
+              view.dispatch({ effects: snapshot });
+              view.requestMeasure();
+            });
+          }
         }
+      }
+
+      destroy() {
+        this.destroyed = true;
       }
     },
     {
