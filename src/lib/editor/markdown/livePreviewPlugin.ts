@@ -100,13 +100,73 @@ const focusTrackingHandlers = EditorView.domEventHandlers({
  * virtualized away (see the `update` method's own comment for the exact
  * mechanism, its limits, and why a direct edit is excluded).
  */
+// `requestMeasure`'s `key` dedups repeated scheduling within the same
+// measure cycle (matching `tableGeometryMeasurePlugin`'s own key below) —
+// irrelevant in practice here, since a background tree change only
+// schedules this once per update, but kept for the same reason that plugin
+// keys its own request.
+export const livePreviewScrollAnchorKey = Symbol("live-preview-scroll-anchor");
+
+/**
+ * DOM *read* phase (see `measureTableGeometry`'s own docstring below for why
+ * this must run inside `requestMeasure`'s `read`, not synchronously in
+ * `update()`): how far `anchorPos`'s own height-map position has moved since
+ * `anchorTopAtCapture` was recorded.
+ */
+export function computeScrollAnchorDelta(view: EditorView, anchorPos: number, anchorTopAtCapture: number): number {
+  return view.lineBlockAt(anchorPos).top - anchorTopAtCapture;
+}
+
+/**
+ * DOM *write* phase: nudges `scrollDOM.scrollTop` by `diff` — a *relative*
+ * correction, not an absolute one. See `scheduleScrollAnchorRestore`'s own
+ * docstring for why that distinction is what makes this safe against the
+ * user's own in-flight scrolling. `1`px is CodeMirror's own threshold for
+ * its equivalent built-in correction (`view/dist/index.js`'s measure loop),
+ * kept the same here to avoid correcting sub-pixel noise.
+ */
+export function applyScrollAnchorDelta(diff: number, view: EditorView): void {
+  if (Math.abs(diff) > 1) view.scrollDOM.scrollTop += diff;
+}
+
+/**
+ * Schedules `computeScrollAnchorDelta`/`applyScrollAnchorDelta` as a single
+ * `requestMeasure` read/write pass (the same way `tableGeometryMeasurePlugin`
+ * below schedules its own DOM work from `update()`), not
+ * `view.scrollSnapshot()` dispatched through a transaction.
+ *
+ * `scrollSnapshot()`'s effect is an *absolute* rewind (`DocView
+ * .scrollIntoView`'s snapshot branch force-writes `scrollDOM.scrollTop`) that
+ * only actually lands a full animation frame later, in CodeMirror's own
+ * measure pass — long enough for the user's own in-flight scrolling (native
+ * wheel/momentum input, which never goes through this plugin, and which a
+ * same-tick guard cannot observe: it's delivered as a browser task, and
+ * every microtask an update schedules drains before the next task runs) to
+ * have moved `scrollDOM.scrollTop` in the meantime. Applying a stale
+ * absolute target on top of that reproduces the exact backward jump this
+ * guards against — and a pending absolute target also pre-empts CodeMirror's
+ * own safe *relative* compensation instead of coexisting with it.
+ *
+ * Reading `scrollTop` fresh in `read` (rather than trusting a value captured
+ * earlier) and writing an additive delta in `write` mirrors that safe
+ * mechanism instead of racing it: whatever the user's own scrolling has done
+ * by the time this runs, `diff` is added on top of it rather than replacing
+ * it.
+ */
+export function scheduleScrollAnchorRestore(view: EditorView, anchorPos: number, anchorTopAtCapture: number): void {
+  view.requestMeasure({
+    key: livePreviewScrollAnchorKey,
+    read: (readView) => computeScrollAnchorDelta(readView, anchorPos, anchorTopAtCapture),
+    write: applyScrollAnchorDelta,
+  });
+}
+
 function livePreviewPlugin(documentPath: string) {
   const plugin = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
       tableWraps: RangeSet<BlockWrapper>;
       codeBlockWraps: RangeSet<BlockWrapper>;
-      private destroyed = false;
 
       constructor(view: EditorView) {
         this.decorations = buildDecorations(
@@ -169,8 +229,21 @@ function livePreviewPlugin(documentPath: string) {
           // retroactively affect content the user *isn't* currently editing.
           const backgroundReclassify = treeChanged && !update.docChanged;
           const view = update.view;
-          const scrollTopAtCapture = backgroundReclassify ? view.scrollDOM.scrollTop : 0;
-          const snapshot = backgroundReclassify ? view.scrollSnapshot() : null;
+          // The first currently-drawn position is the anchor: whatever's at
+          // the top of the viewport. `view.visibleRanges` and `lineBlockAt`
+          // are both plain reads of CodeMirror's own internal height-map
+          // model (not the real DOM), so — unlike `measureTableGeometry`'s
+          // real DOM reads elsewhere in this file, which do need to wait for
+          // `requestMeasure`'s `read` phase — they're safe to call here, and
+          // at this exact point in `update()` they still reflect pre-change
+          // heights: this plugin's own wraps are the only thing about to
+          // change, and nothing has fed that into the height map yet
+          // (that's the underlying bug). `elementAtHeight`/`lineBlockAtHeight`
+          // are *not* safe here despite looking similar — CodeMirror gates
+          // both behind a "reading the editor layout isn't allowed during an
+          // update" check that `lineBlockAt(pos)` doesn't share.
+          const anchorPos = backgroundReclassify ? (view.visibleRanges[0]?.from ?? 0) : 0;
+          const anchorTopAtCapture = backgroundReclassify ? view.lineBlockAt(anchorPos).top : 0;
 
           const newTableWraps = buildTableWrapRanges(update.state);
           const newCodeBlockWraps = buildCodeBlockWrapRanges(update.state);
@@ -180,38 +253,10 @@ function livePreviewPlugin(documentPath: string) {
           this.tableWraps = newTableWraps;
           this.codeBlockWraps = newCodeBlockWraps;
 
-          if (snapshot && wrapsChanged) {
-            // `view.dispatch()` cannot be called synchronously from inside a
-            // `ViewPlugin.update()` — CodeMirror throws "Calls to
-            // EditorView.update are not allowed while an update is in
-            // progress" — so the restoring dispatch is deferred to a
-            // microtask. But `scrollSnapshot()`'s effect is an *absolute*
-            // rewind, not a relative one (`DocView.scrollIntoView`'s
-            // snapshot branch force-writes `scrollDOM.scrollTop`), and it's
-            // only actually applied a full animation frame later, in
-            // CodeMirror's own measure pass — long enough for the user's own
-            // in-flight scrolling (native wheel/momentum input, which never
-            // goes through this plugin) to have moved `scrollDOM.scrollTop`
-            // in the meantime. Applying a now-stale snapshot on top of that
-            // would force the pane back to where it was at capture time,
-            // reproducing the exact backward jump this guards against. So
-            // the restore only goes through if `scrollTop` is still exactly
-            // what it was at capture: if the user has scrolled since, this
-            // bows out and leaves it to CodeMirror's own compensation rather
-            // than fighting it with a second, competing correction.
-            Promise.resolve()
-              .then(() => {
-                if (this.destroyed || view.scrollDOM.scrollTop !== scrollTopAtCapture) return;
-                view.dispatch({ effects: snapshot });
-                view.requestMeasure();
-              })
-              .catch(() => {});
+          if (backgroundReclassify && wrapsChanged) {
+            scheduleScrollAnchorRestore(view, anchorPos, anchorTopAtCapture);
           }
         }
-      }
-
-      destroy() {
-        this.destroyed = true;
       }
     },
     {

@@ -1,8 +1,14 @@
-import { describe, it, expect, vi, afterEach, type MockInstance } from "vitest";
-import { EditorState, EditorSelection, type StateEffect } from "@codemirror/state";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { EditorState, EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { forceParsing } from "@codemirror/language";
-import { markdownExtensions } from "../../src/lib/editor/markdown/livePreviewPlugin";
+import {
+  applyScrollAnchorDelta,
+  computeScrollAnchorDelta,
+  livePreviewScrollAnchorKey,
+  markdownExtensions,
+  scheduleScrollAnchorRestore,
+} from "../../src/lib/editor/markdown/livePreviewPlugin";
 import { loadMermaid } from "../../src/lib/editor/markdown/mermaid";
 
 vi.mock("../../src/lib/editor/markdown/mermaid", async (importOriginal) => ({
@@ -13,13 +19,6 @@ vi.mock("../../src/lib/editor/markdown/mermaid", async (importOriginal) => ({
 vi.mocked(loadMermaid).mockResolvedValue({
   default: { render: vi.fn().mockResolvedValue({ svg: "<svg>diagram</svg>" }), initialize: vi.fn() },
 } as unknown as Awaited<ReturnType<typeof loadMermaid>>);
-
-// `StateEffect.type` is a real runtime field (used internally by `.is()`)
-// but isn't part of `@codemirror/state`'s public `.d.ts`, hence the cast.
-// Mirrors `EditorPane.viewMode.test.ts`'s own helper of the same name.
-function effectTypeOf(effect: StateEffect<unknown> | undefined): unknown {
-  return (effect as unknown as { type: unknown } | undefined)?.type;
-}
 
 let view: EditorView | undefined;
 let container: HTMLDivElement | undefined;
@@ -210,25 +209,72 @@ describe("an empty table cell keeps its own slot, reachable and fillable (issue 
 
 /**
  * Regression tests for issue #311 (rendered markdown scrolling back up while
- * the user scrolls down). `EditorPane.viewMode.test.ts`'s own `#87` test
- * already established that jsdom never produces a real, nonzero
- * `editorHeight` — `EditorView`'s scroll application is gated behind one —
- * so asserting an actual `scrollDOM.scrollTop` value here can't distinguish
- * fixed from unfixed code. These tests instead verify the fix's mechanism
- * directly, the same way that file's `#87` test does.
+ * the user scrolls down).
+ *
+ * The `computeScrollAnchorDelta`/`applyScrollAnchorDelta` tests exercise the
+ * actual correction math directly, with `anchorTopAtCapture` as a controlled
+ * input — this sidesteps `EditorPane.viewMode.test.ts`'s own `#87` finding
+ * that jsdom never produces real, measured layout (so nothing here depends
+ * on a real height actually changing, only on the arithmetic and on the
+ * write being additive rather than absolute).
+ *
+ * The remaining tests verify *when* `livePreviewPlugin` schedules that
+ * correction: spying on `requestMeasure` and matching `livePreviewScrollAnchorKey`
+ * (rather than `dispatch`, which the fix no longer goes through at all).
  */
 describe("live-preview preserves scroll position across a background wrap rebuild (issue #311)", () => {
   const padding = "x".repeat(4000) + "\n\n";
-  const scrollAnchorType = effectTypeOf(EditorView.scrollIntoView(0, {}));
 
-  function dispatchedScrollAnchor(spy: MockInstance<EditorView["dispatch"]>): boolean {
-    return spy.mock.calls.some(([spec]) => {
-      const effects = Array.isArray(spec?.effects) ? spec.effects : spec?.effects ? [spec.effects] : [];
-      return effects.some((effect) => effectTypeOf(effect as StateEffect<unknown> | undefined) === scrollAnchorType);
+  describe("computeScrollAnchorDelta / applyScrollAnchorDelta", () => {
+    it("computes how far the anchor moved and applies it as an additive scrollTop delta", () => {
+      const doc = "line one\nline two\nline three\n";
+      container = document.createElement("div");
+      document.body.appendChild(container);
+      view = new EditorView({
+        state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
+        parent: container,
+      });
+
+      const anchorPos = view.state.doc.line(3).from;
+      const currentTop = view.lineBlockAt(anchorPos).top;
+      // Pretend the anchor was captured 50px higher than it measures now —
+      // standing in for "content above it grew by 50px in the meantime",
+      // without needing jsdom to actually produce that real layout change.
+      const anchorTopAtCapture = currentTop - 50;
+
+      // Wherever the user's own scrolling has landed since capture.
+      view.scrollDOM.scrollTop = 1000;
+
+      const diff = computeScrollAnchorDelta(view, anchorPos, anchorTopAtCapture);
+      expect(diff).toBeCloseTo(50);
+
+      applyScrollAnchorDelta(diff, view);
+
+      // Additive: the user's own 1000 is preserved and shifted by 50, not
+      // overwritten by an absolute rewind back to some captured value.
+      expect(view.scrollDOM.scrollTop).toBeCloseTo(1050);
     });
+
+    it("ignores a sub-pixel delta so it never corrects ordinary rounding noise", () => {
+      const doc = "line one\n";
+      container = document.createElement("div");
+      document.body.appendChild(container);
+      view = new EditorView({
+        state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
+        parent: container,
+      });
+
+      view.scrollDOM.scrollTop = 500;
+      applyScrollAnchorDelta(0.5, view);
+      expect(view.scrollDOM.scrollTop).toBe(500);
+    });
+  });
+
+  function scheduledScrollAnchorRestore(spy: ReturnType<typeof vi.spyOn>) {
+    return spy.mock.calls.find(([spec]) => (spec as { key?: unknown } | undefined)?.key === livePreviewScrollAnchorKey);
   }
 
-  it("dispatches a scroll-anchor-restoring effect after a background parse reclassifies a table past the initial parse window", async () => {
+  it("schedules a scroll-anchor restore after a background parse reclassifies a table past the initial parse window", () => {
     const doc = padding + "| Name | Role |\n| ---- | ---- |\n| Alice | Engineer |\n";
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -243,22 +289,14 @@ describe("live-preview preserves scroll position across a background wrap rebuil
     // background parser, entirely decoupled from the user's own scrolling).
     expect(container.querySelector(".cm-table-box")).toBeNull();
 
-    const dispatchSpy = vi.spyOn(view, "dispatch");
     const requestMeasureSpy = vi.spyOn(view, "requestMeasure");
-
     forceParsing(view, view.state.doc.length);
     expect(container.querySelector(".cm-table-box")).not.toBeNull();
 
-    // The restoring dispatch is deferred to a microtask (see the plugin's
-    // own comment on why it can't run synchronously from inside `update`).
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(dispatchedScrollAnchor(dispatchSpy)).toBe(true);
-    expect(requestMeasureSpy).toHaveBeenCalled();
+    expect(scheduledScrollAnchorRestore(requestMeasureSpy)).toBeDefined();
   });
 
-  it("does not dispatch a scroll-anchor-restoring effect for an ordinary doc edit that also grows the syntax tree", async () => {
+  it("does not schedule a restore for an ordinary doc edit that also grows the syntax tree", () => {
     const doc = padding + "| Name | Role |\n| ---- | ---- |\n| Alice | Engineer |\n";
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -268,22 +306,13 @@ describe("live-preview preserves scroll position across a background wrap rebuil
     });
     forceParsing(view, view.state.doc.length);
 
-    // Let forceParsing's own deferred restoring dispatch (see the previous
-    // test) flush before installing the spy below — otherwise it leaks into
-    // this test's assertion window and produces a false positive.
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const dispatchSpy = vi.spyOn(view, "dispatch");
+    const requestMeasureSpy = vi.spyOn(view, "requestMeasure");
     view.dispatch({ changes: { from: 0, insert: "y" } });
 
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(dispatchedScrollAnchor(dispatchSpy)).toBe(false);
+    expect(scheduledScrollAnchorRestore(requestMeasureSpy)).toBeUndefined();
   });
 
-  it("does not dispatch when the background parse grows the tree but no table or code block is reclassified", async () => {
+  it("does not schedule a restore when the background parse grows the tree but reveals no table or code block", () => {
     const doc = padding + "# Heading past the initial parse window\n";
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -292,62 +321,35 @@ describe("live-preview preserves scroll position across a background wrap rebuil
       parent: container,
     });
 
-    const dispatchSpy = vi.spyOn(view, "dispatch");
+    const requestMeasureSpy = vi.spyOn(view, "requestMeasure");
     forceParsing(view, view.state.doc.length);
-
-    await Promise.resolve();
-    await Promise.resolve();
 
     // The tree grew (the heading past the padding is now parsed) but
     // `tableWraps`/`codeBlockWraps` are empty before and after — nothing for
     // a restore to compensate, so it must not fire at all.
-    expect(dispatchedScrollAnchor(dispatchSpy)).toBe(false);
+    expect(scheduledScrollAnchorRestore(requestMeasureSpy)).toBeUndefined();
   });
 
-  it("does not restore the scroll position if scrollTop has already moved by the time the restore would run", async () => {
-    const doc = padding + "| Name | Role |\n| ---- | ---- |\n| Alice | Engineer |\n";
+  it("does not schedule a restore when a later background parse chunk leaves the wraps unchanged (both non-empty)", () => {
+    // The table sits within the initial synchronous parse window, so
+    // `tableWraps` is already non-empty at construction — unlike the tests
+    // above, this exercises `RangeSet.eq`'s real structural comparison
+    // between two non-empty sets, not its empty-input short circuit.
+    const doc = "| Name | Role |\n| ---- | ---- |\n| Alice | Engineer |\n\n" + padding + "trailing plain text\n";
     container = document.createElement("div");
     document.body.appendChild(container);
     view = new EditorView({
       state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
       parent: container,
     });
+    expect(container.querySelector(".cm-table-box")).not.toBeNull();
 
-    const dispatchSpy = vi.spyOn(view, "dispatch");
+    const requestMeasureSpy = vi.spyOn(view, "requestMeasure");
     forceParsing(view, view.state.doc.length);
 
-    // Simulate the user's own native scrolling landing between the snapshot
-    // being captured (synchronously, inside `update`) and the deferred
-    // restore actually running — the exact race that makes an unconditional
-    // restore reproduce issue #311's own symptom instead of fixing it.
-    view.scrollDOM.scrollTop = 250;
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(dispatchedScrollAnchor(dispatchSpy)).toBe(false);
-  });
-
-  it("does not act on the deferred restore if the view is destroyed before it runs", async () => {
-    const doc = padding + "| Name | Role |\n| ---- | ---- |\n| Alice | Engineer |\n";
-    container = document.createElement("div");
-    document.body.appendChild(container);
-    view = new EditorView({
-      state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
-      parent: container,
-    });
-
-    const dispatchSpy = vi.spyOn(view, "dispatch");
-    forceParsing(view, view.state.doc.length);
-    view.destroy();
-
-    // The `destroyed` guard means `dispatch`/`requestMeasure` are never even
-    // called post-destroy — distinct from CodeMirror's own dispatch-on-a-
-    // destroyed-view handling, which no-ops rather than throwing and so
-    // wouldn't otherwise distinguish "guarded" from "unguarded" here.
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(dispatchedScrollAnchor(dispatchSpy)).toBe(false);
+    // The tree grew to cover the trailing plain text, but that text contains
+    // no table or code block, so both wrap sets compare equal to what they
+    // already were.
+    expect(scheduledScrollAnchorRestore(requestMeasureSpy)).toBeUndefined();
   });
 });
