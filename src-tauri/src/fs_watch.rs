@@ -321,7 +321,11 @@ mod tests {
 
         let events = drain_events(&mut rx, SETTLE_MS).await;
         let expected: std::collections::HashSet<String> = (0..N)
-            .map(|i| sub.join(format!("file{i}.txt")).to_string_lossy().to_string())
+            .map(|i| {
+                sub.join(format!("file{i}.txt"))
+                    .to_string_lossy()
+                    .to_string()
+            })
             .collect();
         let seen: std::collections::HashSet<String> = events
             .iter()
