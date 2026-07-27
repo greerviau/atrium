@@ -18,7 +18,7 @@ pub fn watch(
     root: String,
     workspace_id: String,
     tx: UnboundedSender<FsChangeEvent>,
-) -> notify_debouncer_full::Debouncer<notify::RecommendedWatcher, FileIdMap> {
+) -> notify::Result<notify_debouncer_full::Debouncer<notify::RecommendedWatcher, FileIdMap>> {
     let mut debouncer = new_debouncer(
         Duration::from_millis(150),
         None,
@@ -89,15 +89,13 @@ pub fn watch(
                 // simply stops receiving live updates until re-opened.
             }
         },
-    )
-    .expect("failed to create fs watcher");
+    )?;
 
     debouncer
         .watcher()
-        .watch(Path::new(&root), RecursiveMode::Recursive)
-        .expect("failed to start fs watcher");
+        .watch(Path::new(&root), RecursiveMode::Recursive)?;
 
-    debouncer
+    Ok(debouncer)
 }
 
 #[cfg(test)]
@@ -146,7 +144,8 @@ mod tests {
             dir.path().to_string_lossy().to_string(),
             "ws".to_string(),
             tx,
-        );
+        )
+        .unwrap();
         sleep(Duration::from_millis(200)).await;
 
         let to = dir.path().join("new.txt");
@@ -181,7 +180,8 @@ mod tests {
             dir.path().to_string_lossy().to_string(),
             "ws".to_string(),
             tx,
-        );
+        )
+        .unwrap();
         sleep(Duration::from_millis(200)).await;
 
         std::fs::remove_file(&path).unwrap();
@@ -216,7 +216,8 @@ mod tests {
             dir.path().to_string_lossy().to_string(),
             "ws".to_string(),
             tx,
-        );
+        )
+        .unwrap();
         sleep(Duration::from_millis(200)).await;
 
         let to = outside.path().join("leaving.txt");
@@ -233,5 +234,14 @@ mod tests {
         assert!(!events
             .iter()
             .any(|e| matches!(e.kind, FsChangeKind::Rename)));
+    }
+
+    #[tokio::test]
+    async fn watch_returns_an_error_instead_of_panicking_when_the_root_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist");
+        let (tx, _rx) = unbounded_channel();
+        let result = watch(missing.to_string_lossy().to_string(), "ws".to_string(), tx);
+        assert!(result.is_err());
     }
 }

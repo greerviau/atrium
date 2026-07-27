@@ -1177,17 +1177,41 @@ impl Workspace for LocalWorkspace {
         if guard.is_some() {
             return;
         }
-        let debouncer = fs_watch::watch(self.root().to_string(), self.workspace_id.clone(), tx);
-        *guard = Some(debouncer);
+        match fs_watch::watch(self.root().to_string(), self.workspace_id.clone(), tx) {
+            Ok(debouncer) => *guard = Some(debouncer),
+            Err(err) => {
+                // Setup failure (e.g. the inotify watch limit is exhausted, or
+                // the root disappeared between selection and registration)
+                // gets the same posture as a watcher that fails mid-session in
+                // fs_watch::watch's own debounce callback: the workspace opens
+                // and stays fully usable, it just does not receive live
+                // external-change notifications until reopened.
+                eprintln!(
+                    "atrium: failed to start fs watcher for workspace {}: {err}",
+                    self.workspace_id
+                );
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::mpsc::unbounded_channel;
 
     fn workspace(root: &Path) -> LocalWorkspace {
         LocalWorkspace::new("local".to_string(), root.to_path_buf())
+    }
+
+    #[tokio::test]
+    async fn watch_does_not_panic_when_the_root_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("gone");
+        let ws = workspace(&missing);
+        let (tx, _rx) = unbounded_channel();
+        ws.watch(tx); // must not panic
+        assert!(ws.watcher.lock().unwrap().is_none());
     }
 
     #[tokio::test]
