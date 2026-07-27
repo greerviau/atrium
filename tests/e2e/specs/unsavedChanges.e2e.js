@@ -91,3 +91,52 @@ describe("unsaved-changes close confirmation", () => {
     });
   });
 });
+
+// Regresses issue #250: a failed save used to be swallowed silently on every
+// trigger (the native Cmd+S accelerator/File > Save menu item, the in-editor
+// Cmd+S keymap, and the editor context menu's Save item) — the dirty dot
+// stayed lit and nothing else told the user anything went wrong. All three
+// now route through `requestSaveReportingErrors`, which surfaces a failure
+// via the shared `.error-toast`. `Meta+s` covers both the native
+// accelerator and the in-editor keymap in one press: `main.rs` registers
+// `CmdOrCtrl+S` as the `menu:save` item's own accelerator, so a real
+// keypress is claimed by the native menu before it reaches either code
+// path individually — this spec asserts the resulting user-visible
+// behavior (the toast), which is identical regardless of which of the two
+// call sites the platform ends up routing it through.
+describe("silent save failure surfaces an error toast (issue #250)", () => {
+  beforeEach(async () => {
+    await openWorkspace(fixturesDir);
+    fs.chmodSync(notePath, 0o444);
+  });
+
+  afterEach(() => {
+    fs.chmodSync(notePath, 0o644);
+  });
+
+  it("Cmd+S shows an error toast naming the file when the write fails", async () => {
+    await openNoteAndDirtyIt(" cmd-s-marker");
+
+    await browser.keys(["Meta", "s"]);
+
+    const toast = await $(".error-toast");
+    await toast.waitForExist({ timeout: 5000 });
+    await expect(toast).toHaveAttribute("role", "alert");
+    await expect(toast).toHaveTextContaining("note.md");
+  });
+
+  it("the editor context menu's Save item shows an error toast when the write fails", async () => {
+    await openNoteAndDirtyIt(" context-menu-marker");
+
+    const editor = await $(".cm-content");
+    await editor.click({ button: "right" });
+
+    const saveItem = await $('[role="menuitem"]*=Save');
+    await saveItem.waitForExist({ timeout: 5000 });
+    await saveItem.click();
+
+    const toast = await $(".error-toast");
+    await toast.waitForExist({ timeout: 5000 });
+    await expect(toast).toHaveTextContaining("note.md");
+  });
+});

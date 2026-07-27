@@ -14,6 +14,7 @@
     toggleMarkdownViewMode,
     notifySaveComplete,
     notifySaveFailed,
+    requestSaveReportingErrors,
   } from "../stores/tabs";
   import { focusedEditorPaneId, editorPaneTree } from "../stores/editorPanes";
   import { saveOwnerLeafId } from "./editorPaneTree";
@@ -265,7 +266,7 @@
 
   function doSave(): void {
     closeMenu();
-    void save();
+    requestSaveReportingErrors(filePath);
   }
 
   async function doReveal(): Promise<void> {
@@ -284,7 +285,7 @@
       {
         key: "Mod-s",
         run: () => {
-          void save();
+          requestSaveReportingErrors(filePath);
           return true;
         },
       },

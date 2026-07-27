@@ -4,7 +4,7 @@ import { modeForPath, type PaneMode } from "../editor/codeExtensions";
 import { closePrompt } from "./closePrompt";
 import { workspace } from "./workspace";
 import { recordFileOpened } from "./recentFiles";
-import { showErrorToast } from "./errorToast";
+import { showErrorToast, describeError } from "./errorToast";
 import { isPathUnderOrEqual } from "../util/path";
 
 export interface PendingSelection {
@@ -107,6 +107,20 @@ export function notifySaveFailed(path: string, error: unknown): void {
   const waiters = pendingSaveResolvers.get(path);
   pendingSaveResolvers.delete(path);
   waiters?.forEach((w) => w.reject(error));
+}
+
+/**
+ * Fire-and-forget save entry point for a UI trigger with no dialog of its
+ * own to report a failure through (the File > Save menu item, the in-editor
+ * Cmd+S keymap, the editor context menu's Save item) — requests the save and
+ * surfaces a failure through the shared error toast, the same channel a
+ * failed link-open already uses.
+ */
+export function requestSaveReportingErrors(path: string): void {
+  requestSave(path).catch((err: unknown) => {
+    const name = path.split("/").pop() ?? path;
+    showErrorToast(`Couldn't save ${name}: ${describeError(err)}`);
+  });
 }
 
 /**

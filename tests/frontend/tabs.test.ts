@@ -12,6 +12,7 @@ import {
   requestSave,
   notifySaveComplete,
   notifySaveFailed,
+  requestSaveReportingErrors,
   markPathDeleted,
   renameOpenTabs,
   tabRenameSignal,
@@ -632,5 +633,31 @@ describe("requestSave / notifySaveComplete", () => {
 
     expect(firstError).toBe(error);
     expect(secondError).toBe(error);
+  });
+});
+
+describe("requestSaveReportingErrors", () => {
+  beforeEach(() => {
+    errorToast.set(null);
+  });
+
+  it("shows an error toast naming the file's basename when the save rejects", async () => {
+    requestSaveReportingErrors("/notes/a.md");
+
+    notifySaveFailed("/notes/a.md", new Error("disk full"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(get(errorToast)).toBe("Couldn't save a.md: disk full");
+  });
+
+  it("leaves the error toast untouched when the save succeeds", async () => {
+    requestSaveReportingErrors("/notes/a.md");
+
+    notifySaveComplete("/notes/a.md");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(get(errorToast)).toBeNull();
   });
 });
