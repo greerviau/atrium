@@ -19,9 +19,13 @@
     requestCloseTab,
     reconcileExternalChange,
     markPathDeleted,
+    renameOpenTabs,
+    tabRenameSignal,
   } from "./lib/stores/tabs";
   import { closePrompt } from "./lib/stores/closePrompt";
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
+  import { isPathUnderOrEqual } from "./lib/util/path";
+  import { rekeyPath } from "./lib/editor/editorViewRegistry";
   import { get } from "svelte/store";
   import { onFsChanged, onDockOpenPath, onCloseRequested, onDragDropEvent } from "./lib/ipc/events";
   import { insertPathsAtScreenPoint } from "./lib/terminal/terminalDropTargets";
@@ -68,6 +72,7 @@
     closeTabInLeaf as closeEditorTabInLeaf,
     setActiveTabInLeaf as setActiveTabInEditorLeaf,
     pruneMissingTabs,
+    renamePathInTree as renamePathInEditorTree,
     type EditorPaneNode,
     type EditorLeafPane,
   } from "./lib/editor/editorPaneTree";
@@ -390,7 +395,18 @@
   // an *unfocused* pane would leave `tabsState.activeTabPath` (and thus
   // `StatusBar`/`MenuBar`'s save target) pointing at a file no visibly-focused
   // pane is actually showing.
+  //
+  // A rename bails out here entirely while `tabRenameSignal` is still set:
+  // `renameOpenTabs` re-keys `tabsState.activeTabPath` to the new path in the
+  // same synchronous update that sets the signal, and until the pane-tree
+  // reconciliation effect below has had a chance to re-key the leaf that
+  // actually owns the old path, this effect would see a `path` that exists
+  // nowhere in `editorPaneTree` yet and (mis-reading a rename as "a genuinely
+  // new path to open") append it as a brand-new tab alongside the
+  // about-to-be-renamed one, rather than letting the rename replace it in
+  // place.
   $effect(() => {
+    if ($tabRenameSignal) return;
     const path = $tabsState.activeTabPath;
     if (!path) return;
     if (!$editorPaneTree) {
@@ -420,13 +436,50 @@
     $focusedEditorPaneId = targetLeafId;
   });
 
-  // The other direction: a path can be closed at the `tabsState` level with
-  // no notion of which pane(s) were showing it — the unsaved-changes
-  // dialog's "Don't Save"/"Save" actions call `closeTab` directly. Whenever
-  // that happens, prune the now-stale path out of every leaf that had it,
-  // dropping any leaf left with no tabs, and refocus off a leaf that
-  // disappeared out from under the current focus.
+  // Reconciles the pane tree against `tabsState` for both ways a path can
+  // stop matching what a leaf's own `tabs` array holds. A rename (signaled
+  // via `tabRenameSignal`, set by `renameOpenTabs` in the same synchronous
+  // call that re-keys `tabsState.tabs`) is handled first and unconditionally
+  // returns: if the generic "path no longer open" pruning below ran against
+  // a stale `$tabsState` read on the same reactive flush that a rename just
+  // fired on, it would see the tab's *old* path missing from `tabsState` (it
+  // now only exists at the new path) and delete it from the pane tree
+  // outright — indistinguishable, from that check's own point of view, from
+  // the tab having been closed. Keeping both reactions in one effect body
+  // makes that ordering atomic instead of leaving it to chance across two
+  // separately-scheduled effects.
+  //
+  // Rekeying `editorViewRegistry` before reassigning `$editorPaneTree` is
+  // itself deliberate: reassignment changes the key `EditorPanel.svelte`'s
+  // keyed `{#each}` block uses, which destroys the old `EditorPane` and
+  // mounts a fresh one that seeds its doc from `liveDocFor(newPath)` —
+  // rekeying the registry after that remount would be too late, and a dirty
+  // tab's unsaved edits would be silently lost in favor of stale, last-saved
+  // content.
   $effect(() => {
+    const evt = $tabRenameSignal;
+    if (evt) {
+      if ($editorPaneTree) {
+        for (const leaf of listEditorLeaves($editorPaneTree)) {
+          for (const path of leaf.tabs) {
+            if (isPathUnderOrEqual(path, evt.from)) {
+              rekeyPath(path, evt.to + path.slice(evt.from.length));
+            }
+          }
+        }
+        $editorPaneTree = renamePathInEditorTree($editorPaneTree, evt.from, evt.to);
+        syncActiveTabToFocusedPane();
+      }
+      tabRenameSignal.set(null);
+      return;
+    }
+
+    // The other direction: a path can be closed at the `tabsState` level
+    // with no notion of which pane(s) were showing it — the
+    // unsaved-changes dialog's "Don't Save"/"Save" actions call `closeTab`
+    // directly. Whenever that happens, prune the now-stale path out of
+    // every leaf that had it, dropping any leaf left with no tabs, and
+    // refocus off a leaf that disappeared out from under the current focus.
     if (!$editorPaneTree) return;
     const openPaths = new Set($tabsState.tabs.map((t) => t.path));
     const isStale = listEditorLeaves($editorPaneTree).some((leaf) => leaf.tabs.some((p) => !openPaths.has(p)));
@@ -543,6 +596,14 @@
     void onFsChanged((event) => {
       if (event.kind === "remove") {
         markPathDeleted(event.path);
+      } else if (event.kind === "rename" && event.fromPath) {
+        renameOpenTabs(event.fromPath, event.path);
+        // A cross-directory move needs its *source* directory's listing
+        // refreshed too, not just the destination refreshed below — the
+        // old paired-rename shape emitted one wire event per path, so both
+        // directories got refreshed for free; this one event now only
+        // covers the destination on its own.
+        void refreshDirectoryContaining(event.fromPath);
       } else {
         void reconcileExternalChange(event.path);
       }

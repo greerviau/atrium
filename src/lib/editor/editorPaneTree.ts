@@ -9,6 +9,7 @@
 // flat `tabs: Tab[]` keyed by path, exactly as before split panes existed. A
 // leaf just orders and selects among that global set of open paths.
 import { mapLeaf, removePane, findLeaf, listLeaves, type PaneNode as GenericPaneNode, type SplitPane as GenericSplitPane } from "../panes/paneTree";
+import { isPathUnderOrEqual } from "../util/path";
 
 export type { SplitAxis, SplitDirection } from "../panes/paneTree";
 export { splitPane, removePane, resizeSplit, listLeaves, findLeaf, nextActivePane, PANE_MIN_PX } from "../panes/paneTree";
@@ -84,6 +85,50 @@ export function pruneMissingTabs(tree: EditorPaneNode, openPaths: ReadonlySet<st
       continue;
     }
     const activeTabPath = leaf.activeTabPath && tabs.includes(leaf.activeTabPath) ? leaf.activeTabPath : tabs[tabs.length - 1];
+    result = mapLeaf(result, leaf.id, () => ({ ...leaf, tabs, activeTabPath }));
+  }
+  return result;
+}
+
+/**
+ * Reconciles the tree for a path renamed or moved at the `tabsState` level
+ * (`renameOpenTabs`, triggered by an explorer rename/move or an inferred
+ * external rename): remaps any `tabs` entry (and `activeTabPath`, if it
+ * matches) at or under `oldPath` to its counterpart under `newPath`, in
+ * every leaf. A no-op (returns `tree` itself) when nothing matches.
+ *
+ * Re-keying a leaf's `tabs` array changes the key `EditorPanel.svelte`'s
+ * keyed `{#each}` block uses for the corresponding `EditorPane`, forcing
+ * Svelte to destroy and remount it at the new key. Callers must rekey
+ * `editorViewRegistry` to the new path before calling this, or the fresh
+ * mount finds no live view registered under the new path and falls back to
+ * stale, last-saved content.
+ *
+ * A path already open in the same leaf at a computed destination is
+ * displaced the same way `renameOpenTabs` displaces its own `tabsState`
+ * entry — dropped in favor of the renamed survivor, since a leaf's `tabs`
+ * array can't hold the same path twice without throwing the keyed
+ * `{#each}` block's own duplicate-key error.
+ */
+export function renamePathInTree(tree: EditorPaneNode, oldPath: string, newPath: string): EditorPaneNode {
+  let result = tree;
+  for (const leaf of listLeaves(tree)) {
+    if (!leaf.tabs.some((p) => isPathUnderOrEqual(p, oldPath))) continue;
+
+    const renamed = leaf.tabs.map((p) => {
+      const wasRenamed = isPathUnderOrEqual(p, oldPath);
+      return { path: wasRenamed ? newPath + p.slice(oldPath.length) : p, wasRenamed };
+    });
+    const renamedDestinations = new Set(renamed.filter((r) => r.wasRenamed).map((r) => r.path));
+    const tabs = renamed.filter((r) => r.wasRenamed || !renamedDestinations.has(r.path)).map((r) => r.path);
+
+    let activeTabPath = leaf.activeTabPath;
+    if (activeTabPath && isPathUnderOrEqual(activeTabPath, oldPath)) {
+      activeTabPath = newPath + activeTabPath.slice(oldPath.length);
+    } else if (activeTabPath && !tabs.includes(activeTabPath)) {
+      activeTabPath = tabs[tabs.length - 1] ?? null;
+    }
+
     result = mapLeaf(result, leaf.id, () => ({ ...leaf, tabs, activeTabPath }));
   }
   return result;

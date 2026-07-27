@@ -8,6 +8,85 @@ import EditorPane from "../../src/lib/editor/EditorPane.svelte";
 import { tabsState, type Tab } from "../../src/lib/stores/tabs";
 import { focusedEditorPaneId, editorPaneTree } from "../../src/lib/stores/editorPanes";
 import type { EditorPaneNode } from "../../src/lib/editor/editorPaneTree";
+import { registerView, unregisterView, liveDocFor, rekeyPath } from "../../src/lib/editor/editorViewRegistry";
+
+describe("rekeyPath", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("moves a registered view's entry to the new key", () => {
+    const view = new EditorView({ doc: "hello" });
+    registerView("/old.md", view);
+
+    rekeyPath("/old.md", "/new.md");
+
+    expect(liveDocFor("/old.md")).toBeNull();
+    expect(liveDocFor("/new.md")).toBe("hello");
+
+    unregisterView("/new.md", view);
+    view.destroy();
+  });
+
+  it("liveDocFor(newPath) resolves post-rekey even before the old key's view is unregistered", () => {
+    const view = new EditorView({ doc: "still live" });
+    registerView("/old.md", view);
+
+    rekeyPath("/old.md", "/new.md");
+    // The view was never unregistered from its old identity — rekeyPath
+    // moves the whole entry rather than requiring a separate unregister —
+    // so it must already resolve under the new key.
+    expect(liveDocFor("/new.md")).toBe("still live");
+
+    unregisterView("/new.md", view);
+    view.destroy();
+  });
+
+  it("is a no-op when nothing is registered at oldPath", () => {
+    expect(() => rekeyPath("/missing.md", "/also-missing.md")).not.toThrow();
+    expect(liveDocFor("/also-missing.md")).toBeNull();
+  });
+
+  it("unregisterView (called with the stale, pre-rekey path) keeps the view briefly readable via liveDocFor, then removes it once no fresh mount claimed it", async () => {
+    const view = new EditorView({ doc: "hello" });
+    registerView("/old.md", view);
+
+    rekeyPath("/old.md", "/new.md");
+    // Simulates the real sequence: the pane being torn down as a result of
+    // the rename calls unregisterView with the *old* path, since a
+    // destroyed component instance's own props never change out from under
+    // it — only a fresh instance mounts with the new path. Empirically,
+    // for this codebase's keyed tab strip, that destroy runs *before* the
+    // fresh mount — so removal must not be synchronous here, or the fresh
+    // mount's own `liveDocFor` read (which runs before it registers itself)
+    // would find nothing and silently fall back to stale, last-saved
+    // content instead of this still-live buffer.
+    unregisterView("/old.md", view);
+    expect(liveDocFor("/new.md")).toBe("hello");
+
+    // Once the microtask queue drains with no fresh registration ever
+    // claiming this key (a genuine close, not a rename), the entry is
+    // actually cleaned up.
+    await Promise.resolve();
+    expect(liveDocFor("/new.md")).toBeNull();
+    view.destroy();
+  });
+
+  it("does not leave a dead view answering liveDocFor after the stale-path unregister, even with a live sibling still registered", () => {
+    const dead = new EditorView({ doc: "dead" });
+    registerView("/old.md", dead);
+    rekeyPath("/old.md", "/new.md");
+    unregisterView("/old.md", dead);
+    dead.destroy();
+
+    const alive = new EditorView({ doc: "alive" });
+    registerView("/new.md", alive);
+
+    expect(liveDocFor("/new.md")).toBe("alive");
+    unregisterView("/new.md", alive);
+    alive.destroy();
+  });
+});
 
 const PATH = "/shared.ts";
 const PANE_A = "pane-a";

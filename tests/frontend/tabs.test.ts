@@ -13,6 +13,8 @@ import {
   notifySaveComplete,
   notifySaveFailed,
   markPathDeleted,
+  renameOpenTabs,
+  tabRenameSignal,
   saveTab,
   type Tab,
 } from "../../src/lib/stores/tabs";
@@ -341,6 +343,135 @@ describe("markPathDeleted", () => {
 
     expect(get(tabsState).tabs).toHaveLength(1);
     expect(get(errorToast)).toBeNull();
+  });
+});
+
+describe("renameOpenTabs", () => {
+  beforeEach(() => {
+    tabsState.set({ tabs: [], activeTabPath: null });
+    tabRenameSignal.set(null);
+  });
+
+  it("re-keys an exact-match tab, preserving savedDoc/isDirty/viewMode", () => {
+    tabsState.set({
+      tabs: [markdownTab("/notes.md", { savedDoc: "unsaved edit", isDirty: true, viewMode: "source" })],
+      activeTabPath: "/notes.md",
+    });
+
+    renameOpenTabs("/notes.md", "/notes-renamed.md");
+
+    const tabs = get(tabsState).tabs;
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].path).toBe("/notes-renamed.md");
+    expect(tabs[0].savedDoc).toBe("unsaved edit");
+    expect(tabs[0].isDirty).toBe(true);
+    expect(tabs[0].viewMode).toBe("source");
+  });
+
+  it("re-keys every tab nested under a renamed directory", () => {
+    tabsState.set({
+      tabs: [
+        codeTab("/dir/a.md"),
+        codeTab("/dir/nested/b.md"),
+        codeTab("/other.md"),
+      ],
+      activeTabPath: "/dir/a.md",
+    });
+
+    renameOpenTabs("/dir", "/renamed");
+
+    const paths = get(tabsState).tabs.map((t) => t.path);
+    expect(paths).toEqual(["/renamed/a.md", "/renamed/nested/b.md", "/other.md"]);
+  });
+
+  it("re-keys activeTabPath when it matches the renamed path", () => {
+    tabsState.set({ tabs: [codeTab("/notes.md")], activeTabPath: "/notes.md" });
+
+    renameOpenTabs("/notes.md", "/notes-renamed.md");
+
+    expect(get(tabsState).activeTabPath).toBe("/notes-renamed.md");
+  });
+
+  it("leaves activeTabPath untouched when it doesn't match the renamed path", () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md"), codeTab("/other.md")],
+      activeTabPath: "/other.md",
+    });
+
+    renameOpenTabs("/notes.md", "/notes-renamed.md");
+
+    expect(get(tabsState).activeTabPath).toBe("/other.md");
+  });
+
+  it("is a no-op for an unrelated path, including not setting tabRenameSignal", () => {
+    tabsState.set({ tabs: [codeTab("/other.md")], activeTabPath: "/other.md" });
+
+    renameOpenTabs("/notes.md", "/notes-renamed.md");
+
+    expect(get(tabsState).tabs).toEqual([codeTab("/other.md")]);
+    expect(get(tabRenameSignal)).toBeNull();
+  });
+
+  it("sets tabRenameSignal to the from/to pair when a rename actually applies", () => {
+    tabsState.set({ tabs: [codeTab("/notes.md")], activeTabPath: "/notes.md" });
+
+    renameOpenTabs("/notes.md", "/notes-renamed.md");
+
+    expect(get(tabRenameSignal)).toEqual({ from: "/notes.md", to: "/notes-renamed.md" });
+  });
+
+  it("drops a clean tab already open at the computed destination, keeping only the renamed survivor (external rename onto an open path)", () => {
+    tabsState.set({
+      tabs: [codeTab("/a.md", { savedDoc: "a's content" }), codeTab("/b.md", { savedDoc: "b's content" })],
+      activeTabPath: "/a.md",
+    });
+
+    renameOpenTabs("/a.md", "/b.md");
+
+    const tabs = get(tabsState).tabs;
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].path).toBe("/b.md");
+    expect(tabs[0].savedDoc).toBe("a's content");
+  });
+
+  it("toasts when the displaced tab was dirty, since its unsaved edits are discarded", () => {
+    errorToast.set(null);
+    tabsState.set({
+      tabs: [codeTab("/a.md"), codeTab("/b.md", { isDirty: true, savedDoc: "unsaved" })],
+      activeTabPath: "/a.md",
+    });
+
+    renameOpenTabs("/a.md", "/b.md");
+
+    expect(get(errorToast)).toBe("b.md was overwritten by an external rename — its unsaved edits were discarded.");
+  });
+
+  it("does not toast when the displaced tab was clean", () => {
+    errorToast.set(null);
+    tabsState.set({
+      tabs: [codeTab("/a.md"), codeTab("/b.md")],
+      activeTabPath: "/a.md",
+    });
+
+    renameOpenTabs("/a.md", "/b.md");
+
+    expect(get(errorToast)).toBeNull();
+  });
+
+  it("falls back activeTabPath to the last remaining tab when the active tab was the one displaced", () => {
+    tabsState.set({
+      tabs: [codeTab("/a.md"), codeTab("/b.md")],
+      activeTabPath: "/b.md",
+    });
+
+    renameOpenTabs("/a.md", "/b.md");
+
+    expect(get(tabsState).activeTabPath).toBe("/b.md");
+    expect(get(tabsState).tabs).toHaveLength(1);
+    // The survivor at /b.md is the renamed tab (originally /a.md), not the
+    // displaced one — activeTabPath falls back to it since it's now the
+    // only tab left, not because it "matched" the old active path.
+    expect(get(tabsState).tabs[0].path).toBe("/b.md");
   });
 });
 

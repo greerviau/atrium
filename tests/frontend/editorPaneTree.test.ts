@@ -10,6 +10,7 @@ import {
   setActiveTabInLeaf,
   nextActivePane,
   pruneMissingTabs,
+  renamePathInTree,
   PANE_MIN_PX,
   type EditorPaneNode,
   type EditorLeafPane,
@@ -193,5 +194,68 @@ describe("pruneMissingTabs", () => {
     const result = pruneMissingTabs(tree, new Set(["shared.txt"]))!;
     expect(findLeaf(result, "L1")?.tabs).toEqual(["shared.txt"]);
     expect(findLeaf(result, "L2")?.tabs).toEqual(["shared.txt"]);
+  });
+});
+
+describe("renamePathInTree", () => {
+  it("remaps a leaf's tabs and activeTabPath for an exact-match path", () => {
+    let tree: EditorPaneNode = leaf("L1", ["/notes.md"]);
+    tree = setActiveTabInLeaf(tree, "L1", "/notes.md");
+
+    const result = renamePathInTree(tree, "/notes.md", "/notes-renamed.md");
+
+    const target = findLeaf(result, "L1")!;
+    expect(target.tabs).toEqual(["/notes-renamed.md"]);
+    expect(target.activeTabPath).toBe("/notes-renamed.md");
+  });
+
+  it("remaps every affected leaf for a directory-prefix rename, leaving unrelated tabs untouched", () => {
+    const tree = splitPane(
+      leaf("L1", ["/dir/a.md", "/other.md"]),
+      "L1",
+      "right",
+      leaf("L2", ["/dir/nested/b.md"]),
+    );
+
+    const result = renamePathInTree(tree, "/dir", "/renamed");
+
+    expect(findLeaf(result, "L1")?.tabs).toEqual(["/renamed/a.md", "/other.md"]);
+    expect(findLeaf(result, "L2")?.tabs).toEqual(["/renamed/nested/b.md"]);
+  });
+
+  it("only remaps activeTabPath when it matches, leaving an unrelated active tab alone", () => {
+    let tree: EditorPaneNode = leaf("L1", ["/notes.md", "/other.md"]);
+    tree = setActiveTabInLeaf(tree, "L1", "/other.md");
+
+    const result = renamePathInTree(tree, "/notes.md", "/notes-renamed.md");
+
+    const target = findLeaf(result, "L1")!;
+    expect(target.tabs).toEqual(["/notes-renamed.md", "/other.md"]);
+    expect(target.activeTabPath).toBe("/other.md");
+  });
+
+  it("is a no-op (returns the tree itself) when nothing matches", () => {
+    const tree = leaf("L1", ["/other.md"]);
+    const result = renamePathInTree(tree, "/notes.md", "/notes-renamed.md");
+    expect(result).toBe(tree);
+  });
+
+  it("drops a tab already open in the same leaf at the computed destination, instead of duplicating the keyed tab strip", () => {
+    const tree = leaf("L1", ["/a.md", "/b.md"]);
+
+    const result = renamePathInTree(tree, "/a.md", "/b.md");
+
+    expect(findLeaf(result, "L1")?.tabs).toEqual(["/b.md"]);
+  });
+
+  it("falls back activeTabPath to the last remaining tab when the active tab was the one displaced", () => {
+    let tree: EditorPaneNode = leaf("L1", ["/a.md", "/b.md"]);
+    tree = setActiveTabInLeaf(tree, "L1", "/b.md");
+
+    const result = renamePathInTree(tree, "/a.md", "/b.md");
+
+    const target = findLeaf(result, "L1")!;
+    expect(target.tabs).toEqual(["/b.md"]);
+    expect(target.activeTabPath).toBe("/b.md");
   });
 });
