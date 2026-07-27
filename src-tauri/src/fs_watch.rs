@@ -43,6 +43,24 @@ fn relative_to_root<'a>(
         .or_else(|| path.strip_prefix(raw_root).ok())
 }
 
+/// Rewrites `path` into the form the frontend actually keys tabs and
+/// explorer rows by: `raw_root` joined onto whatever root-relative path
+/// `relative_to_root` computes, falling back to `path` unchanged if it
+/// isn't under either root form. This is what closes the gap between the
+/// path form `notify` happens to report — the raw registration path on
+/// Linux and Windows, but always the canonicalized one on macOS's FSEvents
+/// regardless of what was registered — and the raw form `LocalWorkspace`
+/// records as the workspace root: every event ends up addressed the same
+/// way, on every platform, whether or not the root sits behind a symlinked
+/// ancestor. When `raw_root == canonical_root` (the overwhelmingly common
+/// case), this reproduces `path` byte for byte.
+fn reported_path(raw_root: &Path, canonical_root: &Path, path: &Path) -> String {
+    match relative_to_root(raw_root, canonical_root, path) {
+        Some(relative) => raw_root.join(relative).to_string_lossy().to_string(),
+        None => path.to_string_lossy().to_string(),
+    }
+}
+
 /// True if `path` should be excluded from the watcher's output entirely: a
 /// component anywhere below the root that `workspace::is_default_ignored`
 /// already hides from every explorer listing (`.git`, `.svn`, `.hg`, `CVS`,
@@ -108,14 +126,18 @@ fn is_ignored(
 /// would change the form of every event the frontend receives and silently
 /// break matching for a workspace opened through a symlinked ancestor.
 ///
-/// The ignore matcher and its matching, however, need a canonicalized root
-/// alongside the raw one: macOS's FSEvents backend always reports
-/// canonicalized event paths regardless of what path was registered, so an
-/// event path can arrive in either form depending on platform. `is_ignored`
-/// (via `relative_to_root`) strips whichever form actually matches before
-/// doing any matching, which is also what keeps
-/// `Gitignore::matched_path_or_any_parents` (which panics on a path outside
-/// its root) from ever seeing a path it isn't prepared for. If
+/// The ignore matcher, its matching, and the path sent on `tx`, however, all
+/// need a canonicalized root alongside the raw one: macOS's FSEvents backend
+/// always reports canonicalized event paths regardless of what path was
+/// registered, so an event path from `notify` can arrive in either form
+/// depending on platform. `is_ignored` (via `relative_to_root`) strips
+/// whichever form actually matches before doing any matching, which is also
+/// what keeps `Gitignore::matched_path_or_any_parents` (which panics on a
+/// path outside its root) from ever seeing a path it isn't prepared for.
+/// `reported_path` does the same lookup and re-joins onto the raw root
+/// before a path is ever put on `tx`, so every event the frontend receives
+/// is addressed in the one form it actually keys tabs and explorer rows by,
+/// regardless of which form `notify` happened to hand back. If
 /// canonicalization fails (the root doesn't exist), the raw path stands in
 /// for it, so the OS watcher registration below still produces the same
 /// "root does not exist" error it always did.
@@ -166,7 +188,7 @@ pub fn watch(
                                 // pointing at a path that no longer exists.
                                 let _ = tx.send(FsChangeEvent {
                                     workspace_id: workspace_id.clone(),
-                                    path: from.to_string_lossy().to_string(),
+                                    path: reported_path(&raw_root, &canonical_root, from),
                                     kind: FsChangeKind::Remove,
                                     from_path: None,
                                 });
@@ -178,16 +200,20 @@ pub fn watch(
                                 // nobody can look up.
                                 let _ = tx.send(FsChangeEvent {
                                     workspace_id: workspace_id.clone(),
-                                    path: to.to_string_lossy().to_string(),
+                                    path: reported_path(&raw_root, &canonical_root, to),
                                     kind: FsChangeKind::Create,
                                     from_path: None,
                                 });
                             } else {
                                 let _ = tx.send(FsChangeEvent {
                                     workspace_id: workspace_id.clone(),
-                                    path: to.to_string_lossy().to_string(),
+                                    path: reported_path(&raw_root, &canonical_root, to),
                                     kind: FsChangeKind::Rename,
-                                    from_path: Some(from.to_string_lossy().to_string()),
+                                    from_path: Some(reported_path(
+                                        &raw_root,
+                                        &canonical_root,
+                                        from,
+                                    )),
                                 });
                             }
                         } else {
@@ -202,7 +228,7 @@ pub fn watch(
                                 }
                                 let _ = tx.send(FsChangeEvent {
                                     workspace_id: workspace_id.clone(),
-                                    path: path.to_string_lossy().to_string(),
+                                    path: reported_path(&raw_root, &canonical_root, path),
                                     kind: FsChangeKind::Remove,
                                     from_path: None,
                                 });
@@ -229,7 +255,7 @@ pub fn watch(
                         }
                         let _ = tx.send(FsChangeEvent {
                             workspace_id: workspace_id.clone(),
-                            path: path.to_string_lossy().to_string(),
+                            path: reported_path(&raw_root, &canonical_root, path),
                             kind: kind.clone(),
                             from_path: None,
                         });
@@ -316,7 +342,7 @@ fn reconcile_new_directory(
             }
             let _ = tx.send(FsChangeEvent {
                 workspace_id: workspace_id.to_string(),
-                path: entry_path.to_string_lossy().to_string(),
+                path: reported_path(raw_root, canonical_root, &entry_path),
                 kind: FsChangeKind::Create,
                 from_path: None,
             });
@@ -748,25 +774,14 @@ mod tests {
     // `watch` (`LocalWorkspace::watch` passes through whatever the user
     // picked, and keys every tab and explorer row by that same unresolved
     // form), so a root reached through a symlinked ancestor must still
-    // watch normally, and the OS watcher must stay registered on — and
-    // report events in — the raw form the frontend actually holds, not a
-    // canonicalized one `notify` was never asked to use. The `Gitignore`
-    // matcher still has to cope with a canonicalized event path arriving
-    // anyway (macOS's FSEvents backend always reports one, regardless of
-    // registration path) without dropping every event or panicking; that
-    // half is what `relative_to_root`'s two-root lookup covers.
-    //
-    // macOS is excluded: FSEvents reports the canonicalized (real-root) form
-    // unconditionally, regardless of what path was registered, so asserting
-    // the link-root form there would fail on a pre-existing platform quirk
-    // this fix doesn't touch — not a regression it introduces. `notify` on
-    // Linux and Windows preserves whatever path it was registered with,
-    // which is what this test actually guards.
+    // watch normally, and every event must arrive addressed in that same
+    // raw form regardless of platform. macOS's FSEvents backend always
+    // reports the canonicalized path for a watched event, no matter what
+    // was registered — `reported_path` (via `relative_to_root`) translates
+    // it back to the raw-root form before the event ever reaches `tx`, so
+    // this holds on macOS too, not just on the platforms where `notify`
+    // happens to preserve the registered path form on its own.
     #[tokio::test]
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "macOS: FSEvents always reports the canonicalized path for a watched event, regardless of the path passed to watch() — a pre-existing platform quirk, not something this fix changes. See #313."
-    )]
     async fn watching_through_a_symlinked_root_still_reports_events() {
         let dir = tempfile::tempdir().unwrap();
         let base = canonical_root(&dir);
