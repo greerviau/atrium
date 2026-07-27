@@ -148,7 +148,7 @@ fn reconcile_new_directory(path: &Path, workspace_id: &str, tx: &UnboundedSender
 mod tests {
     use super::*;
     use tokio::sync::mpsc::unbounded_channel;
-    use tokio::time::{sleep, timeout, Duration as TokioDuration, Instant as TokioInstant};
+    use tokio::time::{timeout, Duration as TokioDuration, Instant as TokioInstant};
 
     /// Drains every event sent within `budget_ms` of this call, rather than
     /// waiting for exactly one: the debouncer can legitimately emit more than
@@ -176,12 +176,16 @@ mod tests {
 
     // The debounce window is 150ms; every test waits well past that before
     // asserting on what arrived. `STARTUP_SETTLE_MS` is slack before the
-    // first mutation, both for the watcher to start up and, on macOS, for
-    // the FSEvents daemon to flush any backlog from setup (e.g. an initial
-    // `std::fs::write`) that happened just before the watch was registered
-    // — otherwise that backlog can bleed into the watched window as a
-    // spurious event. GitHub Actions' macOS runners need noticeably more of
-    // both than a local machine or Linux's inotify does.
+    // first mutation: tests are drained (not just slept) for this long
+    // right after the watcher starts, so a setup-time event still sitting
+    // in the debouncer (e.g. from an initial `std::fs::write` just before
+    // the watch was registered) is discarded from `rx` and its own 150ms
+    // debounce window has fully closed before the mutation under test
+    // begins — otherwise the two could land in the same debounce window
+    // and get coalesced together (an unpaired rename half, or a
+    // create+remove merged into a single Modify). GitHub Actions' macOS
+    // runners need noticeably more of both windows than a local machine or
+    // Linux's inotify does.
     const STARTUP_SETTLE_MS: u64 = 500;
     const SETTLE_MS: u64 = 2000;
 
@@ -204,7 +208,7 @@ mod tests {
 
         let (tx, mut rx) = unbounded_channel();
         let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
-        sleep(Duration::from_millis(STARTUP_SETTLE_MS)).await;
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
 
         let to = root.join("new.txt");
         std::fs::rename(&from, &to).unwrap();
@@ -236,7 +240,7 @@ mod tests {
 
         let (tx, mut rx) = unbounded_channel();
         let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
-        sleep(Duration::from_millis(STARTUP_SETTLE_MS)).await;
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
 
         std::fs::remove_file(&path).unwrap();
 
@@ -268,7 +272,7 @@ mod tests {
 
         let (tx, mut rx) = unbounded_channel();
         let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
-        sleep(Duration::from_millis(STARTUP_SETTLE_MS)).await;
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
 
         let to = canonical_root(&outside).join("leaving.txt");
         std::fs::rename(&from, &to).unwrap();
@@ -310,7 +314,7 @@ mod tests {
         let root = canonical_root(&dir);
         let (tx, mut rx) = unbounded_channel();
         let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
-        sleep(Duration::from_millis(STARTUP_SETTLE_MS)).await;
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
 
         let sub = root.join("newdir");
         std::fs::create_dir(&sub).unwrap();
@@ -353,7 +357,7 @@ mod tests {
         let root = canonical_root(&dir);
         let (tx, mut rx) = unbounded_channel();
         let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
-        sleep(Duration::from_millis(STARTUP_SETTLE_MS)).await;
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
 
         const N: usize = 50;
         for i in 0..N {
