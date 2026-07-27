@@ -138,6 +138,18 @@ describe("leaf-local tab operations", () => {
     expect(target.activeTabPath).toBe("c.txt");
   });
 
+  it("closeTabInLeaf activates the closed tab's right neighbour, not the last tab, when closing the first tab", () => {
+    let tree: EditorPaneNode = leaf("L1", ["a.txt"]);
+    tree = addTabToLeaf(tree, "L1", "b.txt");
+    tree = addTabToLeaf(tree, "L1", "c.txt");
+    tree = setActiveTabInLeaf(tree, "L1", "a.txt");
+    tree = closeTabInLeaf(tree, "L1", "a.txt")!;
+
+    const target = findLeaf(tree, "L1")!;
+    expect(target.tabs).toEqual(["b.txt", "c.txt"]);
+    expect(target.activeTabPath).toBe("b.txt");
+  });
+
   it("closeTabInLeaf removes the whole leaf from the tree once its last tab closes", () => {
     const tree = splitPane(leaf("L1"), "L1", "right", leaf("L2"));
     const result = closeTabInLeaf(tree, "L2", "L2.txt");
@@ -176,6 +188,16 @@ describe("pruneMissingTabs", () => {
     const target = findLeaf(result, "L1")!;
     expect(target.tabs).toEqual(["a.txt"]);
     expect(target.activeTabPath).toBe("a.txt");
+  });
+
+  it("activates the closed tab's right neighbour, not the last tab, when the active path drops out", () => {
+    let tree: EditorPaneNode = leaf("L1", ["a.txt", "b.txt", "c.txt"]);
+    tree = setActiveTabInLeaf(tree, "L1", "a.txt");
+
+    const result = pruneMissingTabs(tree, new Set(["b.txt", "c.txt"]))!;
+    const target = findLeaf(result, "L1")!;
+    expect(target.tabs).toEqual(["b.txt", "c.txt"]);
+    expect(target.activeTabPath).toBe("b.txt");
   });
 
   it("removes a leaf entirely once its only tab is no longer open, leaving siblings untouched", () => {
