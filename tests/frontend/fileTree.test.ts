@@ -231,4 +231,15 @@ describe("FileTree: scrollbar auto-hide", () => {
 
     expect(treeEl.getAttribute("data-scrolling")).toBe("true");
   });
+
+  it("guards the tree container against accidental text selection (its empty trailing space no longer paints a selection highlight)", async () => {
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("a.txt")]);
+    await loadRoot(ROOT);
+
+    const { container } = render(FileTree);
+    const treeEl = container.querySelector(".file-tree");
+
+    expect(treeEl).toBeTruthy();
+    expect(window.getComputedStyle(treeEl!).userSelect).toBe("none");
+  });
 });
