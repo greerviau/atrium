@@ -213,6 +213,12 @@
     overflow: auto;
     font-size: 0.9em;
     padding: 6px 0;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .file-tree :global(input) {
+    -webkit-user-select: text;
+    user-select: text;
   }
   .modal-backdrop {
     position: fixed;

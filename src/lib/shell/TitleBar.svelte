@@ -89,6 +89,8 @@
     padding-left: 78px;
     background: var(--atrium-bg-surface);
     border-bottom: 1px solid var(--atrium-border-subtle);
+    -webkit-user-select: none;
+    user-select: none;
   }
 
   .switcher {
@@ -133,6 +135,8 @@
     display: flex;
     flex-direction: column;
     min-width: 220px;
+    -webkit-user-select: text;
+    user-select: text;
   }
 
   .switcher-menu .empty-state {

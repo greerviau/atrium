@@ -95,4 +95,26 @@ describe("TitleBar", () => {
     expect(container.querySelector(".title-bar")?.getAttribute("data-tauri-drag-region")).toBe("deep");
     expect(container.querySelector(".switcher")?.getAttribute("data-tauri-drag-region")).toBe("false");
   });
+
+  it("guards the title bar against accidental text selection (a double-click no longer bleeds a selection highlight into the file explorer)", () => {
+    workspace.set({ id: "local", root: current.path });
+
+    const { container } = render(TitleBar);
+
+    const titleBar = container.querySelector(".title-bar");
+    expect(titleBar).toBeTruthy();
+    expect(window.getComputedStyle(titleBar!).userSelect).toBe("none");
+  });
+
+  it("re-enables selection on the switcher dropdown, so a recent project's path stays copyable despite the title bar's guard", async () => {
+    workspace.set({ id: "local", root: current.path });
+    recents.set([current, other]);
+
+    const { getByRole, container } = render(TitleBar);
+    await fireEvent.click(getByRole("button", { name: "Switch project" }));
+
+    const menu = container.querySelector(".switcher-menu");
+    expect(menu).toBeTruthy();
+    expect(window.getComputedStyle(menu!).userSelect).toBe("text");
+  });
 });
