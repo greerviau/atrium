@@ -78,6 +78,8 @@
 
 <style>
   .title-bar {
+    /* Native traffic lights are positioned independently via trafficLightPosition in
+       src-tauri/tauri.conf.json; re-center with y ≈ (height - 13) / 2 if this height changes. */
     height: 38px;
     flex-shrink: 0;
     display: flex;
