@@ -112,9 +112,9 @@ export function notifySaveFailed(path: string, error: unknown): void {
 /**
  * Fire-and-forget save entry point for a UI trigger with no dialog of its
  * own to report a failure through (the File > Save menu item, the in-editor
- * Cmd+S keymap, the editor context menu's Save item) — requests the save and
- * surfaces a failure through the shared error toast, the same channel a
- * failed link-open already uses.
+ * Cmd+S keymap, the editor context menu's Save item, the deleted-file
+ * banner's Save button) — requests the save and surfaces a failure through
+ * the shared error toast, the same channel a failed link-open already uses.
  */
 export function requestSaveReportingErrors(path: string): void {
   requestSave(path).catch((err: unknown) => {

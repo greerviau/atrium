@@ -171,7 +171,7 @@ describe("UnsavedChangesDialog", () => {
 
       // Regresses a double-toast: this flow reports its own inline error
       // (asserted above) and must never also trigger the shared error toast
-      // `requestSaveReportingErrors` uses for the other three save triggers.
+      // `requestSaveReportingErrors` uses for the other save triggers.
       expect(get(errorToast)).toBeNull();
     });
 
