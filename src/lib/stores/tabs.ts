@@ -1,9 +1,10 @@
 import { get, writable } from "svelte/store";
-import { fsReadFile, fsWriteFile, localWorkspaceId } from "../ipc/commands";
+import { fsReadFile, fsWriteFile, isAppError, localWorkspaceId } from "../ipc/commands";
 import { modeForPath, type PaneMode } from "../editor/codeExtensions";
 import { closePrompt } from "./closePrompt";
 import { workspace } from "./workspace";
 import { recordFileOpened } from "./recentFiles";
+import { showErrorToast } from "./errorToast";
 
 export interface PendingSelection {
   line: number;
@@ -19,6 +20,13 @@ export interface Tab {
   pendingSelection?: PendingSelection;
   /** True while a `fs:changed` conflict banner is showing for this tab (section 6.2). */
   hasExternalConflict: boolean;
+  /**
+   * True once the file backing this tab has been deleted (in-app or
+   * externally) while the tab itself stayed open because it had unsaved
+   * edits. Cleared the moment the tab's content is next written to disk
+   * (`saveTab`) or re-synced from disk (`reloadFromDisk`).
+   */
+  isDeleted: boolean;
   /**
    * Which markdown presentation is active; only ever set for `mode ===
    * "markdown"` tabs. Not persisted — always starts at `"rendered"` on open,
@@ -117,6 +125,7 @@ export async function openFile(path: string, selection?: PendingSelection): Prom
     isDirty: false,
     pendingSelection: selection,
     hasExternalConflict: false,
+    isDeleted: false,
     viewMode: mode === "markdown" ? "rendered" : undefined,
   };
   tabsState.update((s) => ({
@@ -185,7 +194,9 @@ export async function saveTab(path: string, contents: string): Promise<void> {
   tabsState.update((s) => ({
     ...s,
     tabs: s.tabs.map((t) =>
-      t.path === path ? { ...t, savedDoc: contents, isDirty: false, hasExternalConflict: false } : t,
+      t.path === path
+        ? { ...t, savedDoc: contents, isDirty: false, hasExternalConflict: false, isDeleted: false }
+        : t,
     ),
   }));
 }
@@ -194,6 +205,12 @@ export async function saveTab(path: string, contents: string): Promise<void> {
  * Reacts to an `fs:changed` event for `path` (App.svelte forwards these from
  * the global listener). A clean tab silently reloads; a dirty tab shows a
  * conflict banner instead of overwriting unsaved edits (section 6.2).
+ *
+ * A `NOT_FOUND` read failure is treated as a deletion rather than left as an
+ * unhandled rejection: this is a defensive fallback for the timing race
+ * where a `Modify` event's read loses to an external delete landing
+ * microseconds later, since a genuine `Remove`-kind event is routed to
+ * `markPathDeleted` directly by the `fs:changed` handler.
  */
 export async function reconcileExternalChange(path: string): Promise<void> {
   const state = get(tabsState);
@@ -208,7 +225,16 @@ export async function reconcileExternalChange(path: string): Promise<void> {
     }));
     return;
   }
-  const contents = await fsReadFile(localWorkspaceId(), path);
+  let contents: string;
+  try {
+    contents = await fsReadFile(localWorkspaceId(), path);
+  } catch (err) {
+    if (isAppError(err) && err.code === "NOT_FOUND") {
+      markPathDeleted(path);
+      return;
+    }
+    throw err;
+  }
   tabsState.update((s) => ({
     ...s,
     tabs: s.tabs.map((t) => (t.path === path ? { ...t, savedDoc: contents } : t)),
@@ -221,9 +247,52 @@ export async function reloadFromDisk(path: string): Promise<void> {
   tabsState.update((s) => ({
     ...s,
     tabs: s.tabs.map((t) =>
-      t.path === path ? { ...t, savedDoc: contents, isDirty: false, hasExternalConflict: false } : t,
+      t.path === path
+        ? { ...t, savedDoc: contents, isDirty: false, hasExternalConflict: false, isDeleted: false }
+        : t,
     ),
   }));
+}
+
+/**
+ * Reacts to a path being deleted, in-app or externally: every open tab at or
+ * under `path` (a directory delete cascades to its open descendants) is
+ * either closed outright (clean — nothing to lose) or flagged `isDeleted`
+ * (dirty — kept open so the user can act on it via the deleted-tab banner).
+ * A toast names every tab that was auto-closed, so a clean tab disappearing
+ * is never silent.
+ */
+export function markPathDeleted(path: string): void {
+  const state = get(tabsState);
+  const affected = state.tabs.filter((t) => t.path === path || t.path.startsWith(path + "/"));
+  if (affected.length === 0) {
+    return;
+  }
+
+  const closedPaths = new Set(affected.filter((t) => !t.isDirty).map((t) => t.path));
+  const flaggedPaths = new Set(affected.filter((t) => t.isDirty).map((t) => t.path));
+
+  tabsState.update((s) => {
+    const tabs = s.tabs
+      .filter((t) => !closedPaths.has(t.path))
+      .map((t) =>
+        flaggedPaths.has(t.path) ? { ...t, isDeleted: true, hasExternalConflict: false } : t,
+      );
+    const activeTabPath =
+      s.activeTabPath && closedPaths.has(s.activeTabPath)
+        ? (tabs[tabs.length - 1]?.path ?? null)
+        : s.activeTabPath;
+    return { tabs, activeTabPath };
+  });
+
+  if (closedPaths.size > 0) {
+    const names = [...closedPaths].map((p) => p.split("/").pop() ?? p);
+    const message =
+      names.length === 1
+        ? `${names[0]} was deleted — its tab was closed.`
+        : `${names.join(", ")} were deleted — their tabs were closed.`;
+    showErrorToast(message);
+  }
 }
 
 /** "Keep mine" action on the conflict banner: dismiss the banner, keep editing. */

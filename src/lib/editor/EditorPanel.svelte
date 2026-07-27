@@ -1,9 +1,17 @@
 <script lang="ts">
   import type { EditorLeafPane, SplitDirection } from "./editorPaneTree";
-  import { tabsState, reloadFromDisk, dismissConflict, toggleMarkdownViewMode } from "../stores/tabs";
+  import {
+    tabsState,
+    reloadFromDisk,
+    dismissConflict,
+    toggleMarkdownViewMode,
+    requestSave,
+    closeTab,
+  } from "../stores/tabs";
   import EditorPane from "./EditorPane.svelte";
   import EditorSplitMenu from "./EditorSplitMenu.svelte";
   import { tooltip } from "../ui/tooltip";
+  import { showErrorToast, describeError } from "../stores/errorToast";
 
   /**
    * One leaf's full top bar (tab strip + controls) and its stack of
@@ -89,6 +97,20 @@
             File changed on disk.
             <button onclick={() => reloadFromDisk(path)}>Reload</button>
             <button onclick={() => dismissConflict(path)}>Keep mine</button>
+          </div>
+        {:else if tab?.isDeleted}
+          <div class="conflict-banner deleted-banner">
+            File was deleted.
+            <button
+              onclick={() => {
+                void requestSave(path).catch((err) =>
+                  showErrorToast(`Couldn't save ${basename(path)}: ${describeError(err)}`),
+                );
+              }}
+            >
+              Save
+            </button>
+            <button onclick={() => closeTab(path)}>Close</button>
           </div>
         {/if}
         <EditorPane filePath={path} paneId={tree.id} />
@@ -193,5 +215,10 @@
     background: var(--atrium-warning-bg);
     color: var(--atrium-text-primary);
     flex-shrink: 0;
+  }
+
+  .deleted-banner {
+    background: var(--atrium-danger);
+    color: var(--atrium-danger-text);
   }
 </style>

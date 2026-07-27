@@ -35,6 +35,7 @@ function seedMarkdownTab(content: string): void {
     savedDoc: content,
     isDirty: false,
     hasExternalConflict: false,
+    isDeleted: false,
     viewMode: "rendered",
   };
   tabsState.set({ tabs: [tab], activeTabPath: MD_PATH });

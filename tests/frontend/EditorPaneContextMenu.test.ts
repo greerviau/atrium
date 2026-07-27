@@ -40,6 +40,7 @@ function seedCodeTab(): void {
     savedDoc: "const x = 1;\n",
     isDirty: false,
     hasExternalConflict: false,
+    isDeleted: false,
   };
   tabsState.set({ tabs: [tab], activeTabPath: CODE_PATH });
 }
@@ -51,6 +52,7 @@ function seedMarkdownTab(viewMode: "rendered" | "source" = "rendered"): void {
     savedDoc: "# Heading\n",
     isDirty: false,
     hasExternalConflict: false,
+    isDeleted: false,
     viewMode,
   };
   tabsState.set({ tabs: [tab], activeTabPath: MD_PATH });
