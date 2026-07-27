@@ -24,24 +24,45 @@ fn build_gitignore(root: &Path) -> Gitignore {
     builder.build().unwrap_or_else(|_| Gitignore::empty())
 }
 
-/// True if `path` (expected to be under `root`) should be excluded from the
-/// watcher's output entirely: a component anywhere below `root` that
-/// `workspace::is_default_ignored` already hides from every explorer
-/// listing (`.git`, `.svn`, `.hg`, `CVS`, `.DS_Store`, ...), or a `gitignore`
-/// match at the path or any of its parents. This is deliberately narrower
-/// than "any dot-prefixed component": a real, editable file like `.env` or
-/// `.gitignore` itself, or a directory like `.github`, is never caught by
-/// `is_default_ignored` and must keep producing live-update events the same
-/// way `list_dir` keeps showing it.
+/// Strips `path` down to a root-relative path, trying `canonical_root` first
+/// and falling back to `raw_root`: an event path can show up in either form
+/// depending on the platform (see `watch`'s doc comment), and whichever one
+/// `path` was actually built from is the one whose prefix will match.
+/// Returns `None` if `path` isn't under either — this is what keeps an
+/// unexpected path from ever reaching `Gitignore::matched_path_or_any_parents`,
+/// which panics on a path outside its root: a relative path derived from a
+/// successful strip can never trip that assert, so the guard is structural
+/// rather than a best-effort fallback.
+fn relative_to_root<'a>(
+    raw_root: &Path,
+    canonical_root: &Path,
+    path: &'a Path,
+) -> Option<&'a Path> {
+    path.strip_prefix(canonical_root)
+        .ok()
+        .or_else(|| path.strip_prefix(raw_root).ok())
+}
+
+/// True if `path` should be excluded from the watcher's output entirely: a
+/// component anywhere below the root that `workspace::is_default_ignored`
+/// already hides from every explorer listing (`.git`, `.svn`, `.hg`, `CVS`,
+/// `.DS_Store`, ...), or a `gitignore` match at the path or any of its
+/// parents. This is deliberately narrower than "any dot-prefixed component":
+/// a real, editable file like `.env` or `.gitignore` itself, or a directory
+/// like `.github`, is never caught by `is_default_ignored` and must keep
+/// producing live-update events the same way `list_dir` keeps showing it.
 ///
-/// If `path` isn't actually under `root` (should not happen for anything
-/// `notify` reports, but `strip_prefix` is the only thing standing between
-/// an unexpected path and `Gitignore::matched_path_or_any_parents`, which
-/// panics on a path outside its root), this returns `false` — a path this
-/// function can't safely reason about is let through rather than risking a
-/// panic on the debouncer's own thread.
-fn is_ignored(root: &Path, gitignore: &Gitignore, path: &Path, is_dir: Option<bool>) -> bool {
-    let Ok(relative) = path.strip_prefix(root) else {
+/// A path that isn't under either root form (see `relative_to_root`) is let
+/// through rather than matched against — this function can't reason about
+/// it safely, and letting it through is cheaper and safer than guessing.
+fn is_ignored(
+    raw_root: &Path,
+    canonical_root: &Path,
+    gitignore: &Gitignore,
+    path: &Path,
+    is_dir: Option<bool>,
+) -> bool {
+    let Some(relative) = relative_to_root(raw_root, canonical_root, path) else {
         return false;
     };
     let has_default_ignored_component = relative.components().any(|component| {
@@ -58,8 +79,12 @@ fn is_ignored(root: &Path, gitignore: &Gitignore, path: &Path, is_dir: Option<bo
             .map(|metadata| metadata.is_dir())
             .unwrap_or(false)
     });
+    // `matched_path_or_any_parents` is given the already-stripped relative
+    // path, not the original absolute one: this is what makes the "path
+    // under the matcher root" assert structurally unreachable rather than
+    // merely unlikely, regardless of which root form `path` was built from.
     gitignore
-        .matched_path_or_any_parents(path, is_dir)
+        .matched_path_or_any_parents(relative, is_dir)
         .is_ignore()
 }
 
@@ -74,17 +99,25 @@ fn is_ignored(root: &Path, gitignore: &Gitignore, path: &Path, is_dir: Option<bo
 /// live-update noise. The gitignore matcher is built once per watch
 /// registration, not per event.
 ///
-/// `root` is canonicalized before it becomes the matcher's root or is
-/// registered with the OS watcher: the caller (`LocalWorkspace::watch`)
-/// passes through whatever path the user picked, unresolved, but macOS's
-/// FSEvents backend always reports canonicalized paths for the events it
-/// produces. Matching a non-canonical root against canonicalized event
-/// paths would either never find a common prefix (silently dropping every
-/// event) or panic (`Gitignore::matched_path_or_any_parents` asserts its
-/// input is under its root) — canonicalizing once here keeps `root_path`
-/// consistent with whatever `notify` actually reports, on every platform.
-/// If canonicalization fails (the root doesn't exist), the raw path is used
-/// as before, so the OS watcher registration below still produces the same
+/// The OS watcher stays registered on `root` exactly as given — the caller
+/// (`LocalWorkspace::watch`) passes through whatever path the user picked,
+/// unresolved, and `LocalWorkspace` itself keys every tab and explorer row
+/// by that same unresolved form, matched by exact string equality on the
+/// frontend. `notify` builds each event's path by joining onto whatever
+/// path it was registered with, so registering on a canonicalized path
+/// would change the form of every event the frontend receives and silently
+/// break matching for a workspace opened through a symlinked ancestor.
+///
+/// The ignore matcher and its matching, however, need a canonicalized root
+/// alongside the raw one: macOS's FSEvents backend always reports
+/// canonicalized event paths regardless of what path was registered, so an
+/// event path can arrive in either form depending on platform. `is_ignored`
+/// (via `relative_to_root`) strips whichever form actually matches before
+/// doing any matching, which is also what keeps
+/// `Gitignore::matched_path_or_any_parents` (which panics on a path outside
+/// its root) from ever seeing a path it isn't prepared for. If
+/// canonicalization fails (the root doesn't exist), the raw path stands in
+/// for it, so the OS watcher registration below still produces the same
 /// "root does not exist" error it always did.
 ///
 /// The debouncer and its underlying OS watcher are kept alive for the
@@ -95,9 +128,9 @@ pub fn watch(
     workspace_id: String,
     tx: UnboundedSender<FsChangeEvent>,
 ) -> notify::Result<notify_debouncer_full::Debouncer<notify::RecommendedWatcher, FileIdMap>> {
-    let root_path = std::fs::canonicalize(&root).unwrap_or_else(|_| PathBuf::from(&root));
-    let gitignore = build_gitignore(&root_path);
-    let watch_root = root_path.clone();
+    let raw_root = PathBuf::from(&root);
+    let canonical_root = std::fs::canonicalize(&root).unwrap_or_else(|_| raw_root.clone());
+    let gitignore = build_gitignore(&canonical_root);
 
     let mut debouncer = new_debouncer(
         Duration::from_millis(150),
@@ -117,8 +150,10 @@ pub fn watch(
                     // plain `Create`.
                     if event.event.kind == EventKind::Modify(ModifyKind::Name(RenameMode::Both)) {
                         if let [from, to] = event.event.paths.as_slice() {
-                            let to_ignored = is_ignored(&root_path, &gitignore, to, None);
-                            let from_ignored = is_ignored(&root_path, &gitignore, from, None);
+                            let to_ignored =
+                                is_ignored(&raw_root, &canonical_root, &gitignore, to, None);
+                            let from_ignored =
+                                is_ignored(&raw_root, &canonical_root, &gitignore, from, None);
                             if to_ignored && from_ignored {
                                 // Neither side is anything the frontend
                                 // tracks; nothing to report.
@@ -133,6 +168,18 @@ pub fn watch(
                                     workspace_id: workspace_id.clone(),
                                     path: from.to_string_lossy().to_string(),
                                     kind: FsChangeKind::Remove,
+                                    from_path: None,
+                                });
+                            } else if from_ignored {
+                                // Moved out of an ignored location into a
+                                // tracked one: nothing downstream has ever
+                                // seen `from`, so this is a fresh arrival
+                                // for `to`, not a rename with a from_path
+                                // nobody can look up.
+                                let _ = tx.send(FsChangeEvent {
+                                    workspace_id: workspace_id.clone(),
+                                    path: to.to_string_lossy().to_string(),
+                                    kind: FsChangeKind::Create,
                                     from_path: None,
                                 });
                             } else {
@@ -150,7 +197,7 @@ pub fn watch(
                             // `Remove` per path, never a guessed rename —
                             // rather than dropping the event on the floor.
                             for path in &event.event.paths {
-                                if is_ignored(&root_path, &gitignore, path, None) {
+                                if is_ignored(&raw_root, &canonical_root, &gitignore, path, None) {
                                     continue;
                                 }
                                 let _ = tx.send(FsChangeEvent {
@@ -177,7 +224,7 @@ pub fn watch(
                         _ => FsChangeKind::Modify,
                     };
                     for path in &event.event.paths {
-                        if is_ignored(&root_path, &gitignore, path, None) {
+                        if is_ignored(&raw_root, &canonical_root, &gitignore, path, None) {
                             continue;
                         }
                         let _ = tx.send(FsChangeEvent {
@@ -191,7 +238,8 @@ pub fn watch(
                                 path,
                                 &workspace_id,
                                 &tx,
-                                &root_path,
+                                &raw_root,
+                                &canonical_root,
                                 &gitignore,
                             );
                         }
@@ -208,7 +256,7 @@ pub fn watch(
 
     debouncer
         .watcher()
-        .watch(&watch_root, RecursiveMode::Recursive)?;
+        .watch(Path::new(&root), RecursiveMode::Recursive)?;
 
     Ok(debouncer)
 }
@@ -238,7 +286,8 @@ fn reconcile_new_directory(
     path: &Path,
     workspace_id: &str,
     tx: &UnboundedSender<FsChangeEvent>,
-    root: &Path,
+    raw_root: &Path,
+    canonical_root: &Path,
     gitignore: &Gitignore,
 ) {
     let Ok(metadata) = std::fs::symlink_metadata(path) else {
@@ -256,7 +305,13 @@ fn reconcile_new_directory(
         for entry in entries.flatten() {
             let entry_path = entry.path();
             let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
-            if is_ignored(root, gitignore, &entry_path, Some(is_dir)) {
+            if is_ignored(
+                raw_root,
+                canonical_root,
+                gitignore,
+                &entry_path,
+                Some(is_dir),
+            ) {
                 continue;
             }
             let _ = tx.send(FsChangeEvent {
@@ -610,14 +665,14 @@ mod tests {
         wait_until_seen(&mut rx, &tracked).await;
     }
 
-    // Dot-directory case: `.git` is excluded because it's on
+    // Default-ignored-directory case: `.git` is excluded because it's on
     // `workspace::is_default_ignored`'s fixed list, with no `.gitignore`
     // entry needed — this is what keeps `.git` out of search/find-files
     // today, and the watcher applies the same list. A sibling tracked file
     // created in the same burst must still arrive, so the test can't pass
     // vacuously on a watcher that delivered nothing at all.
     #[tokio::test]
-    async fn a_dot_prefixed_directory_produces_no_events_even_with_no_gitignore_entry() {
+    async fn a_default_ignored_directory_produces_no_events_even_with_no_gitignore_entry() {
         let dir = tempfile::tempdir().unwrap();
         let root = canonical_root(&dir);
 
@@ -691,12 +746,15 @@ mod tests {
 
     // Regression guard: the caller never canonicalizes the root it hands to
     // `watch` (`LocalWorkspace::watch` passes through whatever the user
-    // picked), so a root reached through a symlinked ancestor must still
-    // watch normally rather than the `Gitignore` matcher either silently
-    // dropping every event or panicking, which is what happens if the raw,
-    // non-canonical root is used as the matcher's root while `notify`
-    // reports canonicalized paths (as macOS's FSEvents backend always
-    // does).
+    // picked, and keys every tab and explorer row by that same unresolved
+    // form), so a root reached through a symlinked ancestor must still
+    // watch normally, and the OS watcher must stay registered on — and
+    // report events in — the raw form the frontend actually holds, not a
+    // canonicalized one `notify` was never asked to use. The `Gitignore`
+    // matcher still has to cope with a canonicalized event path arriving
+    // anyway (macOS's FSEvents backend always reports one, regardless of
+    // registration path) without dropping every event or panicking; that
+    // half is what `relative_to_root`'s two-root lookup covers.
     #[tokio::test]
     async fn watching_through_a_symlinked_root_still_reports_events() {
         let dir = tempfile::tempdir().unwrap();
@@ -718,8 +776,56 @@ mod tests {
         .unwrap();
         let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
 
-        let tracked = real_root.join("main.rs");
-        std::fs::write(&tracked, "fn main() {}").unwrap();
-        wait_until_seen(&mut rx, &tracked).await;
+        std::fs::write(real_root.join("main.rs"), "fn main() {}").unwrap();
+        // The frontend only ever holds the link-rooted form (it's what
+        // `LocalWorkspace::root()` returns), so that's what a live-update
+        // event must arrive as — not the real-path form the write used.
+        wait_until_seen(&mut rx, &link_root.join("main.rs")).await;
+    }
+
+    // M3 regression: a rename whose destination lands in an ignored
+    // directory must not drop the event outright — the source still needs
+    // to be reported gone, or a tab/explorer row for it is stuck pointing
+    // at a path that no longer exists. macOS is excluded for the same
+    // reason `a_same_directory_rename_arrives_as_one_paired_rename_event`
+    // is: FSEvents doesn't report this as a `Rename`-kind event at all.
+    #[tokio::test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "macOS: notify's FSEvents backend does not report this same-directory rename as any Rename-kind event, even with the setup file's own Create observed beforehand. See #313."
+    )]
+    async fn a_rename_into_an_ignored_destination_reports_only_a_remove_for_the_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = canonical_root(&dir);
+        std::fs::write(root.join(".gitignore"), "dist\n").unwrap();
+        std::fs::create_dir(root.join("dist")).unwrap();
+
+        let (tx, mut rx) = unbounded_channel();
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
+
+        let from = root.join("notes.md");
+        std::fs::write(&from, "hi").unwrap();
+        wait_until_seen(&mut rx, &from).await;
+
+        let to = root.join("dist").join("notes.md");
+        std::fs::rename(&from, &to).unwrap();
+
+        let events = drain_events(&mut rx, SETTLE_MS).await;
+        let source = from.to_string_lossy().to_string();
+        let dest = to.to_string_lossy().to_string();
+        assert!(
+            events.iter().any(|e| matches!(e.kind, FsChangeKind::Remove)
+                && e.path == source
+                && e.from_path.is_none()),
+            "expected a plain Remove event for the source, got {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| e.path == dest),
+            "expected no event referencing the ignored destination, got {events:?}"
+        );
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e.kind, FsChangeKind::Rename)));
     }
 }
