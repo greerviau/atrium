@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { initMenuBar } from "../../src/lib/shell/MenuBar";
 import { openExternalLink } from "../../src/lib/ipc/commands";
 import { showErrorToast } from "../../src/lib/stores/errorToast";
+import { tabsState, notifySaveComplete, notifySaveFailed } from "../../src/lib/stores/tabs";
 import type { MenuEventId } from "../../src/lib/ipc/events";
 
 const handlers = new Map<MenuEventId, () => void>();
@@ -59,6 +60,39 @@ describe("MenuBar help links", () => {
     vi.mocked(openExternalLink).mockResolvedValue(undefined);
 
     handlers.get("menu:help:github")?.();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(showErrorToast).not.toHaveBeenCalled();
+  });
+});
+
+describe("MenuBar save (issue #250)", () => {
+  beforeEach(async () => {
+    handlers.clear();
+    vi.mocked(showErrorToast).mockReset();
+    tabsState.set({ tabs: [], activeTabPath: null });
+    await initMenuBar(
+      () => {},
+      () => {},
+      () => {},
+    );
+  });
+
+  it("calls showErrorToast when the underlying save rejects", async () => {
+    tabsState.set({ tabs: [], activeTabPath: "/notes.md" });
+
+    handlers.get("menu:save")?.();
+    notifySaveFailed("/notes.md", new Error("permission denied"));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(showErrorToast).toHaveBeenCalledWith(expect.stringContaining("permission denied"));
+  });
+
+  it("does not call showErrorToast when the save succeeds", async () => {
+    tabsState.set({ tabs: [], activeTabPath: "/notes.md" });
+
+    handlers.get("menu:save")?.();
+    notifySaveComplete("/notes.md");
     await new Promise((r) => setTimeout(r, 0));
 
     expect(showErrorToast).not.toHaveBeenCalled();

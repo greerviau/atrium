@@ -1,9 +1,12 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { tick } from "svelte";
+import { get } from "svelte/store";
 import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import { EditorView } from "@codemirror/view";
 import EditorPane from "../../src/lib/editor/EditorPane.svelte";
 import { tabsState, type Tab } from "../../src/lib/stores/tabs";
+import { editorPaneTree, focusedEditorPaneId } from "../../src/lib/stores/editorPanes";
+import { errorToast } from "../../src/lib/stores/errorToast";
 import * as clipboardManager from "@tauri-apps/plugin-clipboard-manager";
 import * as reveal from "../../src/lib/ipc/reveal";
 import * as commands from "../../src/lib/ipc/commands";
@@ -81,6 +84,9 @@ describe("EditorPane: context menu", () => {
   afterEach(() => {
     cleanup();
     tabsState.set({ tabs: [], activeTabPath: null });
+    editorPaneTree.set(null);
+    focusedEditorPaneId.set(null);
+    errorToast.set(null);
   });
 
   it("opens the four groups, in order, for a markdown tab", async () => {
@@ -226,6 +232,8 @@ describe("EditorPane: context menu", () => {
 
   it("saves via the existing save path and closes the menu", async () => {
     seedCodeTab();
+    editorPaneTree.set({ type: "leaf", id: "pane-1", tabs: [CODE_PATH], activeTabPath: CODE_PATH });
+    focusedEditorPaneId.set("pane-1");
     const { container, findByText } = render(EditorPane, { filePath: CODE_PATH, paneId: "pane-1" });
     await tick();
 
@@ -235,6 +243,24 @@ describe("EditorPane: context menu", () => {
     await vi.waitFor(() => {
       expect(commands.fsWriteFile).toHaveBeenCalledWith("local", CODE_PATH, "const x = 1;\n");
     });
+    expect(container.querySelector(".context-menu")).toBeNull();
+  });
+
+  it("shows an error toast instead of silently closing the menu when the save fails", async () => {
+    seedCodeTab();
+    editorPaneTree.set({ type: "leaf", id: "pane-1", tabs: [CODE_PATH], activeTabPath: CODE_PATH });
+    focusedEditorPaneId.set("pane-1");
+    vi.mocked(commands.fsWriteFile).mockRejectedValueOnce(new Error("permission denied"));
+    const { container, findByText } = render(EditorPane, { filePath: CODE_PATH, paneId: "pane-1" });
+    await tick();
+
+    await openMenu(container);
+    await fireEvent.click(await findByText("Save"));
+
+    await vi.waitFor(() => {
+      expect(get(errorToast)).toContain("main.ts");
+    });
+    expect(get(errorToast)).toContain("permission denied");
     expect(container.querySelector(".context-menu")).toBeNull();
   });
 

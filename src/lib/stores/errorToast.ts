@@ -30,10 +30,11 @@ export function dismissErrorToast(): void {
 }
 
 /**
- * Shared by the fire-and-forget IPC call sites (link-open failures) that
- * report through this toast. `UnsavedChangesDialog.svelte` and
- * `SettingsDialog.svelte` each keep their own copy for a locally-owned error
- * message rather than importing this one, to stay independent of the toast.
+ * Shared by the fire-and-forget call sites (failed saves, link-open
+ * failures) that report through this toast. `UnsavedChangesDialog.svelte`
+ * and `SettingsDialog.svelte` each keep their own copy for a locally-owned
+ * error message rather than importing this one, to stay independent of the
+ * toast.
  */
 export function describeError(err: unknown): string {
   if (isAppError(err)) return err.message;

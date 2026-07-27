@@ -1,6 +1,6 @@
 import { onMenuEvent } from "../ipc/events";
 import { openWorkspaceFolder, workspace } from "../stores/workspace";
-import { tabsState, requestSave } from "../stores/tabs";
+import { tabsState, requestSaveReportingErrors } from "../stores/tabs";
 import { toggleExplorerVisible, toggleTerminalVisible } from "../stores/layout";
 import { zoomIn, zoomOut, resetZoom } from "../stores/textSize";
 import { openSearch } from "../search/searchOverlay";
@@ -45,10 +45,7 @@ export async function initMenuBar(
   await onMenuEvent("menu:save", () => {
     const active = get(tabsState).activeTabPath;
     if (active) {
-      // Unlike the close-confirmation flow, this caller has nowhere to
-      // surface a failed save — swallow the rejection rather than let it
-      // become an unhandled promise rejection.
-      requestSave(active).catch(() => {});
+      requestSaveReportingErrors(active);
     }
   });
   await onMenuEvent("menu:new-terminal-tab", onNewTerminalTab);
