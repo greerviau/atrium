@@ -2671,7 +2671,11 @@ describe("markdown.css: table wrap/border redesign (issue #201 phase 1, revised 
   // overlay widget's own outward offset (issue #295) — row handle
   // (`left: -22px`), column bar (`top: -18px`), add-row band
   // (`bottom: -10px`), add-column band (`right: -10px`) — so none of them
-  // gets clipped by the new scroll container.
+  // gets clipped by the new scroll container. The bottom value (13px, not
+  // 10) additionally absorbs the add-row band's own "+" glyph, whose
+  // `line-height: 1` inline box renders taller than the band's 8px height
+  // and spills past a plain 10px match, measured as a real 3px vertical
+  // scroll range at rest before this bump.
   it(".cm-table-scroll caps at the shared reading column via max-width, traps overflow, and pads for the overlay widgets", () => {
     const body = ruleBodyFor(".cm-content.cm-md-rendered .cm-table-scroll");
     expect(body).toMatch(/max-width:\s*min\(var\(--atrium-prose-max-width\),\s*100cqw\)/);
@@ -2680,7 +2684,7 @@ describe("markdown.css: table wrap/border redesign (issue #201 phase 1, revised 
     expect(body).not.toMatch(/(?:^|[^-])width:\s*100cqw/);
     expect(body).toMatch(/overflow-x:\s*auto/);
     expect(body).toMatch(/box-sizing:\s*border-box/);
-    expect(body).toMatch(/padding:\s*18px\s+10px\s+10px\s+22px/);
+    expect(body).toMatch(/padding:\s*18px\s+10px\s+13px\s+22px/);
   });
 
   // `.cm-table-box` (the inner wrapper) keeps the table's own shrink-to-fit
@@ -2713,10 +2717,20 @@ describe("markdown.css: table wrap/border redesign (issue #201 phase 1, revised 
   // `min-width` floor is kept only for an empty cell's clickable area now
   // that `.cm-table-scroll`'s own `overflow-x: auto` (above), not this
   // property, is what contains one genuinely unbroken long token.
-  it(".cm-table-cell sizes columns from real word/hyphen boundaries (break-word) with a small defensive min-width floor", () => {
+  //
+  // `word-break: normal` is required alongside `overflow-wrap: break-word`,
+  // not optional: CodeMirror's own base theme sets `word-break: break-word`
+  // on `.cm-lineWrapping` (always active for a markdown pane), which
+  // inherits into every cell, and per CSS Text 3 that legacy value computes
+  // to `word-break: normal` plus an `overflow-wrap` of `anywhere` regardless
+  // of this element's own `overflow-wrap` — so without neutralizing it here,
+  // the inherited value silently puts `anywhere`-equivalent crushing back in
+  // effect and the `overflow-wrap: break-word` above never actually renders.
+  it(".cm-table-cell sizes columns from real word/hyphen boundaries (break-word + word-break: normal) with a small defensive min-width floor", () => {
     const body = ruleBodyFor(".cm-table-cell");
-    expect(body).toMatch(/overflow-wrap:\s*break-word/);
-    expect(body).not.toMatch(/overflow-wrap:\s*anywhere/);
+    expect(body).toMatch(/overflow-wrap:\s*break-word;/);
+    expect(body).not.toMatch(/overflow-wrap:\s*anywhere;/);
+    expect(body).toMatch(/word-break:\s*normal;/);
     expect(body).toMatch(/min-width:\s*3ch/);
   });
 });

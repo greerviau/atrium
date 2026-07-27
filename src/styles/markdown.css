@@ -114,20 +114,31 @@
    mixed-value resolution rule), so without this padding all four widgets —
    positioned before the scrollport's origin — would be unreachable by
    scrolling in either direction and simply never appear. Padding this box
-   out to match each offset instead brings all four inside the padding box,
-   with no unwanted scrollbar at rest (padding contributes to the box's own
-   size, not to scrollable overflow, as long as nothing exceeds the
-   padding-inclusive box) — at the cost of ~32px less content width
-   available to `.cm-table-box`, a small, acceptable trade for the overlay
-   widgets having dedicated room. `box-sizing: border-box` keeps that
-   padding inside `max-width` rather than adding to it. */
+   out to match each offset instead brings all four inside the padding box —
+   at the cost of ~32px less content width available to `.cm-table-box`, a
+   small, acceptable trade for the overlay widgets having dedicated room.
+   `box-sizing: border-box` keeps that padding inside `max-width` rather than
+   adding to it.
+
+   The bottom value is 13px, not 10, matched to measurement rather than to
+   the add-row band's own offset: its `::before` "+" glyph (`font-size: 12px;
+   line-height: 1`) renders a taller inline line box than the band's own 8px
+   height, and centering it (`align-items: center`) spills the excess past
+   the band's bottom edge by a few pixels regardless of the offset — 10px
+   left it a real 3px vertically scrollable at rest on every table, 13px
+   measures to zero. The add-column band's own "+" needs no equivalent bump
+   on `padding-right`: that overhang is a line-height effect (a block-axis
+   property), and the column band's relevant axis for its own 8px width is
+   the glyph's inline advance width, which measures under 8px for the
+   monospace glyphs this renders with — so unlike the row band, there's
+   nothing spilling past its edge to absorb. */
 .cm-content.cm-md-rendered .cm-table-scroll {
   max-width: min(var(--atrium-prose-max-width), 100cqw);
   margin-inline-start: max(0px, (100cqw - var(--atrium-prose-max-width)) / 2);
   margin-inline-end: auto;
   overflow-x: auto;
   box-sizing: border-box;
-  padding: 18px 10px 10px 22px;
+  padding: 18px 10px 13px 22px;
 }
 
 /* The inner wrapper `.cm-table-scroll` above nests outside: wraps every
@@ -192,11 +203,6 @@
      outer right/bottom edges, with the box itself supplying top and left. */
   border-right: 1px solid var(--atrium-border);
   border-bottom: 1px solid var(--atrium-border);
-  /* Already inherited from `.cm-content.cm-lineWrapping`'s base-theme rule
-     today, so this is currently a no-op — kept explicit and defensive in
-     case a future change ever scopes `.cm-table-cell` outside a
-     `.cm-lineWrapping` ancestor. */
-  overflow-wrap: break-word;
   /* `break-word` (unlike `anywhere`, which is otherwise identical at render
      time) leaves min-content intrinsic size anchored to each cell's real
      word/hyphen-boundary chunks rather than dragging it down toward roughly
@@ -211,12 +217,27 @@
      can't push `.cm-table-box` past the column cap and inflate `.cm-content`
      sideways (issue #199) is now `.cm-table-scroll`'s job, via its own
      `overflow-x: auto` above — not this property's. */
-  min-width: 3ch;
+  overflow-wrap: break-word;
+  /* Not a redundant restatement of an inherited value — a deliberate
+     override that's load-bearing for the declaration above. CodeMirror's own
+     base theme sets `word-break: break-word` on `.cm-lineWrapping` (always
+     active for a markdown pane, `EditorView.lineWrapping` in
+     `EditorPane.svelte`), which inherits into every cell here. Per CSS Text
+     3, that legacy `word-break: break-word` value computes to
+     `word-break: normal` plus an `overflow-wrap` of `anywhere` regardless of
+     this element's own `overflow-wrap`, and Chromium implements exactly that —
+     so without this line, the inherited `word-break` silently puts `anywhere`
+     back in effect and this rule's `overflow-wrap: break-word` above never
+     actually renders, reproducing issue #295's crushed columns even with the
+     "fixed" `overflow-wrap` in place. */
+  word-break: normal;
   /* A much smaller defensive floor than `anywhere` needed, kept only so an
      empty cell's `EmptyCellWidget` (`widgets.ts`, a bare `<span>` with no
      content of its own) stays wide enough to click — it no longer has to
-     compensate for `overflow-wrap` deflating every column's min-content,
-     since `break-word` doesn't do that. */
+     compensate for `overflow-wrap`/`word-break` deflating every column's
+     min-content, since neither does that once the inherited legacy value is
+     neutralized above. */
+  min-width: 3ch;
   /* A table cell's initial `vertical-align` is `baseline`, which drops a
      short cell to the first-line baseline of a tall wrapped neighbor and
      leaves the row reading ragged. `top` aligns every cell in a row to the
