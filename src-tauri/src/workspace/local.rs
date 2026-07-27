@@ -303,10 +303,6 @@ fn search_root<M: Matcher + Sync>(
                                     match_end: end,
                                 });
                                 file_match_count += 1;
-                                if global_index + 1 >= SEARCH_TOTAL_MATCH_CAP {
-                                    total_cap_hit = true;
-                                    return false;
-                                }
                                 if file_match_count >= SEARCH_PER_FILE_MATCH_CAP {
                                     per_file_cap_hit = true;
                                     return false;
@@ -1948,6 +1944,25 @@ mod tests {
 
         assert_eq!(results.matches.len(), SEARCH_TOTAL_MATCH_CAP);
         assert!(results.truncated);
+    }
+
+    #[tokio::test]
+    async fn search_returns_exactly_the_total_cap_without_truncation() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        // One match per file, spread across exactly SEARCH_TOTAL_MATCH_CAP
+        // files, so the per-file cap can't be what limits the count and the
+        // result set lands exactly on the total cap with nothing dropped.
+        for i in 0..SEARCH_TOTAL_MATCH_CAP {
+            let name = format!("file{i}.txt");
+            ws.create_file(&name).await.unwrap();
+            ws.write_file(&name, "needle\n").await.unwrap();
+        }
+
+        let results = ws.search("needle", options(false, false)).await.unwrap();
+
+        assert_eq!(results.matches.len(), SEARCH_TOTAL_MATCH_CAP);
+        assert!(!results.truncated);
     }
 
     #[tokio::test]
