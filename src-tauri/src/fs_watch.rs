@@ -1,15 +1,63 @@
 use crate::workspace::{FsChangeEvent, FsChangeKind};
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::event::{ModifyKind, RenameMode};
 use notify::{EventKind, RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, FileIdMap};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
+
+/// Builds a gitignore matcher for `root`, picking up its `.gitignore`,
+/// `.git/info/exclude`, and the user's global excludes file — the same
+/// sources `ignore::WalkBuilder` discovers automatically for `local.rs`'s
+/// `search_root`/`find_files_root`. None of these require an actual `.git`
+/// directory to exist (mirroring those callers' `require_git(false)`
+/// posture), so a plain, non-git workspace root still builds a valid, if
+/// empty, matcher rather than erroring.
+fn build_gitignore(root: &Path) -> Gitignore {
+    let mut builder = GitignoreBuilder::new(root);
+    builder.add(root.join(".gitignore"));
+    builder.add(root.join(".git").join("info").join("exclude"));
+    if let Some(global_excludes) = ignore::gitignore::gitconfig_excludes_path() {
+        builder.add(global_excludes);
+    }
+    builder.build().unwrap_or_else(|_| Gitignore::empty())
+}
+
+/// True if `path` (expected to be under `root`) should be excluded from the
+/// watcher's output entirely: a dot-prefixed component anywhere below
+/// `root` (mirrors `WalkBuilder`'s default `.hidden(true)`, which is what
+/// keeps `.git` out of search/find-files without needing to be named
+/// explicitly), or a `gitignore` match at the path or any of its parents.
+fn is_ignored(root: &Path, gitignore: &Gitignore, path: &Path) -> bool {
+    let has_dot_component = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .components()
+        .any(|component| {
+            matches!(component, Component::Normal(name) if name.to_string_lossy().starts_with('.'))
+        });
+    if has_dot_component {
+        return true;
+    }
+    let is_dir = std::fs::symlink_metadata(path)
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false);
+    gitignore
+        .matched_path_or_any_parents(path, is_dir)
+        .is_ignore()
+}
 
 /// Starts a recursive `notify` watcher rooted at `root`, debounced 150ms
 /// (coalescing bursts and duplicate paths within the window, handled by
 /// `notify-debouncer-full`), forwarding each surviving change as an
 /// `FsChangeEvent` on `tx`.
+///
+/// A path under a dot-prefixed directory (`.git`, `.svn`, ...) or matched by
+/// `root`'s `.gitignore` (via `is_ignored`) is dropped before it ever
+/// reaches `tx` — `node_modules`, build output, and VCS bookkeeping never
+/// surface as live-update noise. The gitignore matcher is built once per
+/// watch registration, not per event.
 ///
 /// The debouncer and its underlying OS watcher are kept alive for the
 /// lifetime of the returned guard; the caller (`LocalWorkspace`) holds this
@@ -19,6 +67,9 @@ pub fn watch(
     workspace_id: String,
     tx: UnboundedSender<FsChangeEvent>,
 ) -> notify::Result<notify_debouncer_full::Debouncer<notify::RecommendedWatcher, FileIdMap>> {
+    let root_path = PathBuf::from(&root);
+    let gitignore = build_gitignore(&root_path);
+
     let mut debouncer = new_debouncer(
         Duration::from_millis(150),
         None,
@@ -37,6 +88,9 @@ pub fn watch(
                     // plain `Create`.
                     if event.event.kind == EventKind::Modify(ModifyKind::Name(RenameMode::Both)) {
                         if let [from, to] = event.event.paths.as_slice() {
+                            if is_ignored(&root_path, &gitignore, to) {
+                                continue;
+                            }
                             let _ = tx.send(FsChangeEvent {
                                 workspace_id: workspace_id.clone(),
                                 path: to.to_string_lossy().to_string(),
@@ -50,6 +104,9 @@ pub fn watch(
                             // `Remove` per path, never a guessed rename —
                             // rather than dropping the event on the floor.
                             for path in &event.event.paths {
+                                if is_ignored(&root_path, &gitignore, path) {
+                                    continue;
+                                }
                                 let _ = tx.send(FsChangeEvent {
                                     workspace_id: workspace_id.clone(),
                                     path: path.to_string_lossy().to_string(),
@@ -74,6 +131,9 @@ pub fn watch(
                         _ => FsChangeKind::Modify,
                     };
                     for path in &event.event.paths {
+                        if is_ignored(&root_path, &gitignore, path) {
+                            continue;
+                        }
                         let _ = tx.send(FsChangeEvent {
                             workspace_id: workspace_id.clone(),
                             path: path.to_string_lossy().to_string(),
@@ -81,7 +141,13 @@ pub fn watch(
                             from_path: None,
                         });
                         if matches!(kind, FsChangeKind::Create) {
-                            reconcile_new_directory(path, &workspace_id, &tx);
+                            reconcile_new_directory(
+                                path,
+                                &workspace_id,
+                                &tx,
+                                &root_path,
+                                &gitignore,
+                            );
                         }
                     }
                 }
@@ -116,7 +182,19 @@ pub fn watch(
 /// treated as the single leaf entry it is, rather than being followed —
 /// matching how the rest of the explorer treats symlinks, and avoiding any
 /// risk of an infinite loop through a symlink cycle.
-fn reconcile_new_directory(path: &Path, workspace_id: &str, tx: &UnboundedSender<FsChangeEvent>) {
+///
+/// Each discovered entry is checked against `is_ignored` the same way the
+/// event loop checks a raw `notify` event, and an ignored subdirectory is
+/// never pushed onto `pending` — so walking into a freshly created
+/// `node_modules` never happens in the first place, rather than happening
+/// and being discarded file by file.
+fn reconcile_new_directory(
+    path: &Path,
+    workspace_id: &str,
+    tx: &UnboundedSender<FsChangeEvent>,
+    root: &Path,
+    gitignore: &Gitignore,
+) {
     let Ok(metadata) = std::fs::symlink_metadata(path) else {
         return;
     };
@@ -131,6 +209,9 @@ fn reconcile_new_directory(path: &Path, workspace_id: &str, tx: &UnboundedSender
         };
         for entry in entries.flatten() {
             let entry_path = entry.path();
+            if is_ignored(root, gitignore, &entry_path) {
+                continue;
+            }
             let _ = tx.send(FsChangeEvent {
                 workspace_id: workspace_id.to_string(),
                 path: entry_path.to_string_lossy().to_string(),
