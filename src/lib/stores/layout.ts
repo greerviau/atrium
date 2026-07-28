@@ -110,6 +110,11 @@ function clampExplorerWidth(w: number): number {
   return Math.max(EXPLORER_WIDTH_MIN, Math.min(EXPLORER_WIDTH_MAX, w));
 }
 
+/** Clamps an explorer width against both its own absolute range and however much of `containerWidth` the rest of the app needs at minimum. */
+export function clampExplorerToContainer(width: number, containerWidth: number): number {
+  return Math.min(EXPLORER_WIDTH_MAX, clampToContainer(width, EXPLORER_WIDTH_MIN, containerWidth, MIN_EDITOR_SIZE + RESIZER_THICKNESS));
+}
+
 /** Reads the persisted explorer sidebar width, clamping to range. Falls back to the default on any missing/malformed data. */
 export function loadExplorerWidth(): number {
   try {

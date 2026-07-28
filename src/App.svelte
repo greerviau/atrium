@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import FileTree from "./lib/explorer/FileTree.svelte";
   import EditorPaneSplit from "./lib/editor/EditorPaneSplit.svelte";
   import PaneSplit from "./lib/terminal/PaneSplit.svelte";
@@ -47,8 +47,8 @@
     setTerminalVisible,
     loadExplorerWidth,
     saveExplorerWidth,
-    EXPLORER_WIDTH_MIN,
-    EXPLORER_WIDTH_MAX,
+    clampExplorerToContainer,
+    RESIZER_THICKNESS,
   } from "./lib/stores/layout";
   import { restoreEditorSession, saveEditorSession, flushEditorSession } from "./lib/stores/editorSession";
   import { folderName } from "./lib/terminal/tabTitle";
@@ -89,7 +89,79 @@
   let explorerWidth = $state(loadExplorerWidth());
   let terminalHeight = $state(initialLayout.height);
   let terminalWidth = $state(initialLayout.width);
+  let appEl: HTMLElement | undefined = $state();
   let mainEl: HTMLDivElement | undefined = $state();
+
+  // Stable, in-memory ratio for each of the two outer-layout dimensions that
+  // move independently of the nested pane-tree ratios (paneTree.ts). Each is
+  // established once (first container availability) and re-baselined on
+  // every drag-end; between those events a `resize` recomputes the pixel
+  // value fresh from `ratio * currentContainerSize`, never from the previous
+  // frame's already-computed pixel value, so repeated resizes never drift.
+  let explorerRatio = $state<number | null>(null);
+  let terminalWidthRatio = $state<number | null>(null);
+  let terminalHeightRatio = $state<number | null>(null);
+
+  /** `.main`'s content width, derived analytically instead of read back from `mainEl.clientWidth` — Svelte 5 batches DOM updates to a microtask, so a same-pass DOM read of `mainEl` after writing `explorerWidth` would still reflect the pre-update sidebar width. */
+  function mainContentWidth(appWidthPx: number, explorerWidthPx: number): number {
+    return appWidthPx - (get(explorerVisible) ? explorerWidthPx + RESIZER_THICKNESS : 0);
+  }
+
+  /** Establishes `explorerRatio` on first call, then re-derives `explorerWidth` from it on every later call. Returns the pixel value it computed, for callers deriving `.main`'s width from it in the same pass. */
+  function syncExplorerToContainer(containerWidth: number): number {
+    if (!Number.isFinite(containerWidth) || containerWidth <= 0) return explorerWidth;
+    if (explorerRatio === null) {
+      explorerRatio = explorerWidth / containerWidth;
+      return explorerWidth;
+    }
+    explorerWidth = clampExplorerToContainer(Math.round(explorerRatio * containerWidth), containerWidth);
+    return explorerWidth;
+  }
+
+  /** Same as `syncExplorerToContainer`, for whichever of `terminalWidthRatio`/`terminalHeightRatio` applies to the current dock position. */
+  function syncTerminalToContainer(containerWidth: number, containerHeight: number): void {
+    if ($terminalPosition === "bottom") {
+      if (!Number.isFinite(containerHeight) || containerHeight <= 0) return;
+      if (terminalHeightRatio === null) {
+        terminalHeightRatio = terminalHeight / containerHeight;
+        return;
+      }
+      terminalHeight = clampToContainer(Math.round(terminalHeightRatio * containerHeight), HEIGHT_MIN, containerHeight);
+    } else {
+      if (!Number.isFinite(containerWidth) || containerWidth <= 0) return;
+      if (terminalWidthRatio === null) {
+        terminalWidthRatio = terminalWidth / containerWidth;
+        return;
+      }
+      terminalWidth = clampToContainer(Math.round(terminalWidthRatio * containerWidth), WIDTH_MIN, containerWidth);
+    }
+  }
+
+  function handleWindowResize(): void {
+    if (!appEl || !mainEl) return;
+    const appWidth = appEl.clientWidth;
+    const newExplorerWidth = syncExplorerToContainer(appWidth);
+    syncTerminalToContainer(mainContentWidth(appWidth, newExplorerWidth), mainEl.clientHeight);
+  }
+
+  // Re-syncs both ratio-derived pixel values every time `appEl`/`mainEl`
+  // (re)bind with a nonzero size — cold start with a restored workspace, and
+  // re-opening a workspace after the welcome screen (§3, item 1 of the
+  // resize plan). `untrack` keeps this effect's dependencies limited to
+  // `appEl`/`mainEl` themselves, not the ratios/pixel values it reads and
+  // writes internally, so a drag-end re-baselining a ratio doesn't loop back
+  // into this effect.
+  $effect(() => {
+    const app = appEl;
+    const main = mainEl;
+    if (!app || !main) return;
+    untrack(() => {
+      const appWidth = app.clientWidth;
+      if (appWidth <= 0) return;
+      const newExplorerWidth = syncExplorerToContainer(appWidth);
+      syncTerminalToContainer(mainContentWidth(appWidth, newExplorerWidth), main.clientHeight);
+    });
+  });
 
   // A single pane tree for the whole terminal dock — splitting no longer
   // creates an independent tab, it adds a sibling panel to this same tree,
@@ -557,11 +629,14 @@
     const startX = event.clientX;
     const startWidth = explorerWidth;
     function onMove(e: PointerEvent): void {
-      explorerWidth = Math.max(EXPLORER_WIDTH_MIN, Math.min(EXPLORER_WIDTH_MAX, startWidth + (e.clientX - startX)));
+      explorerWidth = clampExplorerToContainer(startWidth + (e.clientX - startX), appEl?.clientWidth ?? Infinity);
     }
     function onUp(): void {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      if (appEl && appEl.clientWidth > 0) {
+        explorerRatio = explorerWidth / appEl.clientWidth;
+      }
       saveExplorerWidth(explorerWidth);
     }
     window.addEventListener("pointermove", onMove);
@@ -665,6 +740,11 @@
     function onUp(): void {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      if ($terminalPosition === "bottom") {
+        if (mainEl && mainEl.clientHeight > 0) terminalHeightRatio = terminalHeight / mainEl.clientHeight;
+      } else {
+        if (mainEl && mainEl.clientWidth > 0) terminalWidthRatio = terminalWidth / mainEl.clientWidth;
+      }
       saveTerminalLayout({ position: $terminalPosition, height: terminalHeight, width: terminalWidth });
     }
     let onMove: (e: PointerEvent) => void;
@@ -696,16 +776,15 @@
   }
 
   onMount(() => {
-    if (mainEl) {
-      terminalHeight = clampToContainer(terminalHeight, HEIGHT_MIN, mainEl.clientHeight);
-      terminalWidth = clampToContainer(terminalWidth, WIDTH_MIN, mainEl.clientWidth);
-      // Persists the clamp immediately, not just in memory: otherwise a
-      // later position change (from the settings dialog) would read the
-      // pre-clamp, potentially oversized dimension straight back out of
-      // localStorage via setTerminalPosition, undoing the clamp this mount
-      // just applied.
-      saveTerminalLayout({ position: $terminalPosition, height: terminalHeight, width: terminalWidth });
-    }
+    // The first-availability `$effect` above re-derives and re-clamps
+    // terminalHeight/terminalWidth from the stable ratio every time `mainEl`
+    // becomes available (every workspace open, not just cold start), so the
+    // one-shot mount-time clamp this used to do here is no longer needed —
+    // removing it is safe even though `setTerminalPosition` reads
+    // height/width fresh from storage rather than from this in-memory state:
+    // nothing renders from that stale stored number directly, and the next
+    // drag-end overwrites it with an explicit, correct user choice.
+    window.addEventListener("resize", handleWindowResize);
     void initMenuBar(newTerminalTab, () => splitFocusedPane("right"), splitFocusedSurface, closeFocusedTab);
     void onFsChanged((event) => {
       if (event.kind === "remove") {
@@ -763,6 +842,9 @@
     void workspaceTakePendingOpen().then((path) => {
       if (path) void openWorkspacePath(path);
     });
+    return () => {
+      window.removeEventListener("resize", handleWindowResize);
+    };
   });
 </script>
 
@@ -778,7 +860,7 @@
     <SearchOverlay />
     <UnsavedChangesDialog />
     <div class="app-shell">
-    <main class="app">
+    <main class="app" bind:this={appEl}>
       {#if $explorerVisible}
         <div class="explorer" style={`width: ${explorerWidth}px`}>
           <FileTree />
