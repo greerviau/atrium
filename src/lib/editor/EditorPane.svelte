@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { Compartment, EditorState, type Extension, type TransactionSpec } from "@codemirror/state";
+  import { Compartment, EditorState, Transaction, type Extension, type TransactionSpec } from "@codemirror/state";
   import { EditorView, keymap, lineNumbers } from "@codemirror/view";
   import { selectAll as cmSelectAll } from "@codemirror/commands";
   import { syntaxHighlighting } from "@codemirror/language";
@@ -318,7 +318,9 @@
       minimapCompartment.of([]),
       keymap.of(shortcutKeymap),
       EditorView.updateListener.of((update) => {
-        if (update.docChanged) {
+        const isSyncOnly =
+          update.docChanged && update.transactions.every((tr) => tr.annotation(syncAnnotation));
+        if (update.docChanged && !isSyncOnly) {
           markDirty(filePath);
         }
         if ((update.docChanged || update.selectionSet) && active) {
@@ -489,7 +491,7 @@
       const cursorLine = view.state.doc.lineAt(view.state.selection.main.head).number;
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: current.savedDoc },
-        annotations: [syncAnnotation.of(true)],
+        annotations: [syncAnnotation.of(true), Transaction.addToHistory.of(false)],
       });
       const newLineCount = view.state.doc.lines;
       const targetLine = Math.min(cursorLine, newLineCount);
