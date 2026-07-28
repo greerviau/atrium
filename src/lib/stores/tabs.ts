@@ -261,6 +261,10 @@ export async function saveTab(path: string, contents: string): Promise<void> {
  * where a `Modify` event's read loses to an external delete landing
  * microseconds later, since a genuine `Remove`-kind event is routed to
  * `markPathDeleted` directly by the `fs:changed` handler.
+ *
+ * A `FILE_TOO_LARGE` read failure (the file grew past the read guard after
+ * it was already open) surfaces as a toast instead of an unhandled
+ * rejection, leaving the tab showing its last-known content.
  */
 export async function reconcileExternalChange(path: string): Promise<void> {
   const state = get(tabsState);
@@ -281,6 +285,10 @@ export async function reconcileExternalChange(path: string): Promise<void> {
   } catch (err) {
     if (isAppError(err) && err.code === "NOT_FOUND") {
       markPathDeleted(path);
+      return;
+    }
+    if (isAppError(err) && err.code === "FILE_TOO_LARGE") {
+      showErrorToast(describeError(err));
       return;
     }
     throw err;

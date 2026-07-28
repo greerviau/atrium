@@ -504,7 +504,7 @@ describe("renameOpenTabs", () => {
   });
 });
 
-describe("reconcileExternalChange's NOT_FOUND catch", () => {
+describe("reconcileExternalChange's NOT_FOUND and FILE_TOO_LARGE catches", () => {
   beforeEach(() => {
     tabsState.set({ tabs: [], activeTabPath: null });
     errorToast.set(null);
@@ -521,7 +521,23 @@ describe("reconcileExternalChange's NOT_FOUND catch", () => {
     expect(get(errorToast)).toBe("notes.md was deleted — its tab was closed.");
   });
 
-  it("still rejects for a non-NOT_FOUND error", async () => {
+  it("shows an error toast instead of throwing when fsReadFile rejects with FILE_TOO_LARGE, leaving the tab's savedDoc untouched", async () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md", { savedDoc: "last-known contents" })],
+      activeTabPath: "/notes.md",
+    });
+    vi.mocked(commands.fsReadFile).mockRejectedValue({
+      code: "FILE_TOO_LARGE",
+      message: "'/notes.md' is 12.3 MB, which exceeds the 10.0 MB open limit",
+    });
+
+    await expect(reconcileExternalChange("/notes.md")).resolves.toBeUndefined();
+
+    expect(get(errorToast)).toBe("'/notes.md' is 12.3 MB, which exceeds the 10.0 MB open limit");
+    expect(get(tabsState).tabs[0].savedDoc).toBe("last-known contents");
+  });
+
+  it("still rejects for a non-NOT_FOUND, non-FILE_TOO_LARGE error", async () => {
     tabsState.set({ tabs: [codeTab("/notes.md")], activeTabPath: "/notes.md" });
     const error = { code: "PERMISSION_DENIED", message: "denied" };
     vi.mocked(commands.fsReadFile).mockRejectedValue(error);
