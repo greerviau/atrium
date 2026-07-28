@@ -1,5 +1,5 @@
 diff --git a/node_modules/@replit/codemirror-minimap/dist/index.cjs b/node_modules/@replit/codemirror-minimap/dist/index.cjs
-index 3f0c98a..a092367 100644
+index 3f0c98a..a804dd4 100644
 --- a/node_modules/@replit/codemirror-minimap/dist/index.cjs
 +++ b/node_modules/@replit/codemirror-minimap/dist/index.cjs
 @@ -108,9 +108,12 @@ const OverlayView = view.ViewPlugin.fromClass(class {
@@ -18,7 +18,7 @@ index 3f0c98a..a092367 100644
          // Attach the overlay elements to the minimap
          const inner = view.dom.querySelector(".cm-minimap-inner");
          if (inner) {
-@@ -123,9 +126,9 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+@@ -123,10 +126,13 @@ const OverlayView = view.ViewPlugin.fromClass(class {
      }
      remove() {
          if (this.container) {
@@ -29,10 +29,79 @@ index 3f0c98a..a092367 100644
 +            window.removeEventListener("mouseup", this._boundOnMouseUp);
 +            window.removeEventListener("mousemove", this._boundOnMouseMove);
              this.container.remove();
++            if (this._isDragging) {
++                document.body.style.cursor = "";
++            }
          }
      }
+     update(update) {
+@@ -192,28 +198,37 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+         if (!this.container) {
+             return;
+         }
+-        // Ignore right click
+-        if (event.button === 2) {
++        // Only the primary (left) button starts a drag; right- and
++        // middle-click are left untouched.
++        if (event.button !== 0) {
+             return;
+         }
+-        // If target is the overlay start dragging
++        event.preventDefault();
+         const { clientY, target } = event;
+-        if (target === this.dom) {
+-            this._dragStartY = event.clientY;
+-            this._isDragging = true;
+-            this.container.classList.add("cm-minimap-overlay-active");
+-            return;
+-        }
+-        // Updates the scroll position of the EditorView based on the
+-        // position of the MouseEvent on the minimap canvas
+-        const { clientHeight, scrollHeight, scrollTop } = this.view.scrollDOM;
+-        const targetTop = target.getBoundingClientRect().top;
+-        const deltaY = (clientY - targetTop) * SCALE;
+-        const scrollRatio = scrollTop / (scrollHeight - clientHeight);
+-        const visibleRange = clientHeight * SCALE - clientHeight;
+-        const visibleTop = visibleRange * scrollRatio;
+-        const top = Math.max(0, scrollTop - visibleTop);
+-        this.view.scrollDOM.scrollTop = top + deltaY - clientHeight / 2;
++        if (target !== this.dom) {
++            // Updates the scroll position of the EditorView based on the
++            // position of the MouseEvent on the minimap canvas
++            const { clientHeight, scrollHeight, scrollTop } = this.view.scrollDOM;
++            const targetTop = target.getBoundingClientRect().top;
++            const deltaY = (clientY - targetTop) * SCALE;
++            const scrollRatio = scrollTop / (scrollHeight - clientHeight);
++            const visibleRange = clientHeight * SCALE - clientHeight;
++            const visibleTop = visibleRange * scrollRatio;
++            const top = Math.max(0, scrollTop - visibleTop);
++            this.view.scrollDOM.scrollTop = top + deltaY - clientHeight / 2;
++            // Re-anchor the indicator to the jumped-to position before
++            // engaging drag-tracking below: computeTop() no-ops once
++            // _isDragging is set, and onMouseMove's own delta math reads
++            // this.dom.style.top, so a stale value here throws the jump
++            // away on the very first pointer move of the gesture.
++            this.computeTop();
++        }
++        // Any primary-button mousedown inside the container starts a drag,
++        // whether it lands on the viewport indicator or the canvas/track.
++        this._dragStartY = event.clientY;
++        this._isDragging = true;
++        this.container.classList.add("cm-minimap-overlay-active");
++        document.body.style.cursor = "default";
+     }
+     onMouseUp(_event) {
+         // Stop dragging on mouseup
+@@ -221,6 +236,7 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+             this._dragStartY = undefined;
+             this._isDragging = false;
+             this.container.classList.remove("cm-minimap-overlay-active");
++            document.body.style.cursor = "";
+         }
+     }
+     onMouseMove(event) {
 diff --git a/node_modules/@replit/codemirror-minimap/dist/index.js b/node_modules/@replit/codemirror-minimap/dist/index.js
-index c7c9a04..f9c071a 100644
+index c7c9a04..fab95fd 100644
 --- a/node_modules/@replit/codemirror-minimap/dist/index.js
 +++ b/node_modules/@replit/codemirror-minimap/dist/index.js
 @@ -100,9 +100,12 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
@@ -51,7 +120,7 @@ index c7c9a04..f9c071a 100644
          // Attach the overlay elements to the minimap
          const inner = view.dom.querySelector(".cm-minimap-inner");
          if (inner) {
-@@ -115,9 +118,9 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+@@ -115,10 +118,13 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
      }
      remove() {
          if (this.container) {
@@ -62,5 +131,74 @@ index c7c9a04..f9c071a 100644
 +            window.removeEventListener("mouseup", this._boundOnMouseUp);
 +            window.removeEventListener("mousemove", this._boundOnMouseMove);
              this.container.remove();
++            if (this._isDragging) {
++                document.body.style.cursor = "";
++            }
          }
      }
+     update(update) {
+@@ -184,28 +190,37 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+         if (!this.container) {
+             return;
+         }
+-        // Ignore right click
+-        if (event.button === 2) {
++        // Only the primary (left) button starts a drag; right- and
++        // middle-click are left untouched.
++        if (event.button !== 0) {
+             return;
+         }
+-        // If target is the overlay start dragging
++        event.preventDefault();
+         const { clientY, target } = event;
+-        if (target === this.dom) {
+-            this._dragStartY = event.clientY;
+-            this._isDragging = true;
+-            this.container.classList.add("cm-minimap-overlay-active");
+-            return;
+-        }
+-        // Updates the scroll position of the EditorView based on the
+-        // position of the MouseEvent on the minimap canvas
+-        const { clientHeight, scrollHeight, scrollTop } = this.view.scrollDOM;
+-        const targetTop = target.getBoundingClientRect().top;
+-        const deltaY = (clientY - targetTop) * SCALE;
+-        const scrollRatio = scrollTop / (scrollHeight - clientHeight);
+-        const visibleRange = clientHeight * SCALE - clientHeight;
+-        const visibleTop = visibleRange * scrollRatio;
+-        const top = Math.max(0, scrollTop - visibleTop);
+-        this.view.scrollDOM.scrollTop = top + deltaY - clientHeight / 2;
++        if (target !== this.dom) {
++            // Updates the scroll position of the EditorView based on the
++            // position of the MouseEvent on the minimap canvas
++            const { clientHeight, scrollHeight, scrollTop } = this.view.scrollDOM;
++            const targetTop = target.getBoundingClientRect().top;
++            const deltaY = (clientY - targetTop) * SCALE;
++            const scrollRatio = scrollTop / (scrollHeight - clientHeight);
++            const visibleRange = clientHeight * SCALE - clientHeight;
++            const visibleTop = visibleRange * scrollRatio;
++            const top = Math.max(0, scrollTop - visibleTop);
++            this.view.scrollDOM.scrollTop = top + deltaY - clientHeight / 2;
++            // Re-anchor the indicator to the jumped-to position before
++            // engaging drag-tracking below: computeTop() no-ops once
++            // _isDragging is set, and onMouseMove's own delta math reads
++            // this.dom.style.top, so a stale value here throws the jump
++            // away on the very first pointer move of the gesture.
++            this.computeTop();
++        }
++        // Any primary-button mousedown inside the container starts a drag,
++        // whether it lands on the viewport indicator or the canvas/track.
++        this._dragStartY = event.clientY;
++        this._isDragging = true;
++        this.container.classList.add("cm-minimap-overlay-active");
++        document.body.style.cursor = "default";
+     }
+     onMouseUp(_event) {
+         // Stop dragging on mouseup
+@@ -213,6 +228,7 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+             this._dragStartY = undefined;
+             this._isDragging = false;
+             this.container.classList.remove("cm-minimap-overlay-active");
++            document.body.style.cursor = "";
+         }
+     }
+     onMouseMove(event) {
