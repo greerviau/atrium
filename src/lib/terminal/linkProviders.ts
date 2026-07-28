@@ -163,7 +163,21 @@ class FilePathLinkProvider implements ILinkProvider {
       const wasNewest = this.segments[this.segments.length - 1]?.marker === marker;
       this.segments = this.segments.filter((s) => s.marker.line !== -1);
       if (wasNewest) {
-        this.registerSegment(cwd);
+        // Deferred to a microtask, not called synchronously: xterm's own
+        // `clearMarkers`/`clearAllMarkers` iterate `Buffer.markers` while
+        // re-reading its length each step, and `registerMarker` pushes onto
+        // that same array — calling it synchronously from inside this
+        // `onDispose` re-enters the loop that is still draining it, which
+        // never terminates and hangs the whole webview. Deferring also
+        // means a re-anchor triggered by leaving the alt screen lands on
+        // the normal buffer, which is already active again by the time the
+        // microtask runs. (If a single clear disposes two segments and the
+        // older one's callback happens to run first, the newer one may
+        // already be filtered out of `segments` by the time its own
+        // callback checks `wasNewest`, and nothing re-anchors — an
+        // acceptable degradation to `spawnCwd`, the same fallback disposal
+        // already takes via ordinary trimming.)
+        queueMicrotask(() => this.registerSegment(cwd));
       }
     });
     this.segments.push({ marker, cwd });

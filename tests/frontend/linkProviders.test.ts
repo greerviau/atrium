@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { Terminal, ILink, ILinkProvider, IMarker } from "@xterm/xterm";
+import { Terminal } from "@xterm/xterm";
+import type { ILink, ILinkProvider, IMarker } from "@xterm/xterm";
 import { registerLinkProviders } from "../../src/lib/terminal/linkProviders";
 import { shellOpenExternal, fsResolveCandidates } from "../../src/lib/ipc/commands";
 import { showErrorToast } from "../../src/lib/stores/errorToast";
@@ -306,6 +307,7 @@ describe("FilePathLinkProvider.activate", () => {
     cursorLine = 25;
     markers[1].line = -1;
     markers[1].disposeListeners.forEach((cb) => cb());
+    await Promise.resolve(); // let the deferred (queueMicrotask) re-anchor run
 
     // Line 30 (0-based 29) was printed after the clear, still under sub_b.
     const link = await linksAt(providers[1], 30);
@@ -315,4 +317,93 @@ describe("FilePathLinkProvider.activate", () => {
       expect.arrayContaining([expect.objectContaining({ cwdHint: "/repo/sub_b" })]),
     );
   });
+});
+
+/**
+ * The hand-rolled fake `registerMarker` above reproduces the *event* of an
+ * out-of-order marker disposal, but not xterm mutating and iterating its own
+ * `Buffer.markers` array around the `onDispose` callback — which is exactly
+ * what a synchronous re-anchor re-enters, hanging indefinitely (see the PR
+ * #343 review). These drive a real `@xterm/xterm` `Terminal` through the two
+ * sequences that actually dispose a marker out of order, to prove the
+ * deferred (`queueMicrotask`) re-anchor doesn't hang.
+ */
+describe("FilePathLinkProvider — N1 real-terminal regression (screen clear / alt-screen exit)", () => {
+  beforeEach(() => {
+    // jsdom has no matchMedia implementation, and @xterm/xterm's
+    // CoreBrowserService calls it during terminal.open() setup.
+    window.matchMedia ??= ((query: string) =>
+      ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }) as unknown as MediaQueryList) as typeof window.matchMedia;
+    vi.mocked(fsResolveCandidates).mockReset();
+  });
+
+  function realTerminal(): { terminal: Terminal; providers: ILinkProvider[] } {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const terminal = new Terminal({ cols: 80, rows: 24 });
+    terminal.open(container);
+    const providers: ILinkProvider[] = [];
+    const original = terminal.registerLinkProvider.bind(terminal);
+    vi.spyOn(terminal, "registerLinkProvider").mockImplementation((provider: ILinkProvider) => {
+      providers.push(provider);
+      return original(provider);
+    });
+    return { terminal, providers };
+  }
+
+  function write(terminal: Terminal, data: string): Promise<void> {
+    return new Promise((resolve) => terminal.write(data, resolve));
+  }
+
+  it("does not hang when the real terminfo clear sequence disposes a still-current segment's marker", async () => {
+    vi.mocked(fsResolveCandidates).mockResolvedValue(["/repo/project/docs/plan.md"]);
+    const { terminal, providers } = realTerminal();
+    const handle = registerLinkProviders(terminal, "local", "/repo");
+
+    await write(terminal, "line one\r\nline two\r\nline three\r\n");
+    handle.setCwdHint("/repo/project"); // segment marker at the current cursor row
+    await write(terminal, "more output\r\n");
+    // The real terminfo `clear`/Ctrl-L sequence: cursor home, then erase-in-display.
+    // eraseInDisplay(2) clears rows bottom-up while the cursor sits at row 0
+    // (having just been homed), so it reaches the just-registered marker's
+    // row and disposes it while it's still the newest segment.
+    await write(terminal, "\x1b[H\x1b[2J");
+    await write(terminal, "open docs/plan.md");
+
+    const row = terminal.buffer.active.cursorY + terminal.buffer.active.baseY;
+    const link = await linksAt(providers[1], row + 1);
+    expect(link).toBeDefined();
+    expect(fsResolveCandidates).toHaveBeenCalledWith(
+      "local",
+      expect.arrayContaining([expect.objectContaining({ cwdHint: "/repo/project" })]),
+    );
+  }, 2000);
+
+  it("does not hang when leaving the alt screen disposes a still-current segment's marker", async () => {
+    vi.mocked(fsResolveCandidates).mockResolvedValue(["/repo/project/docs/plan.md"]);
+    const { terminal, providers } = realTerminal();
+    const handle = registerLinkProviders(terminal, "local", "/repo");
+
+    await write(terminal, "\x1b[?1049h"); // enter the alt screen (e.g. vim opening)
+    handle.setCwdHint("/repo/project"); // segment marker lands on the alt buffer
+    await write(terminal, "\x1b[?1049l"); // leave the alt screen (e.g. vim quitting) -- clears all alt-buffer markers
+    await write(terminal, "open docs/plan.md");
+
+    const row = terminal.buffer.active.cursorY + terminal.buffer.active.baseY;
+    const link = await linksAt(providers[1], row + 1);
+    expect(link).toBeDefined();
+    expect(fsResolveCandidates).toHaveBeenCalledWith(
+      "local",
+      expect.arrayContaining([expect.objectContaining({ cwdHint: "/repo/project" })]),
+    );
+  }, 2000);
 });
