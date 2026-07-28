@@ -2,7 +2,7 @@
   import type { EditorLeafPane, SplitDirection } from "./editorPaneTree";
   import {
     tabsState,
-    reloadFromDisk,
+    reloadFromDiskReportingErrors,
     dismissConflict,
     toggleMarkdownViewMode,
     requestSaveReportingErrors,
@@ -94,7 +94,7 @@
         {#if tab?.hasExternalConflict}
           <div class="conflict-banner">
             File changed on disk.
-            <button onclick={() => reloadFromDisk(path)}>Reload</button>
+            <button onclick={() => reloadFromDiskReportingErrors(path)}>Reload</button>
             <button onclick={() => dismissConflict(path)}>Keep mine</button>
           </div>
         {:else if tab?.isDeleted}

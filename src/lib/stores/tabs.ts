@@ -313,6 +313,19 @@ export async function reloadFromDisk(path: string): Promise<void> {
 }
 
 /**
+ * Fire-and-forget wrapper around `reloadFromDisk` for the conflict banner's
+ * "Reload" button: a rejection (e.g. the file grew past the read guard, or
+ * was deleted, since the click) surfaces as a toast instead of an unhandled
+ * rejection, the same idiom `requestSaveReportingErrors` and
+ * `openFileReportingErrors` already use.
+ */
+export function reloadFromDiskReportingErrors(path: string): void {
+  reloadFromDisk(path).catch((err: unknown) => {
+    showErrorToast(`Couldn't reload ${basename(path)}: ${describeError(err)}`);
+  });
+}
+
+/**
  * Reacts to a path being deleted, in-app or externally: every open tab at or
  * under `path` (a directory delete cascades to its open descendants) is
  * either closed outright (clean — nothing to lose) or flagged `isDeleted`

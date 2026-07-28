@@ -8,6 +8,7 @@ import {
   markDirty,
   reconcileExternalChange,
   reloadFromDisk,
+  reloadFromDiskReportingErrors,
   dismissConflict,
   requestCloseTab,
   requestSave,
@@ -528,12 +529,12 @@ describe("reconcileExternalChange's NOT_FOUND and FILE_TOO_LARGE catches", () =>
     });
     vi.mocked(commands.fsReadFile).mockRejectedValue({
       code: "FILE_TOO_LARGE",
-      message: "'/notes.md' is 12.3 MB, which exceeds the 10.0 MB open limit",
+      message: "'/notes.md' is 12.3 MiB, which exceeds the 10.0 MiB open limit",
     });
 
     await expect(reconcileExternalChange("/notes.md")).resolves.toBeUndefined();
 
-    expect(get(errorToast)).toBe("'/notes.md' is 12.3 MB, which exceeds the 10.0 MB open limit");
+    expect(get(errorToast)).toBe("'/notes.md' is 12.3 MiB, which exceeds the 10.0 MiB open limit");
     expect(get(tabsState).tabs[0].savedDoc).toBe("last-known contents");
   });
 
@@ -710,6 +711,47 @@ describe("requestSave / notifySaveComplete", () => {
 
     expect(firstError).toBe(error);
     expect(secondError).toBe(error);
+  });
+});
+
+describe("reloadFromDiskReportingErrors", () => {
+  beforeEach(() => {
+    tabsState.set({ tabs: [], activeTabPath: null });
+    errorToast.set(null);
+    vi.mocked(commands.fsReadFile).mockReset();
+  });
+
+  it("shows an error toast naming the file's basename when the reload rejects, e.g. FILE_TOO_LARGE", async () => {
+    tabsState.set({
+      tabs: [codeTab("/notes/a.md", { isDirty: true, hasExternalConflict: true })],
+      activeTabPath: "/notes/a.md",
+    });
+    vi.mocked(commands.fsReadFile).mockRejectedValue({
+      code: "FILE_TOO_LARGE",
+      message: "'/notes/a.md' is 12.3 MiB, which exceeds the 10.0 MiB open limit",
+    });
+
+    reloadFromDiskReportingErrors("/notes/a.md");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(get(errorToast)).toBe(
+      "Couldn't reload a.md: '/notes/a.md' is 12.3 MiB, which exceeds the 10.0 MiB open limit",
+    );
+  });
+
+  it("leaves the error toast untouched when the reload succeeds", async () => {
+    tabsState.set({
+      tabs: [codeTab("/notes/a.md", { isDirty: true, hasExternalConflict: true })],
+      activeTabPath: "/notes/a.md",
+    });
+    vi.mocked(commands.fsReadFile).mockResolvedValue("disk contents");
+
+    reloadFromDiskReportingErrors("/notes/a.md");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(get(errorToast)).toBeNull();
   });
 });
 
