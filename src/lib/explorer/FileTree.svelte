@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
-  import { fileTree, loadRoot, loadChildren } from "../stores/fileTree";
+  import { onMount, onDestroy, tick } from "svelte";
+  import { fileTree, loadRoot, loadChildren, collapse, toggleExpanded, type TreeNode } from "../stores/fileTree";
   import { workspace } from "../stores/workspace";
   import {
     contextMenu,
@@ -40,6 +40,110 @@
       void loadRoot($workspace.root);
     }
   });
+
+  // Roving tabindex + arrow-key navigation (§ Approach step 1). Starts at the
+  // root the first time `$fileTree.root` loads and otherwise just tracks
+  // wherever the user last navigated during the session — no coupling to
+  // `tabsState`/`activeTabPath`.
+  let focusedPath = $state<string | null>(null);
+
+  $effect(() => {
+    const root = $fileTree.root;
+    if (root && focusedPath === null) {
+      focusedPath = root.entry.path;
+    }
+  });
+
+  interface VisibleRow {
+    path: string;
+    node: TreeNode;
+    depth: number;
+    parentPath: string | null;
+  }
+
+  // Expansion-aware flattening of the whole tree: a node is included only
+  // when every ancestor up to the root has `expanded: true`, giving arrow-key
+  // and Home/End navigation a single ordering to walk (§ Approach step 1).
+  function flattenVisible(root: TreeNode | null): VisibleRow[] {
+    const rows: VisibleRow[] = [];
+    function walk(node: TreeNode, depth: number, parentPath: string | null): void {
+      rows.push({ path: node.entry.path, node, depth, parentPath });
+      if (node.entry.isDir && node.expanded && node.children) {
+        for (const child of node.children) {
+          walk(child, depth + 1, node.entry.path);
+        }
+      }
+    }
+    if (root) walk(root, 0, null);
+    return rows;
+  }
+
+  let visibleRows = $derived(flattenVisible($fileTree.root));
+
+  function onFocusRow(path: string): void {
+    focusedPath = path;
+  }
+
+  async function moveFocusTo(path: string): Promise<void> {
+    focusedPath = path;
+    await tick();
+    treeEl.querySelector<HTMLElement>(`.row[data-path="${CSS.escape(path)}"]`)?.focus();
+  }
+
+  // Arrow/Home/End handling, matching the WAI-ARIA APG Tree View pattern (§
+  // Approach step 2). Expanding a lazily-unloaded directory keeps focus in
+  // place, so navigating into newly-loaded children is always a separate,
+  // later keystroke against an already-populated `visibleRows`.
+  function handleRowKeydown(event: KeyboardEvent, path: string): void {
+    const index = visibleRows.findIndex((row) => row.path === path);
+    if (index === -1) return;
+    const row = visibleRows[index];
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      const next = visibleRows[Math.min(index + 1, visibleRows.length - 1)];
+      void moveFocusTo(next.path);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      const prev = visibleRows[Math.max(index - 1, 0)];
+      void moveFocusTo(prev.path);
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      if (!row.node.entry.isDir) return;
+      event.preventDefault();
+      if (!row.node.expanded) {
+        void toggleExpanded(row.node);
+        return;
+      }
+      const next = visibleRows[index + 1];
+      if (next) void moveFocusTo(next.path);
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      if (row.node.entry.isDir && row.node.expanded) {
+        event.preventDefault();
+        collapse(row.node.entry.path);
+        return;
+      }
+      if (!row.parentPath) return;
+      event.preventDefault();
+      void moveFocusTo(row.parentPath);
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      if (visibleRows.length > 0) void moveFocusTo(visibleRows[0].path);
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      if (visibleRows.length > 0) void moveFocusTo(visibleRows[visibleRows.length - 1].path);
+      return;
+    }
+  }
 
   async function beginCreate(dir: string, isDir: boolean): Promise<void> {
     closeContextMenu();
@@ -144,6 +248,11 @@
   // event's `target` is still the row, never the container, even though the
   // container's own listener also receives it (§ "Third revision" item 2).
   function onTreeContainerKeydown(event: KeyboardEvent): void {
+    const targetPath = (event.target as HTMLElement | null)?.dataset.path;
+    if (targetPath !== undefined) {
+      handleRowKeydown(event, targetPath);
+      return;
+    }
     if (event.target !== treeEl) return;
     const root = $fileTree.root;
     if (!root) return;
@@ -174,8 +283,8 @@
   tabindex="-1"
 >
   {#if $fileTree.root}
-    <div role="tree">
-      <FileTreeNode node={$fileTree.root} />
+    <div role="tree" aria-label="File Explorer">
+      <FileTreeNode node={$fileTree.root} {focusedPath} {onFocusRow} />
     </div>
   {/if}
 </div>
