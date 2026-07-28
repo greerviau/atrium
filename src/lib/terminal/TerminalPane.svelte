@@ -7,7 +7,7 @@
   import "@xterm/xterm/css/xterm.css";
   import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
   import { ptySpawn, ptySubscribe, ptyWrite, ptyResize, ptyKill } from "../ipc/commands";
-  import { registerLinkProviders } from "./linkProviders";
+  import { registerLinkProviders, type LinkProviderHandle } from "./linkProviders";
   import { theme as themeStore } from "../stores/theme";
   import { buildXtermTheme } from "../theme/xtermTheme";
   import { zoom } from "../stores/textSize";
@@ -50,6 +50,7 @@
 
   let titleState: TitleState;
   let lastEmittedTitle: string | undefined;
+  let linkProviderHandle: LinkProviderHandle | undefined;
   let dropTargetActive = $derived($dragOverTerminalPane === container && terminalId !== undefined);
   let unregisterDropTarget: (() => void) | undefined;
 
@@ -135,7 +136,11 @@
   }
 
   function dispatch(event: Parameters<typeof reduceTitleState>[1]): void {
+    const previousCwd = titleState.cwd;
     titleState = reduceTitleState(titleState, event);
+    if (titleState.cwd !== previousCwd) {
+      linkProviderHandle?.setCwdHint(titleState.cwd);
+    }
     const title = computeTabTitle(titleState);
     if (title !== lastEmittedTitle) {
       lastEmittedTitle = title;
@@ -199,7 +204,7 @@
       }),
     );
 
-    registerLinkProviders(terminal, workspaceId, cwd);
+    linkProviderHandle = registerLinkProviders(terminal, workspaceId, cwd);
 
     titleChangeDisposable = terminal.onTitleChange((title) => {
       dispatch({ type: "title", title });
