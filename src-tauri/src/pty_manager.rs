@@ -4,6 +4,7 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -25,6 +26,20 @@ const TITLE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// generally considered perceptible for interactive echo latency, while
 /// still coalescing a flood of small reads into a handful of larger sends.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(8);
+
+// The tick-based tests below (`output_after_idle_period_arrives_within_
+// roughly_one_flush_interval`, `flood_output_is_coalesced_into_few_data_
+// events`) assert against *observed ticks*, deliberately invariant to how
+// long any one tick takes to run — that's what makes them immune to CI
+// scheduling jitter. That invariance means they cannot detect a regression
+// to this *declared* interval, nor a regression that leaves it unchanged but
+// slows the loop body itself (each iteration still increments the counter
+// once, however long it takes). This assert only guards the declared
+// constant, at compile time, against a value change; it does not guarantee
+// the effective per-iteration cadence at runtime. It's what defends the doc
+// comment above ("well under the ~100ms threshold generally considered
+// perceptible for interactive echo latency") against a change to this line.
+const _: () = assert!(FLUSH_INTERVAL.as_millis() <= 20);
 
 /// Safety cap on `Shared::pending`: if a burst of output between two flush
 /// ticks would push `pending` past this, `push_data` flushes immediately
@@ -154,6 +169,20 @@ struct PtySession {
 
 pub struct PtyManager {
     sessions: Arc<Mutex<HashMap<String, PtySession>>>,
+    /// Counts completed `flush_output_loop` iterations (including ones that
+    /// find nothing pending and flush nothing) — not "flushes performed."
+    /// Lets tests assert "landed within N observed ticks of this iteration"
+    /// instead of "within N wall-clock ms," which is invariant to how long
+    /// any individual tick took to actually run under CI scheduling
+    /// contention. See the regression history on
+    /// `output_after_idle_period_arrives_within_roughly_one_flush_interval`.
+    /// Only read by `#[cfg(test)]` code today, so a plain (non-test) build
+    /// never reads it — `cfg_attr` scopes the allowance to exactly that
+    /// build, rather than gating the field itself behind `cfg(test)` and
+    /// letting the struct's shape differ between test and production
+    /// compiles.
+    #[cfg_attr(not(test), allow(dead_code))]
+    flush_ticks: Arc<AtomicU64>,
 }
 
 impl PtyManager {
@@ -167,11 +196,16 @@ impl PtyManager {
     pub fn new() -> Self {
         let sessions: Arc<Mutex<HashMap<String, PtySession>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let flush_ticks = Arc::new(AtomicU64::new(0));
         let poller_sessions = sessions.clone();
         std::thread::spawn(move || Self::poll_titles_loop(poller_sessions));
         let flush_sessions = sessions.clone();
-        std::thread::spawn(move || Self::flush_output_loop(flush_sessions));
-        Self { sessions }
+        let flush_ticks_clone = flush_ticks.clone();
+        std::thread::spawn(move || Self::flush_output_loop(flush_sessions, flush_ticks_clone));
+        Self {
+            sessions,
+            flush_ticks,
+        }
     }
 
     /// `shell_override`, when set, is used in place of `$SHELL`/the `/bin/zsh`
@@ -457,9 +491,19 @@ impl PtyManager {
     /// of how many terminals are open, and a session is picked up or
     /// dropped automatically by virtue of being present or absent in the
     /// sessions map on the next tick.
-    fn flush_output_loop(sessions: Arc<Mutex<HashMap<String, PtySession>>>) {
+    fn flush_output_loop(
+        sessions: Arc<Mutex<HashMap<String, PtySession>>>,
+        flush_ticks: Arc<AtomicU64>,
+    ) {
         loop {
             std::thread::sleep(FLUSH_INTERVAL);
+            // Incremented before the flush pass: `flush_pending` calls
+            // `channel.send` synchronously, which can run a test's channel
+            // closure inline. Incrementing first means a marker delivered on
+            // the very first tick after enqueue reads as `ticks_elapsed == 1`
+            // ("tick 1"), matching this counter's own name and the tests'
+            // wording, rather than `0`.
+            flush_ticks.fetch_add(1, Ordering::SeqCst);
 
             let shared_handles: Vec<Arc<Mutex<Shared>>> = {
                 let sessions = sessions.lock().unwrap();
@@ -602,6 +646,7 @@ impl PtyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
     use std::time::Instant;
     use tauri::ipc::InvokeResponseBody;
 
@@ -1182,30 +1227,59 @@ mod tests {
             .spawn(dir_b.path().to_string_lossy().to_string(), 80, 24, None)
             .unwrap();
 
-        std::thread::scope(|scope| {
-            let kill_thread = scope.spawn(|| manager.kill(&terminal_a));
+        let kill_started = Arc::new(AtomicBool::new(false));
+        let kill_started_clone = kill_started.clone();
 
-            // Give the kill thread a moment to actually start and acquire
-            // the sessions lock before `resize` below tries for it — without
-            // this, `resize` on the main thread routinely wins the race to
-            // spawn a fresh OS thread and never contends on the lock at all.
+        std::thread::scope(|scope| {
+            let kill_thread = scope.spawn(|| {
+                kill_started_clone.store(true, Ordering::SeqCst);
+                let kill_start = Instant::now();
+                let result = manager.kill(&terminal_a);
+                (result, kill_start.elapsed())
+            });
+
+            // Spin with a deadline, not an unbounded one: proves the kill
+            // thread was actually scheduled (a fixed sleep alone can expire
+            // before that happens under load, letting `resize` win the lock
+            // uncontended and pass vacuously) without turning "kill thread
+            // somehow never starts" into a hang.
+            let spin_deadline = Instant::now() + Duration::from_secs(5);
+            while !kill_started.load(Ordering::SeqCst) {
+                assert!(Instant::now() < spin_deadline, "kill thread never started");
+                std::thread::yield_now();
+            }
+            // The flag only proves the thread was scheduled, not that it has
+            // reached `sessions.lock()` inside `kill`. Keep this sleep —
+            // dropping it in favor of the spin alone cuts this test's
+            // ability to detect the regression to about 50% on an idle
+            // machine, since `kill()` only holds the lock for a
+            // sub-microsecond `remove()`; the sleep is what gives the kill
+            // thread its head start onto the lock before `resize` contends
+            // for it.
             std::thread::sleep(Duration::from_millis(2));
 
-            // `resize` is just an ioctl and normally returns in well under a
-            // millisecond; 10ms leaves ample margin for scheduling jitter
-            // while staying well below the tens of milliseconds
-            // `kill_session`'s process-table refresh and signal loop take
-            // (measured ~28ms for a shell with 5 descendants on this
-            // machine), so this bound only passes if `resize` truly wasn't
-            // serialized behind terminal a's reaping.
-            let start = Instant::now();
+            let resize_start = Instant::now();
             manager.resize(&terminal_b, 100, 40).unwrap();
-            assert!(
-                start.elapsed() < Duration::from_millis(10),
-                "resize() for another terminal was blocked by terminal a's reaping"
-            );
+            let resize_elapsed = resize_start.elapsed();
 
-            kill_thread.join().unwrap().unwrap();
+            let (kill_result, kill_elapsed) = kill_thread.join().unwrap();
+            kill_result.unwrap();
+
+            // Relative rather than absolute: both terms inflate together
+            // under CI scheduling contention, so this stays meaningful on a
+            // slow runner instead of flaking the way a fixed millisecond
+            // bound would. `kill_session`'s process-table refresh and signal
+            // loop measured ~28ms for a shell with 5 descendants on this
+            // machine, against which `resize_elapsed < kill_elapsed / 3`
+            // sits essentially on top of the previous fixed 10ms bound —
+            // it only loosens as the runner slows.
+            assert!(
+                resize_elapsed < kill_elapsed / 3,
+                "resize() for another terminal ({:?}) was not clearly faster than terminal a's reaping \
+                 ({:?}) — looks serialized behind it",
+                resize_elapsed,
+                kill_elapsed
+            );
         });
 
         manager.kill(&terminal_b).unwrap();
@@ -1227,6 +1301,14 @@ mod tests {
         let (channel, chunks) = data_chunks_channel();
         manager.subscribe(&terminal_id, channel).unwrap();
 
+        // Let the shell's startup banner/prompt land and settle, then clear
+        // it — this measurement is about the flood's own event count, not
+        // the banner's. Clearing here (rather than budgeting for it in the
+        // slop below) removes that term from the bound entirely instead of
+        // estimating it.
+        std::thread::sleep(Duration::from_millis(200));
+        chunks.lock().unwrap().clear();
+
         // `tr` over `/dev/zero` produces a fast, sustained burst with no
         // embedded newlines, so the pty's output post-processing (which can
         // rewrite `\n` to `\r\n`) can't perturb the byte count checked
@@ -1234,6 +1316,7 @@ mod tests {
         // rather than a literal `A` so the typed command line itself (which
         // the pty echoes back verbatim as it's typed) contains no `A` to
         // contaminate the count.
+        let ticks_before = manager.flush_ticks.load(Ordering::SeqCst);
         manager
             .write(
                 &terminal_id,
@@ -1276,6 +1359,10 @@ mod tests {
             },
         );
 
+        let ticks_spanned = manager
+            .flush_ticks
+            .load(Ordering::SeqCst)
+            .saturating_sub(ticks_before);
         let received = chunks.lock().unwrap();
         let concatenated: Vec<u8> = received.iter().flatten().copied().collect();
         assert_eq!(
@@ -1286,11 +1373,41 @@ mod tests {
 
         // Without coalescing, 500,000 bytes at up to 4096 bytes per read
         // would produce on the order of 122 separate `Data` events. The
-        // flush loop should collapse that down to a small number of larger
-        // sends instead, bounded by flush cadence rather than input size.
+        // flush loop should collapse that down to roughly one `Data` event
+        // per flush tick spanned, plus whatever `PENDING_CAP` forces by
+        // volume alone, rather than a fixed event count that implicitly
+        // assumes the burst completes within some particular wall-clock
+        // window.
+        let pending_cap_flushes = 500_000usize.div_ceil(PENDING_CAP); // = 2; the true max is 1 (500KB can only cross the 256KB cap once) — kept as a safe over-estimate rather than a tighter exact count.
+                                                                      // Slop budget, enumerated rather than a round number:
+                                                                      //  - +1 for the trailing `atrium-flood-done` event: it can arrive in
+                                                                      //    its own send after `wait_for`'s condition (matched on the
+                                                                      //    fill-byte run alone) is satisfied but before `chunks` is locked
+                                                                      //    here — a real, uncounted event, not an over-count to guard
+                                                                      //    against.
+                                                                      //  - `ticks_spanned` is read *after* `wait_for` returns, so
+                                                                      //    `wait_for`'s own 50ms poll cadence can only make `ticks_spanned`
+                                                                      //    an over-estimate of the ticks the burst actually spanned — that
+                                                                      //    direction loosens the bound and needs no slop of its own.
+                                                                      // Pre-burst prompt/banner events are excluded by construction
+                                                                      // (`chunks` is cleared immediately before `ticks_before` is read,
+                                                                      // above) rather than budgeted for.
+                                                                      //
+                                                                      // This bound is wall-clock-invariant by construction, which also
+                                                                      // means it degrades rather than staying tight as the runner gets
+                                                                      // slower: past roughly 120 ticks spanned (about a second of
+                                                                      // wall-clock time at the production `FLUSH_INTERVAL`), it exceeds
+                                                                      // the no-coalescing-at-all event count and can no longer fail
+                                                                      // regardless of whether coalescing is actually working. That is a
+                                                                      // real, accepted loss of detection power on a sufficiently slow
+                                                                      // runner — the alternative (a fixed event count) actively flakes
+                                                                      // under those same conditions instead, which is strictly worse.
+        let max_expected_events = ticks_spanned + pending_cap_flushes as u64 + 1;
         assert!(
-            received.len() < 40,
-            "expected the flood to be coalesced into a handful of Data events, got {}",
+            received.len() as u64 <= max_expected_events,
+            "expected the flood to be coalesced into roughly one Data event per flush tick spanned \
+             (~{ticks_spanned} ticks) plus PENDING_CAP-forced flushes (~{pending_cap_flushes}) and the \
+             trailing done-marker event, got {} events",
             received.len()
         );
 
@@ -1360,14 +1477,12 @@ mod tests {
             .unwrap();
 
         let received: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-        // Timestamped inside the channel closure, right as the marker
-        // actually lands, rather than derived from a `wait_for` poll loop —
-        // `wait_for` only samples every 50ms, which would quantize any
-        // measurement taken after it returns to that cadence and make a
-        // tight, meaningful bound impossible to assert on.
+        let arrived_tick: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(None));
         let arrived_at: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
         let received_clone = received.clone();
+        let arrived_tick_clone = arrived_tick.clone();
         let arrived_at_clone = arrived_at.clone();
+        let flush_ticks_for_closure = manager.flush_ticks.clone();
         let channel = Channel::new(move |body| {
             if let InvokeResponseBody::Json(json) = body {
                 if let Ok(PtyEvent::Data { data }) = serde_json::from_str::<PtyEvent>(&json) {
@@ -1375,10 +1490,18 @@ mod tests {
                         let mut received = received_clone.lock().unwrap();
                         received.extend_from_slice(&bytes);
                         if String::from_utf8_lossy(&received).contains("atrium-idle-burst-marker") {
+                            // Write `arrived_at` before `arrived_tick`: `wait_for`
+                            // below gates on `arrived_tick`, so if it were written
+                            // first, a poll landing in the gap between these two
+                            // statements could return with `arrived_at` still
+                            // `None` and panic on its `unwrap()` below.
                             arrived_at_clone
                                 .lock()
                                 .unwrap()
                                 .get_or_insert_with(Instant::now);
+                            arrived_tick_clone.lock().unwrap().get_or_insert_with(|| {
+                                flush_ticks_for_closure.load(Ordering::SeqCst)
+                            });
                         }
                     }
                 }
@@ -1387,34 +1510,65 @@ mod tests {
         });
         manager.subscribe(&terminal_id, channel).unwrap();
 
-        // Let the pty settle into an idle prompt before measuring.
+        // Let the pty settle (shell startup banner/prompt) and the flush loop
+        // reach steady cadence before measuring.
         std::thread::sleep(Duration::from_millis(200));
         received.lock().unwrap().clear();
 
+        // Enqueue directly into the coalescing buffer instead of writing to
+        // the real shell and waiting on an `echo` round-trip. This is the
+        // #261 invariant under test — "pending output is drained by the next
+        // flush tick, not stuck" — and a real shell write only adds child
+        // process and reader-thread scheduling noise to the measurement that
+        // has nothing to do with that invariant.
+        let shared = {
+            let sessions = manager.sessions.lock().unwrap();
+            sessions.get(&terminal_id).unwrap().shared.clone()
+        };
         let start = Instant::now();
-        manager
-            .write(&terminal_id, "echo atrium-idle-burst-marker\n")
-            .unwrap();
+        // Hold `shared`'s own lock across the tick read and the enqueue:
+        // `flush_pending` needs this same lock to run, so holding it here
+        // makes it structurally impossible for a flush pass to land between
+        // "read the tick count" and "enqueue the marker".
+        let mut shared_guard = shared.lock().unwrap();
+        let ticks_before_enqueue = manager.flush_ticks.load(Ordering::SeqCst);
+        shared_guard.push_data(b"atrium-idle-burst-marker");
+        drop(shared_guard);
 
         wait_for(
             Duration::from_secs(5),
             "output after an idle period took too long to arrive",
-            || arrived_at.lock().unwrap().is_some(),
+            || arrived_tick.lock().unwrap().is_some(),
         );
 
-        // `FLUSH_INTERVAL` is 8ms, so an exact measurement should land in
-        // low tens of milliseconds; 60ms leaves headroom for scheduling
-        // jitter while still being tight enough to catch a real regression
-        // (e.g. a coalescing window with no periodic flush at all, which
-        // would leave the marker sitting unflushed far longer than this).
-        // Deliberately not a round multiple of `wait_for`'s own 50ms poll
-        // cadence, even though this measurement no longer derives from it,
-        // so the two can never coincidentally land on the same boundary.
+        let ticks_elapsed = arrived_tick
+            .lock()
+            .unwrap()
+            .unwrap()
+            .saturating_sub(ticks_before_enqueue);
         let elapsed = arrived_at.lock().unwrap().unwrap() - start;
         assert!(
-            elapsed < Duration::from_millis(60),
-            "expected idle-then-burst output to arrive within about one flush interval, took {:?}",
-            elapsed
+            ticks_elapsed <= 2,
+            "expected idle-then-burst output to flush within about one observed flush tick \
+             (not stuck in the coalescing buffer), took {ticks_elapsed} tick(s), {elapsed:?} wall-clock",
+        );
+        // Coarse backstop only, kept for diagnostics/defense-in-depth against
+        // a genuinely stuck buffer that somehow still increments
+        // `arrived_tick` (it shouldn't be able to, but this costs nothing to
+        // keep). This does NOT defend `FLUSH_INTERVAL`'s cadence — with the
+        // measurement anchored at enqueue, `elapsed` is bounded by roughly
+        // one `FLUSH_INTERVAL`, so a regression to `FLUSH_INTERVAL` itself
+        // (e.g. 8ms -> 500ms) still yields `elapsed` well under 1s and would
+        // NOT trip this assertion. That cadence claim is guarded separately
+        // and deterministically by the `const _: () = assert!(...)` next to
+        // `FLUSH_INTERVAL`'s definition above. Do not read this line as
+        // cadence coverage. If this ever fires on CI, treat that as a reason
+        // to delete it rather than to widen it — with the tick assertion and
+        // the 5s `wait_for` both in place, it has essentially no detection
+        // power of its own.
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "expected idle-then-burst output within a second of enqueue even under CI jitter, took {elapsed:?}",
         );
 
         manager.kill(&terminal_id).unwrap();
