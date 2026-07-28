@@ -8,6 +8,7 @@ let view: EditorView | undefined;
 afterEach(() => {
   view?.destroy();
   view = undefined;
+  document.body.style.cursor = "";
 });
 
 function mount(enabled: boolean): HTMLElement {
@@ -48,5 +49,46 @@ describe("minimapExtension", () => {
     for (const rule of gutterRules) {
       expect(rule).not.toMatch(/position:\s*absolute/);
     }
+  });
+
+  it("pins the cursor to default on a container mousedown and clears it on mouseup", () => {
+    const container = mount(true);
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container");
+    expect(overlayContainer).not.toBeNull();
+
+    overlayContainer!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    expect(document.body.style.cursor).toBe("default");
+
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+    expect(document.body.style.cursor).toBe("");
+  });
+
+  it("prevents default on a mousemove following a mousedown on the container (not just the indicator)", () => {
+    const container = mount(true);
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container");
+    expect(overlayContainer).not.toBeNull();
+
+    // Mousedown lands on the container itself (the canvas/track), not the
+    // inner .cm-minimap-overlay indicator rectangle.
+    overlayContainer!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+
+    const moveEvent = new MouseEvent("mousemove", { bubbles: true, cancelable: true, button: 0, clientY: 50 });
+    window.dispatchEvent(moveEvent);
+    expect(moveEvent.defaultPrevented).toBe(true);
+
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+  });
+
+  it("clears the cursor when the view is destroyed mid-drag", () => {
+    const container = mount(true);
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container");
+    expect(overlayContainer).not.toBeNull();
+
+    overlayContainer!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    expect(document.body.style.cursor).toBe("default");
+
+    view?.destroy();
+    view = undefined;
+    expect(document.body.style.cursor).toBe("");
   });
 });
