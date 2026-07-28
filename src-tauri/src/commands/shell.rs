@@ -3,9 +3,13 @@ use tauri_plugin_opener::OpenerExt;
 
 /// Mirrors `prLinkRegex.ts` on the frontend. Re-checked here so this command
 /// can't be used to open arbitrary URLs even if a compromised or buggy
-/// frontend path called it with something else — the capability file scopes
-/// `opener:allow-open-url` to `https://github.com/*` already, but that scope
-/// is a glob, not a full URL-shape check, so this is a second, precise gate.
+/// frontend path called it with something else. This is the *only* gate:
+/// `OpenerExt::open_url` (what `app.opener().open_url(...)` below calls)
+/// goes straight to the OS opener with no scope check of its own — the
+/// scope check tauri-plugin-opener does apply only inside its own
+/// IPC-exposed `open_url` command, which this code never calls and the
+/// frontend never invokes directly (see `capabilities/default.json`, which
+/// grants no `opener:allow-open-url` permission for exactly this reason).
 fn is_pr_url(url: &str) -> bool {
     let Some(rest) = url
         .strip_prefix("https://github.com/")
