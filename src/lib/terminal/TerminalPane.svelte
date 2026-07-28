@@ -65,10 +65,44 @@
     menu = null;
   }
 
+  // A full-screen program that turned on mouse reporting (herdr, vim, htop,
+  // tmux) owns the right button: xterm encodes the click as a mouse report
+  // and writes it to the pty, so opening this pane's own menu on top of that
+  // buries the program's right-click controls under a menu the user never
+  // asked for. Shift is the escape hatch terminals conventionally use for
+  // "this click is for the emulator, not the program" — the same modifier
+  // xterm itself honors to force a selection while tracking is on — so
+  // Shift+right-click still reaches the menu below.
+  function programOwnsRightClick(event: MouseEvent): boolean {
+    return terminal.modes.mouseTrackingMode !== "none" && !event.shiftKey;
+  }
+
   function onContextMenu(event: MouseEvent): void {
     if (!terminal) return;
+    // Suppress the webview's own menu either way; whether *this* pane's menu
+    // opens is the separate question below.
     event.preventDefault();
+    if (programOwnsRightClick(event)) return;
     menu = { x: event.clientX, y: event.clientY, hasSelection: terminal.hasSelection() };
+  }
+
+  // macOS fires `contextmenu` for Ctrl+left-click too (the one-button-mouse
+  // right click), so both gestures have to clear the same Shift check.
+  function isRightClickGesture(event: MouseEvent): boolean {
+    return event.button === 2 || (event.button === 0 && event.ctrlKey);
+  }
+
+  function onMouseDownCapture(event: MouseEvent): void {
+    // Shift+right-click belongs to this pane's menu (see onContextMenu), so
+    // xterm must not also report it to the program. xterm's own bypass is
+    // Shift only on Linux/Windows — on macOS it's Alt, gated behind an
+    // option Atrium leaves off — so on the only platform Atrium ships for,
+    // xterm would otherwise forward the click *and* the menu would open.
+    // Stopping the event in the capture phase on the container means xterm's
+    // listener, bound on the inner `.xterm` element, never sees it.
+    if (isRightClickGesture(event) && event.shiftKey) {
+      event.stopPropagation();
+    }
   }
 
   async function doCopy(): Promise<void> {
@@ -278,6 +312,7 @@
   class:drop-target-active={dropTargetActive}
   bind:this={container}
   oncontextmenu={onContextMenu}
+  onmousedowncapture={onMouseDownCapture}
 ></div>
 
 {#if menu}

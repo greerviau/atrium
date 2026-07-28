@@ -23,6 +23,11 @@
   // whenever `build_menu` changes one. The rows also shown elsewhere (a
   // `StatusBar.svelte` button tooltip, a `ContextMenu.svelte` shortcut hint)
   // read their glyph from `shortcutLabels.ts` instead of repeating it here.
+  // The "Terminal" group also carries the one mouse gesture listed here:
+  // Shift+right-click, the only way to reach a terminal pane's own menu while
+  // a program has taken over the mouse (`TerminalPane.svelte`). It earns a
+  // row despite not being a key chord because nothing else in the UI hints
+  // that right-click deliberately stops opening that menu.
   const SHORTCUT_GROUPS: ShortcutGroup[] = [
     { title: "General", rows: [{ label: "Settings", keys: SHORTCUT_LABELS.settings }] },
     {
@@ -68,7 +73,10 @@
     },
     {
       title: "Terminal",
-      rows: [{ label: "Insert Newline Without Submitting", keys: "⇧⏎" }],
+      rows: [
+        { label: "Insert Newline Without Submitting", keys: "⇧⏎" },
+        { label: "Pane Menu While a Program Is Using the Mouse", keys: "⇧Right-Click" },
+      ],
     },
   ];
 
