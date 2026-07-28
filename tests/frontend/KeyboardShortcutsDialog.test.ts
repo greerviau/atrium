@@ -93,6 +93,7 @@ describe("KeyboardShortcutsDialog", () => {
       "Delete",
       "Reveal in Finder",
       "Insert Newline Without Submitting",
+      "Pane Menu While a Program Is Using the Mouse",
     ];
     for (const label of labels) {
       expect(screen.getByText(label)).toBeTruthy();
@@ -100,6 +101,7 @@ describe("KeyboardShortcutsDialog", () => {
 
     // Otherwise-undiscoverable: no menu entry backs any of these (§ Gap 1a/1b).
     expect(screen.getByText("⇧⏎")).toBeTruthy();
+    expect(screen.getByText("⇧Right-Click")).toBeTruthy();
     expect(screen.getByText("⌘N")).toBeTruthy();
     expect(screen.getByText("F2")).toBeTruthy();
   });
