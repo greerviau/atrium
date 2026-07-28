@@ -9,17 +9,7 @@ import { setTheme, themeSelection } from "../../src/lib/stores/theme";
 import { terminalPosition } from "../../src/lib/stores/layout";
 import { zoom, zoomIn, DEFAULT_ZOOM } from "../../src/lib/stores/textSize";
 import { minimapEnabled, DEFAULT_MINIMAP_ENABLED } from "../../src/lib/stores/minimapEnabled";
-import { recents } from "../../src/lib/stores/recents";
-import * as commands from "../../src/lib/ipc/commands";
-
-vi.mock("../../src/lib/ipc/commands", () => ({
-  workspaceClearRecents: vi.fn(),
-  isAppError: (value: unknown): value is { code: string; message: string } =>
-    typeof value === "object" &&
-    value !== null &&
-    "code" in value &&
-    "message" in value,
-}));
+import { markdownDefaultView, DEFAULT_MARKDOWN_VIEW } from "../../src/lib/stores/markdownDefaultView";
 
 async function flush(): Promise<void> {
   for (let i = 0; i < 5; i++) {
@@ -38,13 +28,12 @@ describe("SettingsDialog", () => {
     vi.clearAllMocks();
     mockWindows("main");
     mockIPC(() => null);
-    vi.mocked(commands.workspaceClearRecents).mockResolvedValue(undefined);
     settingsOverlay.set({ open: false });
     setTheme("auto");
     terminalPosition.set("bottom");
     zoom.set(DEFAULT_ZOOM);
     minimapEnabled.set(DEFAULT_MINIMAP_ENABLED);
-    recents.set([{ path: "/projects/foo", name: "foo", lastOpenedAt: 1 }]);
+    markdownDefaultView.set(DEFAULT_MARKDOWN_VIEW);
   });
 
   afterEach(() => {
@@ -100,15 +89,15 @@ describe("SettingsDialog", () => {
   });
 
   describe("sidebar navigation", () => {
-    it("renders all four categories, with General selected and its content shown by default", async () => {
+    it("renders all five categories, with General selected and its content shown by default", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
 
       const tabs = screen.getAllByRole("tab");
-      expect(tabs.map((t) => t.textContent)).toEqual(["General", "Appearance", "Editor", "Terminal"]);
+      expect(tabs.map((t) => t.textContent)).toEqual(["General", "Appearance", "Editor", "Markdown", "Terminal"]);
       expect(screen.getByRole("tab", { name: "General" }).getAttribute("aria-selected")).toBe("true");
-      expect(screen.getByText("Recent Projects")).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
       expect(screen.queryByText("Theme")).toBeNull();
     });
 
@@ -122,7 +111,7 @@ describe("SettingsDialog", () => {
       expect(screen.getByRole("tab", { name: "Appearance" }).getAttribute("aria-selected")).toBe("true");
       expect(screen.getByRole("tab", { name: "General" }).getAttribute("aria-selected")).toBe("false");
       expect(screen.getByRole("heading", { name: "Theme" })).toBeTruthy();
-      expect(screen.queryByText("Recent Projects")).toBeNull();
+      expect(screen.queryByRole("heading", { name: "Zoom" })).toBeNull();
     });
 
     it("resets the selected category back to General each time the dialog re-opens", async () => {
@@ -193,6 +182,7 @@ describe("SettingsDialog", () => {
         ["General", "0"],
         ["Appearance", "-1"],
         ["Editor", "-1"],
+        ["Markdown", "-1"],
         ["Terminal", "-1"],
       ]);
     });
@@ -243,9 +233,9 @@ describe("SettingsDialog", () => {
       await fireEvent.keyDown(terminal, { key: "ArrowLeft" });
       await flush();
 
-      const editor = screen.getByRole("tab", { name: "Editor" });
-      expect(editor.getAttribute("aria-selected")).toBe("true");
-      expect(document.activeElement).toBe(editor);
+      const markdown = screen.getByRole("tab", { name: "Markdown" });
+      expect(markdown.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(markdown);
     });
 
     it("Home jumps to the first category and End jumps to the last", async () => {
@@ -274,21 +264,21 @@ describe("SettingsDialog", () => {
       render(SettingsDialog);
       await tick();
 
-      const header = screen.getByRole("button", { name: "Recent Projects" });
+      const header = screen.getByRole("button", { name: "Zoom" });
       expect(header.getAttribute("aria-expanded")).toBe("true");
-      expect(screen.getByText("Clear Recent Projects")).toBeTruthy();
+      expect(screen.getByText("Reset")).toBeTruthy();
 
       await fireEvent.click(header);
       await tick();
 
       expect(header.getAttribute("aria-expanded")).toBe("false");
-      expect(screen.queryByText("Clear Recent Projects")).toBeNull();
+      expect(screen.queryByText("Reset")).toBeNull();
 
       await fireEvent.click(header);
       await tick();
 
       expect(header.getAttribute("aria-expanded")).toBe("true");
-      expect(screen.getByText("Clear Recent Projects")).toBeTruthy();
+      expect(screen.getByText("Reset")).toBeTruthy();
     });
   });
 
@@ -416,6 +406,7 @@ describe("SettingsDialog", () => {
         "General",
         "Appearance",
         "Editor",
+        "Markdown",
         "Terminal",
       ]);
     });
@@ -505,12 +496,42 @@ describe("SettingsDialog", () => {
     });
   });
 
+  describe("markdown default view", () => {
+    async function openMarkdownViewDropdown(): Promise<HTMLElement> {
+      settingsOverlay.set({ open: true });
+      const { container } = render(SettingsDialog);
+      await tick();
+      await selectCategory("Markdown");
+      await fireEvent.click(dropdownTrigger(container));
+      await flush();
+      return container;
+    }
+
+    it("marks the current default view as selected", async () => {
+      markdownDefaultView.set("source");
+      await openMarkdownViewDropdown();
+
+      expect(screen.getByRole("option", { name: "Rendered" }).getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByRole("option", { name: "Source" }).getAttribute("aria-selected")).toBe("true");
+    });
+
+    it("clicking an option updates the shared markdownDefaultView store and closes the dropdown", async () => {
+      await openMarkdownViewDropdown();
+
+      await fireEvent.click(screen.getByRole("option", { name: "Source" }));
+      await flush();
+
+      expect(get(markdownDefaultView)).toBe("source");
+      expect(screen.queryByRole("listbox")).toBeNull();
+    });
+  });
+
   describe("zoom", () => {
     it("shows the current zoom percentage and updates it via the stepper", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
-      await selectCategory("Editor");
+      await selectCategory("General");
 
       expect(screen.getByText("100%")).toBeTruthy();
 
@@ -527,7 +548,7 @@ describe("SettingsDialog", () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
-      await selectCategory("Editor");
+      await selectCategory("General");
 
       await fireEvent.click(screen.getByText("Reset"));
 
@@ -658,57 +679,6 @@ describe("SettingsDialog", () => {
 
       expect(get(themeSelection)).toBe("auto");
       expect(screen.queryByRole("listbox")).not.toBeNull();
-    });
-  });
-
-  describe("recent projects", () => {
-    it("Clear Recent Projects calls workspaceClearRecents, shows a confirmation, and empties the shared recents store", async () => {
-      settingsOverlay.set({ open: true });
-      render(SettingsDialog);
-      await tick();
-
-      await fireEvent.click(screen.getByText("Clear Recent Projects"));
-      await flush();
-
-      expect(commands.workspaceClearRecents).toHaveBeenCalledOnce();
-      expect(await screen.findByText("Cleared")).toBeTruthy();
-      // Proves the fix for the stale-welcome-screen bug: WelcomeScreen reads
-      // this same store, so it reflects the clear immediately with no
-      // remount required.
-      expect(get(recents)).toEqual([]);
-    });
-
-    it("shows an error message if clearing fails, leaving the shared recents store untouched", async () => {
-      vi.mocked(commands.workspaceClearRecents).mockRejectedValueOnce(new Error("disk full"));
-      settingsOverlay.set({ open: true });
-      render(SettingsDialog);
-      await tick();
-
-      await fireEvent.click(screen.getByText("Clear Recent Projects"));
-      await flush();
-
-      expect(await screen.findByText(/disk full/)).toBeTruthy();
-      expect(get(recents)).toHaveLength(1);
-    });
-
-    it("auto-hides the Cleared confirmation after CLEARED_BADGE_MS", async () => {
-      vi.useFakeTimers();
-      try {
-        settingsOverlay.set({ open: true });
-        render(SettingsDialog);
-        await tick();
-
-        await fireEvent.click(screen.getByText("Clear Recent Projects"));
-        await flush();
-        expect(screen.getByText("Cleared")).toBeTruthy();
-
-        await vi.advanceTimersByTimeAsync(3000);
-        await tick();
-
-        expect(screen.queryByText("Cleared")).toBeNull();
-      } finally {
-        vi.useRealTimers();
-      }
     });
   });
 });

@@ -1,6 +1,8 @@
+import { get } from "svelte/store";
 import { fsReadFile, isAppError, localWorkspaceId } from "../ipc/commands";
 import { modeForPath } from "../editor/codeExtensions";
 import { findLeaf, listLeaves, pruneMissingTabs, type EditorLeafPane, type EditorPaneNode } from "../editor/editorPaneTree";
+import { markdownDefaultView } from "./markdownDefaultView";
 import type { Tab } from "./tabs";
 
 const STORAGE_PREFIX = "atrium.editorSession.";
@@ -163,7 +165,7 @@ export function reconcileRestoredSession(
       isDirty: false,
       hasExternalConflict: false,
       isDeleted: false,
-      viewMode: mode === "markdown" ? "rendered" : undefined,
+      viewMode: mode === "markdown" ? get(markdownDefaultView) : undefined,
     };
   });
 

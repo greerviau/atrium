@@ -1,13 +1,15 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
   import { settingsOverlay, closeSettings } from "../stores/settingsOverlay";
   import { themes } from "../theme/tokens";
   import { themeSelection, setTheme } from "../stores/theme";
   import { terminalPosition, setTerminalPosition, type TerminalPosition } from "../stores/layout";
   import { zoom, zoomIn, zoomOut, resetZoom, MIN_ZOOM, MAX_ZOOM } from "../stores/textSize";
   import { minimapEnabled, setMinimapEnabled } from "../stores/minimapEnabled";
-  import { clearRecents } from "../stores/recents";
-  import { isAppError } from "../ipc/commands";
+  import {
+    markdownDefaultView,
+    setMarkdownDefaultView,
+    type MarkdownDefaultView,
+  } from "../stores/markdownDefaultView";
   import SettingsSidebar from "../settings/SettingsSidebar.svelte";
   import SettingsSection from "../settings/SettingsSection.svelte";
   import Dropdown from "../ui/Dropdown.svelte";
@@ -31,14 +33,14 @@
     { id: "right", label: "Right" },
   ];
 
-  const CLEARED_BADGE_MS = 3000;
+  const MARKDOWN_VIEW_OPTIONS: { id: MarkdownDefaultView; label: string }[] = [
+    { id: "rendered", label: "Rendered" },
+    { id: "source", label: "Source" },
+  ];
+
   const DEFAULT_CATEGORY: SettingsCategoryId = "general";
 
   let panelEl: HTMLDivElement | undefined = $state();
-  let clearingRecents = $state(false);
-  let clearRecentsError = $state<string | null>(null);
-  let recentsCleared = $state(false);
-  let recentsClearedTimer: ReturnType<typeof setTimeout> | undefined;
 
   // Sidebar selection, search query, and each section's collapsed/expanded
   // state are all transient UI state that resets to defaults every time the
@@ -53,16 +55,7 @@
   // collapse/expand choices from an unrelated earlier query.
   let searchOverrides = $state<Record<string, boolean>>({});
 
-  function describeError(err: unknown): string {
-    if (isAppError(err)) return err.message;
-    if (err instanceof Error) return err.message;
-    return "an unknown error";
-  }
-
   function resetState(): void {
-    clearRecentsError = null;
-    recentsCleared = false;
-    clearTimeout(recentsClearedTimer);
     selectedCategory = DEFAULT_CATEGORY;
     searchQuery = "";
     expandedSections = Object.fromEntries(SETTINGS_SECTIONS.map((section) => [section.id, true]));
@@ -140,28 +133,6 @@
     }
   }
 
-  async function clearRecentProjects(): Promise<void> {
-    clearingRecents = true;
-    clearRecentsError = null;
-    try {
-      await clearRecents();
-      recentsCleared = true;
-      clearTimeout(recentsClearedTimer);
-      // Auto-hides the confirmation rather than leaving it up for the rest
-      // of the dialog's session, where it could be mistaken as describing
-      // the current state rather than a one-off event that already happened.
-      recentsClearedTimer = setTimeout(() => {
-        recentsCleared = false;
-      }, CLEARED_BADGE_MS);
-    } catch (err) {
-      clearRecentsError = `Couldn't clear recent projects: ${describeError(err)}`;
-    } finally {
-      clearingRecents = false;
-    }
-  }
-
-  onDestroy(() => clearTimeout(recentsClearedTimer));
-
   function onBackdropKeydown(event: KeyboardEvent): void {
     if (event.key === "Escape") {
       closeSettings();
@@ -212,39 +183,7 @@
           aria-labelledby={settingsTabId(selectedCategory)}
           aria-label={currentCategoryLabel}
         >
-          {#if selectedCategory === "general" && isSectionVisible("recent-projects")}
-            <SettingsSection
-              title="Recent Projects"
-              expanded={isSectionExpanded("recent-projects")}
-              onToggle={() => toggleSection("recent-projects")}
-            >
-              <div class="settings-row">
-                <span class="settings-label">Recent projects</span>
-                <div class="settings-clear-recents">
-                  <button class="settings-btn" onclick={clearRecentProjects} disabled={clearingRecents}>
-                    Clear Recent Projects
-                  </button>
-                  {#if recentsCleared}
-                    <span class="settings-status">Cleared</span>
-                  {/if}
-                </div>
-              </div>
-              {#if clearRecentsError}
-                <p class="settings-error">{clearRecentsError}</p>
-              {/if}
-            </SettingsSection>
-          {/if}
-
-          {#if selectedCategory === "appearance" && isSectionVisible("theme")}
-            <SettingsSection title="Theme" expanded={isSectionExpanded("theme")} onToggle={() => toggleSection("theme")}>
-              <div class="settings-row">
-                <span class="settings-label">Theme</span>
-                <Dropdown options={THEME_OPTIONS} value={$themeSelection} onSelect={setTheme} label="Theme" />
-              </div>
-            </SettingsSection>
-          {/if}
-
-          {#if selectedCategory === "editor" && isSectionVisible("zoom")}
+          {#if selectedCategory === "general" && isSectionVisible("zoom")}
             <SettingsSection title="Zoom" expanded={isSectionExpanded("zoom")} onToggle={() => toggleSection("zoom")}>
               <div class="settings-row">
                 <span class="settings-label">Zoom</span>
@@ -267,6 +206,15 @@
             </SettingsSection>
           {/if}
 
+          {#if selectedCategory === "appearance" && isSectionVisible("theme")}
+            <SettingsSection title="Theme" expanded={isSectionExpanded("theme")} onToggle={() => toggleSection("theme")}>
+              <div class="settings-row">
+                <span class="settings-label">Theme</span>
+                <Dropdown options={THEME_OPTIONS} value={$themeSelection} onSelect={setTheme} label="Theme" />
+              </div>
+            </SettingsSection>
+          {/if}
+
           {#if selectedCategory === "editor" && isSectionVisible("minimap")}
             <SettingsSection
               title="Minimap"
@@ -281,6 +229,24 @@
                   checked={$minimapEnabled}
                   onchange={(e) => setMinimapEnabled(e.currentTarget.checked)}
                   aria-label="Show minimap"
+                />
+              </div>
+            </SettingsSection>
+          {/if}
+
+          {#if selectedCategory === "markdown" && isSectionVisible("default-view")}
+            <SettingsSection
+              title="Default View"
+              expanded={isSectionExpanded("default-view")}
+              onToggle={() => toggleSection("default-view")}
+            >
+              <div class="settings-row">
+                <span class="settings-label">Default view for markdown files</span>
+                <Dropdown
+                  options={MARKDOWN_VIEW_OPTIONS}
+                  value={$markdownDefaultView}
+                  onSelect={(id) => setMarkdownDefaultView(id as MarkdownDefaultView)}
+                  label="Default view for markdown files"
                 />
               </div>
             </SettingsSection>
@@ -421,20 +387,6 @@
     height: 16px;
     accent-color: var(--atrium-accent);
     cursor: pointer;
-  }
-  .settings-clear-recents {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .settings-status {
-    color: var(--atrium-text-muted);
-    font-size: 0.85em;
-  }
-  .settings-error {
-    margin: 8px 0 0;
-    color: var(--atrium-danger);
-    font-size: 0.9em;
   }
   .settings-actions {
     flex-shrink: 0;

@@ -1,4 +1,4 @@
-export type SettingsCategoryId = "general" | "appearance" | "editor" | "terminal";
+export type SettingsCategoryId = "general" | "appearance" | "editor" | "markdown" | "terminal";
 
 export interface SettingsCategory {
   id: SettingsCategoryId;
@@ -22,6 +22,7 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
   { id: "general", label: "General" },
   { id: "appearance", label: "Appearance" },
   { id: "editor", label: "Editor" },
+  { id: "markdown", label: "Markdown" },
   { id: "terminal", label: "Terminal" },
 ];
 
@@ -33,12 +34,6 @@ export const SETTINGS_CATEGORIES: SettingsCategory[] = [
  */
 export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   {
-    id: "recent-projects",
-    categoryId: "general",
-    title: "Recent Projects",
-    keywords: ["recent", "projects", "clear", "history", "general"],
-  },
-  {
     id: "theme",
     categoryId: "appearance",
     title: "Theme",
@@ -46,7 +41,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
   },
   {
     id: "zoom",
-    categoryId: "editor",
+    categoryId: "general",
     title: "Zoom",
     keywords: ["zoom", "text size", "font size", "editor"],
   },
@@ -55,6 +50,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     categoryId: "editor",
     title: "Minimap",
     keywords: ["minimap", "map", "overview", "navigation", "editor"],
+  },
+  {
+    id: "default-view",
+    categoryId: "markdown",
+    title: "Default View",
+    keywords: ["markdown", "view", "rendered", "source", "default"],
   },
   {
     id: "dock-position",
