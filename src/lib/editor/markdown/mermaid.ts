@@ -71,6 +71,10 @@ export function atriumMermaidThemeVariables(): Record<string, string> {
  * variables. `startOnLoad: false` is required — Mermaid's default behavior
  * scans the whole DOM for `.mermaid` elements on load, which is irrelevant
  * here since every diagram is rendered explicitly by `MermaidWidget`.
+ * `securityLevel: "strict"` is set explicitly (matching Mermaid's own
+ * default) so the sanitization `MermaidWidget.toDOM()` relies on before
+ * assigning the rendered SVG to `innerHTML` is asserted in code, not left to
+ * an unstated default a future Mermaid upgrade could silently change.
  */
 export async function loadMermaid(): Promise<typeof import("mermaid")> {
   const mod = await importMermaid();
@@ -78,6 +82,7 @@ export async function loadMermaid(): Promise<typeof import("mermaid")> {
     startOnLoad: false,
     theme: "base",
     themeVariables: atriumMermaidThemeVariables(),
+    securityLevel: "strict",
   });
   return mod;
 }

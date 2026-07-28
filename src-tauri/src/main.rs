@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod asset_protocol;
 mod commands;
 mod error;
 mod fs_watch;
@@ -271,12 +272,40 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     )
 }
 
+/// The app's CSP (`security.csp` in `tauri.conf.json`) is only ever attached
+/// to responses served through the `tauri://` protocol handler, so it has no
+/// effect under `tauri dev` — only a packaged (or `--no-bundle`) build
+/// actually exercises it.
+///
+/// `style-src`'s `'unsafe-inline'` works only as long as `dist/index.html`
+/// never gains an inline `<style>` element: if one is ever added, Tauri
+/// injects a CSP nonce into it and appends that nonce to `style-src`
+/// (`tauri-utils::inject_nonce_token`), and per the CSP spec, the presence
+/// of a nonce makes browsers ignore `'unsafe-inline'` entirely for that
+/// directive — silently breaking CodeMirror's runtime-injected editor
+/// styles (`style-mod`'s `document.createElement("style")` +
+/// `.textContent`, the one real `style-src` need) with no obvious cause in
+/// whatever diff triggered it.
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
+        .register_asynchronous_uri_scheme_protocol("atriumasset", |ctx, request, responder| {
+            let app_handle = ctx.app_handle().clone();
+            // `tauri::async_runtime::spawn`, not a bare `tokio::spawn`: this
+            // closure is invoked directly on the webview's own UI thread
+            // (GTK main loop on Linux, the equivalent on macOS/Windows), not
+            // on a Tokio worker, so a bare `tokio::spawn` has no runtime
+            // context to enter and panics. `async_runtime::spawn` enters the
+            // runtime first before scheduling the task.
+            tauri::async_runtime::spawn(async move {
+                responder.respond(
+                    asset_protocol::resolve_atriumasset_request(&app_handle, request).await,
+                );
+            });
+        })
         .setup(|app| {
             let handle = app.handle().clone();
             app.manage(AppState::new(handle.clone()));

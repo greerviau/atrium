@@ -616,18 +616,9 @@ impl LocalWorkspace {
         Ok(current)
     }
 
-    /// Resolves `path` (absolute, or relative to `root`) against `root`,
-    /// rejecting anything that would escape it — including through a symlink,
-    /// dangling or not, at any position in the path. The returned path is fully
-    /// dereferenced: if `path` (or an ancestor) is itself a symlink, the result
-    /// is the real path it resolves to, not the link's own path. Used by every
-    /// operation that reads or writes through what the path resolves to.
-    fn resolve_within_root(&self, path: &str) -> Result<PathBuf, AppError> {
-        self.resolve_within_root_impl(path, true)
-    }
-
-    /// Like `resolve_within_root`, but leaves the final path component
-    /// un-dereferenced if it is itself a symlink — every ancestor is still
+    /// Like `resolve_within_root` (the `Workspace` trait method, implemented
+    /// below), but leaves the final path component un-dereferenced if it is
+    /// itself a symlink — every ancestor is still
     /// resolved through its symlink chain and checked for containment, but the
     /// entry named by the final component is returned as-is. Matches
     /// `unlink(2)`/`rmdir(2)`/`rename(2)`'s own behavior of never following the
@@ -1184,6 +1175,10 @@ impl Workspace for LocalWorkspace {
 
     fn root(&self) -> &str {
         self.root.to_str().unwrap_or("")
+    }
+
+    fn resolve_within_root(&self, path: &str) -> Result<PathBuf, AppError> {
+        self.resolve_within_root_impl(path, true)
     }
 
     fn watch(&self, tx: UnboundedSender<FsChangeEvent>) {
