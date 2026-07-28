@@ -22,6 +22,18 @@ pub enum AppError {
     InvalidRegex(String),
     #[error("{0}")]
     Other(String),
+    #[error(
+        "'{path}' is {} bytes, which exceeds the {} open limit",
+        format_bytes(*size),
+        format_bytes(*limit)
+    )]
+    FileTooLarge { path: String, size: u64, limit: u64 },
+}
+
+/// Formats a byte count as human-readable megabytes (e.g. `12.3 MB`) for use
+/// in user-facing error messages, where a raw byte count would be unreadable.
+fn format_bytes(bytes: u64) -> String {
+    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
 }
 
 impl AppError {
@@ -35,6 +47,7 @@ impl AppError {
             AppError::UnknownWorkspace(_) => "UNKNOWN_WORKSPACE",
             AppError::InvalidRegex(_) => "INVALID_REGEX",
             AppError::Other(_) => "OTHER",
+            AppError::FileTooLarge { .. } => "FILE_TOO_LARGE",
         }
     }
 }
