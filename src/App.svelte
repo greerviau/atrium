@@ -123,6 +123,11 @@
     if ($terminalPosition === "bottom") {
       if (!Number.isFinite(containerHeight) || containerHeight <= 0) return;
       if (terminalHeightRatio === null) {
+        // Establishing against a persisted value that's never been checked
+        // against this container's size before (cold start) — clamp it here
+        // too, not just on later resize/drag-driven calls, or an oversized
+        // saved height would render unclamped and squeeze the editor to 0.
+        terminalHeight = clampToContainer(terminalHeight, HEIGHT_MIN, containerHeight);
         terminalHeightRatio = terminalHeight / containerHeight;
         return;
       }
@@ -130,6 +135,7 @@
     } else {
       if (!Number.isFinite(containerWidth) || containerWidth <= 0) return;
       if (terminalWidthRatio === null) {
+        terminalWidth = clampToContainer(terminalWidth, WIDTH_MIN, containerWidth);
         terminalWidthRatio = terminalWidth / containerWidth;
         return;
       }
@@ -776,14 +782,16 @@
   }
 
   onMount(() => {
-    // The first-availability `$effect` above re-derives and re-clamps
-    // terminalHeight/terminalWidth from the stable ratio every time `mainEl`
-    // becomes available (every workspace open, not just cold start), so the
-    // one-shot mount-time clamp this used to do here is no longer needed —
-    // removing it is safe even though `setTerminalPosition` reads
-    // height/width fresh from storage rather than from this in-memory state:
-    // nothing renders from that stale stored number directly, and the next
-    // drag-end overwrites it with an explicit, correct user choice.
+    // The first-availability `$effect` above clamps terminalHeight/terminalWidth
+    // against the container every time `mainEl` becomes available — on the very
+    // first call (establishing the ratio, e.g. cold start) it clamps the
+    // just-loaded persisted value directly; on every later call it re-derives
+    // from the stable ratio and clamps that. So the one-shot mount-time clamp
+    // this used to do here is no longer needed — removing it is safe even
+    // though `setTerminalPosition` reads height/width fresh from storage
+    // rather than from this in-memory state: nothing renders from that stale
+    // stored number directly, and the next drag-end overwrites it with an
+    // explicit, correct user choice.
     window.addEventListener("resize", handleWindowResize);
     void initMenuBar(newTerminalTab, () => splitFocusedPane("right"), splitFocusedSurface, closeFocusedTab);
     void onFsChanged((event) => {

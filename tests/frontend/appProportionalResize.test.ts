@@ -103,6 +103,27 @@ function renderApp() {
   return render(App);
 }
 
+/**
+ * Stubs `clientWidth`/`clientHeight` on `HTMLElement.prototype` for the
+ * duration of `fn`, so a component's *first* container-availability pass
+ * (its mount-time effects, not just a later resize) sees a real, nonzero
+ * container size — jsdom itself always reports 0, which is why the cold
+ * start path needs this rather than the post-render `Object.defineProperty`
+ * on a single queried element used elsewhere in this file.
+ */
+async function withStubbedContainerSize(width: number, height: number, fn: () => Promise<void>): Promise<void> {
+  const widthDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+  const heightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => width });
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => height });
+  try {
+    await fn();
+  } finally {
+    if (widthDescriptor) Object.defineProperty(HTMLElement.prototype, "clientWidth", widthDescriptor);
+    if (heightDescriptor) Object.defineProperty(HTMLElement.prototype, "clientHeight", heightDescriptor);
+  }
+}
+
 describe("App proportional panel resize (#301)", () => {
   beforeEach(() => {
     resetStores();
@@ -229,6 +250,38 @@ describe("App proportional panel resize (#301)", () => {
     await fireResize();
 
     expect(explorerStyleWidth(container)).toBe(EXPLORER_WIDTH_MIN);
+  });
+
+  it("cold start clamps a persisted terminal width wider than the container (dock left), so the editor never collapses to 0px", async () => {
+    terminalPosition.set("left");
+    explorerVisible.set(false);
+    saveTerminalLayout({ position: "left", height: 240, width: 1200 });
+
+    await withStubbedContainerSize(1000, 1000, async () => {
+      const { container } = renderApp();
+      await tick();
+      await tick();
+
+      // clampToContainer(1200, WIDTH_MIN, 1000, 204) = 796: the terminal's
+      // very first sync (establishing its ratio, not a later resize) must
+      // clamp the persisted value against the container it just became
+      // available in, or an oversized saved width renders past its
+      // container and squeezes the editor to 0.
+      expect(terminalStyle(container).width).toBe("796px");
+    });
+  });
+
+  it("cold start clamps a persisted terminal height taller than the container (dock bottom)", async () => {
+    terminalPosition.set("bottom");
+    saveTerminalLayout({ position: "bottom", height: 900, width: 320 });
+
+    await withStubbedContainerSize(1000, 1000, async () => {
+      const { container } = renderApp();
+      await tick();
+      await tick();
+
+      expect(terminalStyle(container).height).toBe("796px");
+    });
   });
 
   it("a resize while the explorer is hidden doesn't show it or leave a gap", async () => {
