@@ -9,6 +9,7 @@ import { setTheme, themeSelection } from "../../src/lib/stores/theme";
 import { terminalPosition } from "../../src/lib/stores/layout";
 import { zoom, zoomIn, DEFAULT_ZOOM } from "../../src/lib/stores/textSize";
 import { minimapEnabled, DEFAULT_MINIMAP_ENABLED } from "../../src/lib/stores/minimapEnabled";
+import { markdownDefaultView, DEFAULT_MARKDOWN_VIEW } from "../../src/lib/stores/markdownDefaultView";
 
 async function flush(): Promise<void> {
   for (let i = 0; i < 5; i++) {
@@ -32,6 +33,7 @@ describe("SettingsDialog", () => {
     terminalPosition.set("bottom");
     zoom.set(DEFAULT_ZOOM);
     minimapEnabled.set(DEFAULT_MINIMAP_ENABLED);
+    markdownDefaultView.set(DEFAULT_MARKDOWN_VIEW);
   });
 
   afterEach(() => {
@@ -87,13 +89,13 @@ describe("SettingsDialog", () => {
   });
 
   describe("sidebar navigation", () => {
-    it("renders all four categories, with General selected and its content shown by default", async () => {
+    it("renders all five categories, with General selected and its content shown by default", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
 
       const tabs = screen.getAllByRole("tab");
-      expect(tabs.map((t) => t.textContent)).toEqual(["General", "Appearance", "Editor", "Terminal"]);
+      expect(tabs.map((t) => t.textContent)).toEqual(["General", "Appearance", "Editor", "Markdown", "Terminal"]);
       expect(screen.getByRole("tab", { name: "General" }).getAttribute("aria-selected")).toBe("true");
       expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
       expect(screen.queryByText("Theme")).toBeNull();
@@ -180,6 +182,7 @@ describe("SettingsDialog", () => {
         ["General", "0"],
         ["Appearance", "-1"],
         ["Editor", "-1"],
+        ["Markdown", "-1"],
         ["Terminal", "-1"],
       ]);
     });
@@ -230,9 +233,9 @@ describe("SettingsDialog", () => {
       await fireEvent.keyDown(terminal, { key: "ArrowLeft" });
       await flush();
 
-      const editor = screen.getByRole("tab", { name: "Editor" });
-      expect(editor.getAttribute("aria-selected")).toBe("true");
-      expect(document.activeElement).toBe(editor);
+      const markdown = screen.getByRole("tab", { name: "Markdown" });
+      expect(markdown.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(markdown);
     });
 
     it("Home jumps to the first category and End jumps to the last", async () => {
@@ -403,6 +406,7 @@ describe("SettingsDialog", () => {
         "General",
         "Appearance",
         "Editor",
+        "Markdown",
         "Terminal",
       ]);
     });
@@ -488,6 +492,36 @@ describe("SettingsDialog", () => {
       await flush();
 
       expect(get(terminalPosition)).toBe("right");
+      expect(screen.queryByRole("listbox")).toBeNull();
+    });
+  });
+
+  describe("markdown default view", () => {
+    async function openMarkdownViewDropdown(): Promise<HTMLElement> {
+      settingsOverlay.set({ open: true });
+      const { container } = render(SettingsDialog);
+      await tick();
+      await selectCategory("Markdown");
+      await fireEvent.click(dropdownTrigger(container));
+      await flush();
+      return container;
+    }
+
+    it("marks the current default view as selected", async () => {
+      markdownDefaultView.set("source");
+      await openMarkdownViewDropdown();
+
+      expect(screen.getByRole("option", { name: "Rendered" }).getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByRole("option", { name: "Source" }).getAttribute("aria-selected")).toBe("true");
+    });
+
+    it("clicking an option updates the shared markdownDefaultView store and closes the dropdown", async () => {
+      await openMarkdownViewDropdown();
+
+      await fireEvent.click(screen.getByRole("option", { name: "Source" }));
+      await flush();
+
+      expect(get(markdownDefaultView)).toBe("source");
       expect(screen.queryByRole("listbox")).toBeNull();
     });
   });

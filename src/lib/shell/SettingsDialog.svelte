@@ -5,6 +5,11 @@
   import { terminalPosition, setTerminalPosition, type TerminalPosition } from "../stores/layout";
   import { zoom, zoomIn, zoomOut, resetZoom, MIN_ZOOM, MAX_ZOOM } from "../stores/textSize";
   import { minimapEnabled, setMinimapEnabled } from "../stores/minimapEnabled";
+  import {
+    markdownDefaultView,
+    setMarkdownDefaultView,
+    type MarkdownDefaultView,
+  } from "../stores/markdownDefaultView";
   import SettingsSidebar from "../settings/SettingsSidebar.svelte";
   import SettingsSection from "../settings/SettingsSection.svelte";
   import Dropdown from "../ui/Dropdown.svelte";
@@ -26,6 +31,11 @@
     { id: "bottom", label: "Bottom" },
     { id: "left", label: "Left" },
     { id: "right", label: "Right" },
+  ];
+
+  const MARKDOWN_VIEW_OPTIONS: { id: MarkdownDefaultView; label: string }[] = [
+    { id: "rendered", label: "Rendered" },
+    { id: "source", label: "Source" },
   ];
 
   const DEFAULT_CATEGORY: SettingsCategoryId = "general";
@@ -219,6 +229,24 @@
                   checked={$minimapEnabled}
                   onchange={(e) => setMinimapEnabled(e.currentTarget.checked)}
                   aria-label="Show minimap"
+                />
+              </div>
+            </SettingsSection>
+          {/if}
+
+          {#if selectedCategory === "markdown" && isSectionVisible("default-view")}
+            <SettingsSection
+              title="Default View"
+              expanded={isSectionExpanded("default-view")}
+              onToggle={() => toggleSection("default-view")}
+            >
+              <div class="settings-row">
+                <span class="settings-label">Default view for markdown files</span>
+                <Dropdown
+                  options={MARKDOWN_VIEW_OPTIONS}
+                  value={$markdownDefaultView}
+                  onSelect={(id) => setMarkdownDefaultView(id as MarkdownDefaultView)}
+                  label="Default view for markdown files"
                 />
               </div>
             </SettingsSection>

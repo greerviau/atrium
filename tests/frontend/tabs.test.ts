@@ -25,6 +25,7 @@ import { closePrompt } from "../../src/lib/stores/closePrompt";
 import { workspace } from "../../src/lib/stores/workspace";
 import { getRecentFiles } from "../../src/lib/stores/recentFiles";
 import { errorToast } from "../../src/lib/stores/errorToast";
+import { markdownDefaultView, DEFAULT_MARKDOWN_VIEW } from "../../src/lib/stores/markdownDefaultView";
 import * as commands from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
@@ -109,6 +110,7 @@ describe("openFile", () => {
   beforeEach(() => {
     tabsState.set({ tabs: [], activeTabPath: null });
     vi.mocked(commands.fsReadFile).mockResolvedValue("# Hello");
+    markdownDefaultView.set(DEFAULT_MARKDOWN_VIEW);
   });
 
   it("opens a fresh markdown tab starting at viewMode 'rendered'", async () => {
@@ -117,6 +119,15 @@ describe("openFile", () => {
     const tab = get(tabsState).tabs.find((t) => t.path === "/notes.md");
     expect(tab?.mode).toBe("markdown");
     expect(tab?.viewMode).toBe("rendered");
+  });
+
+  it("opens a fresh markdown tab honoring the current markdownDefaultView setting, not a hardcoded default", async () => {
+    markdownDefaultView.set("source");
+
+    await openFile("/notes.md");
+
+    const tab = get(tabsState).tabs.find((t) => t.path === "/notes.md");
+    expect(tab?.viewMode).toBe("source");
   });
 
   it("leaves viewMode unset for a fresh code tab", async () => {

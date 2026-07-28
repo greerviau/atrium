@@ -5,6 +5,7 @@ import { closePrompt } from "./closePrompt";
 import { workspace } from "./workspace";
 import { recordFileOpened } from "./recentFiles";
 import { showErrorToast, describeError } from "./errorToast";
+import { markdownDefaultView } from "./markdownDefaultView";
 import { basename, isPathUnderOrEqual } from "../util/path";
 
 export interface PendingSelection {
@@ -30,8 +31,9 @@ export interface Tab {
   isDeleted: boolean;
   /**
    * Which markdown presentation is active; only ever set for `mode ===
-   * "markdown"` tabs. Not persisted — always starts at `"rendered"` on open,
-   * including a fresh open after the tab was previously closed.
+   * "markdown"` tabs. Not persisted per-tab — always starts at the current
+   * `markdownDefaultView` setting on open, including a fresh open after the
+   * tab was previously closed.
    */
   viewMode?: "rendered" | "source";
 }
@@ -155,7 +157,7 @@ export async function openFile(path: string, selection?: PendingSelection): Prom
     pendingSelection: selection,
     hasExternalConflict: false,
     isDeleted: false,
-    viewMode: mode === "markdown" ? "rendered" : undefined,
+    viewMode: mode === "markdown" ? get(markdownDefaultView) : undefined,
   };
   tabsState.update((s) => ({
     tabs: [...s.tabs, tab],

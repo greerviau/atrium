@@ -8,6 +8,7 @@ import {
   type PersistedEditorSession,
 } from "../../src/lib/stores/editorSession";
 import type { EditorLeafPane, EditorPaneNode, EditorSplitPane } from "../../src/lib/editor/editorPaneTree";
+import { markdownDefaultView, DEFAULT_MARKDOWN_VIEW } from "../../src/lib/stores/markdownDefaultView";
 import * as commands from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
@@ -121,6 +122,10 @@ describe("loadEditorSession / saveEditorSession", () => {
 });
 
 describe("reconcileRestoredSession", () => {
+  beforeEach(() => {
+    markdownDefaultView.set(DEFAULT_MARKDOWN_VIEW);
+  });
+
   it("returns an empty session when nothing was persisted (null paneTree)", () => {
     const result = reconcileRestoredSession({ paneTree: null, focusedPaneId: null }, new Map());
     expect(result).toEqual({ tabs: [], activeTabPath: null, paneTree: null, focusedPaneId: null });
@@ -156,6 +161,19 @@ describe("reconcileRestoredSession", () => {
       isDirty: false,
       viewMode: undefined,
     });
+  });
+
+  it("restores a markdown tab honoring the current markdownDefaultView setting, not a hardcoded default", () => {
+    markdownDefaultView.set("source");
+    const session: PersistedEditorSession = {
+      paneTree: leaf("L1", ["/proj/a.md"], "/proj/a.md"),
+      focusedPaneId: "L1",
+    };
+    const readable = new Map([["/proj/a.md", "# a"]]);
+
+    const result = reconcileRestoredSession(session, readable);
+
+    expect(result.tabs.find((t) => t.path === "/proj/a.md")?.viewMode).toBe("source");
   });
 
   it("drops a path missing from `readable` (e.g. deleted while the app was closed), pruning it from its leaf", () => {
