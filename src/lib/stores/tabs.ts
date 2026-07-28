@@ -261,6 +261,10 @@ export async function saveTab(path: string, contents: string): Promise<void> {
  * where a `Modify` event's read loses to an external delete landing
  * microseconds later, since a genuine `Remove`-kind event is routed to
  * `markPathDeleted` directly by the `fs:changed` handler.
+ *
+ * A `FILE_TOO_LARGE` read failure (the file grew past the read guard after
+ * it was already open) surfaces as a toast instead of an unhandled
+ * rejection, leaving the tab showing its last-known content.
  */
 export async function reconcileExternalChange(path: string): Promise<void> {
   const state = get(tabsState);
@@ -283,6 +287,10 @@ export async function reconcileExternalChange(path: string): Promise<void> {
       markPathDeleted(path);
       return;
     }
+    if (isAppError(err) && err.code === "FILE_TOO_LARGE") {
+      showErrorToast(describeError(err));
+      return;
+    }
     throw err;
   }
   tabsState.update((s) => ({
@@ -302,6 +310,19 @@ export async function reloadFromDisk(path: string): Promise<void> {
         : t,
     ),
   }));
+}
+
+/**
+ * Fire-and-forget wrapper around `reloadFromDisk` for the conflict banner's
+ * "Reload" button: a rejection (e.g. the file grew past the read guard, or
+ * was deleted, since the click) surfaces as a toast instead of an unhandled
+ * rejection, the same idiom `requestSaveReportingErrors` and
+ * `openFileReportingErrors` already use.
+ */
+export function reloadFromDiskReportingErrors(path: string): void {
+  reloadFromDisk(path).catch((err: unknown) => {
+    showErrorToast(`Couldn't reload ${basename(path)}: ${describeError(err)}`);
+  });
 }
 
 /**

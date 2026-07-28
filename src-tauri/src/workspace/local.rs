@@ -50,6 +50,14 @@ const FIND_FILES_RESULT_CAP: usize = 200;
 /// loop forever.
 const MAX_COLLISION_ATTEMPTS: usize = 999;
 
+/// Cap on the file size `LocalWorkspace::read_file` will load into memory.
+/// This bounds the IPC payload sent to the frontend and the cost of seeding
+/// a CodeMirror document from it, not disk I/O cost — the editor's minimap
+/// already found that even a ~1 MB file is expensive enough to need a
+/// deferred render, so 10 MiB is a hard floor well below the freeze/OOM
+/// range a multi-GB file would otherwise trigger.
+const MAX_READABLE_FILE_SIZE_BYTES: u64 = 10 * 1024 * 1024;
+
 /// Builds the `grep-regex` matcher for a query: a real regex when
 /// `options.regex` is set, otherwise `fixed_strings` tells `grep-regex` to
 /// match `query` as a literal string — every character, including regex
@@ -887,8 +895,21 @@ impl Workspace for LocalWorkspace {
         Ok(entries)
     }
 
+    /// Reads `path`'s entire contents as UTF-8. Rejects files over
+    /// `MAX_READABLE_FILE_SIZE_BYTES` with `AppError::FileTooLarge`, checked
+    /// via a cheap `stat` before the read rather than reading-then-discarding.
     async fn read_file(&self, path: &str) -> Result<String, AppError> {
         let file = self.resolve_within_root(path)?;
+        let metadata = tokio::fs::metadata(&file)
+            .await
+            .map_err(|e| map_io_err(e, path))?;
+        if metadata.len() > MAX_READABLE_FILE_SIZE_BYTES {
+            return Err(AppError::FileTooLarge {
+                path: path.to_string(),
+                size: metadata.len(),
+                limit: MAX_READABLE_FILE_SIZE_BYTES,
+            });
+        }
         let bytes = tokio::fs::read(&file)
             .await
             .map_err(|e| map_io_err(e, path))?;
@@ -1311,6 +1332,49 @@ mod tests {
 
         let err = ws.read_file("innocent.txt").await.unwrap_err();
         assert!(matches!(err, AppError::InvalidPath(_)));
+    }
+
+    #[tokio::test]
+    async fn read_file_rejects_a_file_over_the_size_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        let path = dir.path().join("huge.txt");
+        // A sparse/truncated file keeps this test fast — the guard only
+        // needs `metadata.len()` to report the size, not real file content.
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_READABLE_FILE_SIZE_BYTES + 1).unwrap();
+
+        let err = ws.read_file("huge.txt").await.unwrap_err();
+        match err {
+            AppError::FileTooLarge { path, size, limit } => {
+                assert_eq!(path, "huge.txt");
+                assert_eq!(size, MAX_READABLE_FILE_SIZE_BYTES + 1);
+                assert_eq!(limit, MAX_READABLE_FILE_SIZE_BYTES);
+            }
+            other => panic!("expected FileTooLarge, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_file_accepts_a_file_at_exactly_the_size_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        let path = dir.path().join("exact.txt");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_READABLE_FILE_SIZE_BYTES).unwrap();
+
+        ws.read_file("exact.txt").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn read_file_accepts_a_file_just_under_the_size_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        let path = dir.path().join("under.txt");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_READABLE_FILE_SIZE_BYTES - 1).unwrap();
+
+        ws.read_file("under.txt").await.unwrap();
     }
 
     #[tokio::test]
