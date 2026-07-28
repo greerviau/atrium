@@ -47,13 +47,6 @@
   // `tabsState`/`activeTabPath`.
   let focusedPath = $state<string | null>(null);
 
-  $effect(() => {
-    const root = $fileTree.root;
-    if (root && focusedPath === null) {
-      focusedPath = root.entry.path;
-    }
-  });
-
   interface VisibleRow {
     path: string;
     node: TreeNode;
@@ -80,6 +73,20 @@
 
   let visibleRows = $derived(flattenVisible($fileTree.root));
 
+  // `focusedPath` can go stale: the row it names can stop existing (deleted,
+  // renamed, refreshed out from under it) without anything reconciling it,
+  // and since a row's own `tabindex`/`aria-selected` are keyed off whichever
+  // path this resolves to, a dangling `focusedPath` would otherwise drop the
+  // entire explorer out of the tab sequence (every row would read `-1`, and
+  // `.file-tree` itself is `tabindex="-1"`). Rendering always goes through
+  // this derived, guaranteed-valid projection instead — falling back to the
+  // first visible row (the root) whenever the stored path isn't currently
+  // visible, which also covers the very first render before anything has
+  // been focused, so no separate init effect is needed.
+  let activePath = $derived(
+    visibleRows.some((row) => row.path === focusedPath) ? focusedPath : (visibleRows[0]?.path ?? null),
+  );
+
   function onFocusRow(path: string): void {
     focusedPath = path;
   }
@@ -87,7 +94,9 @@
   async function moveFocusTo(path: string): Promise<void> {
     focusedPath = path;
     await tick();
-    treeEl.querySelector<HTMLElement>(`.row[data-path="${CSS.escape(path)}"]`)?.focus();
+    Array.from(treeEl.querySelectorAll<HTMLElement>(".row[data-path]")).find(
+      (row) => row.dataset.path === path,
+    )?.focus();
   }
 
   // Arrow/Home/End handling, matching the WAI-ARIA APG Tree View pattern (§
@@ -118,8 +127,12 @@
         void toggleExpanded(row.node);
         return;
       }
+      // `visibleRows[index + 1]` is only "the first child" when this
+      // directory actually has visible children — an already-open but empty
+      // (or not-yet-loaded) directory contributes none, so the next entry is
+      // really a sibling from an ancestor's perspective; APG says do nothing.
       const next = visibleRows[index + 1];
-      if (next) void moveFocusTo(next.path);
+      if (next?.parentPath === row.path) void moveFocusTo(next.path);
       return;
     }
     if (event.key === "ArrowLeft") {
@@ -284,7 +297,7 @@
 >
   {#if $fileTree.root}
     <div role="tree" aria-label="File Explorer">
-      <FileTreeNode node={$fileTree.root} {focusedPath} {onFocusRow} />
+      <FileTreeNode node={$fileTree.root} focusedPath={activePath} {onFocusRow} />
     </div>
   {/if}
 </div>
