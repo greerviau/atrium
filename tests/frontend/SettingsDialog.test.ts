@@ -19,9 +19,22 @@ async function flush(): Promise<void> {
 }
 
 async function selectCategory(name: string): Promise<void> {
-  await fireEvent.click(screen.getByRole("tab", { name }));
+  await fireEvent.click(screen.getByRole("treeitem", { name }));
   await flush();
 }
+
+// A category row's `textContent` includes its `aria-hidden` chevron glyph
+// (`aria-hidden` only excludes it from accessible-name computation, which is
+// what role/name queries use — it has no effect on the raw DOM property), so
+// comparisons against a row's visible label strip it out here.
+function rowLabel(el: Element): string | undefined {
+  return el.textContent?.replace(/^▸\s*/, "").trim();
+}
+
+// `Element.prototype.scrollIntoView` isn't implemented in jsdom — every test
+// that activates a section nav row needs it stubbed, or the assertion
+// silently passes without checking anything (or the click throws).
+let scrollIntoViewSpy: ReturnType<typeof vi.fn>;
 
 describe("SettingsDialog", () => {
   beforeEach(() => {
@@ -34,6 +47,8 @@ describe("SettingsDialog", () => {
     zoom.set(DEFAULT_ZOOM);
     minimapEnabled.set(DEFAULT_MINIMAP_ENABLED);
     markdownDefaultView.set(DEFAULT_MARKDOWN_VIEW);
+    scrollIntoViewSpy = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoViewSpy;
   });
 
   afterEach(() => {
@@ -89,16 +104,25 @@ describe("SettingsDialog", () => {
   });
 
   describe("sidebar navigation", () => {
-    it("renders all five categories, with General selected and its content shown by default", async () => {
+    it("renders all five categories expanded with their one section each, General selected and its content shown by default", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
 
-      const tabs = screen.getAllByRole("tab");
-      expect(tabs.map((t) => t.textContent)).toEqual(["General", "Appearance", "Editor", "Markdown", "Terminal"]);
-      expect(screen.getByRole("tab", { name: "General" }).getAttribute("aria-selected")).toBe("true");
+      const rows = screen.getAllByRole("treeitem");
+      const categoryRows = rows.filter((r) => r.getAttribute("aria-level") === "1");
+      expect(categoryRows.map((r) => rowLabel(r))).toEqual([
+        "General",
+        "Appearance",
+        "Editor",
+        "Markdown",
+        "Terminal",
+      ]);
+      expect(categoryRows[0].getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("treeitem", { name: "Zoom" })).toBeTruthy();
+      expect(screen.getByRole("treeitem", { name: "Theme" })).toBeTruthy();
       expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
-      expect(screen.queryByText("Theme")).toBeNull();
+      expect(screen.queryByRole("heading", { name: "Theme" })).toBeNull();
     });
 
     it("clicking a category switches the visible content and marks it selected", async () => {
@@ -108,8 +132,8 @@ describe("SettingsDialog", () => {
 
       await selectCategory("Appearance");
 
-      expect(screen.getByRole("tab", { name: "Appearance" }).getAttribute("aria-selected")).toBe("true");
-      expect(screen.getByRole("tab", { name: "General" }).getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByRole("treeitem", { name: "Appearance" }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("treeitem", { name: "General" }).getAttribute("aria-selected")).toBe("false");
       expect(screen.getByRole("heading", { name: "Theme" })).toBeTruthy();
       expect(screen.queryByRole("heading", { name: "Zoom" })).toBeNull();
     });
@@ -120,165 +144,316 @@ describe("SettingsDialog", () => {
       await tick();
 
       await selectCategory("Editor");
-      expect(screen.getByRole("tab", { name: "Editor" }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("treeitem", { name: "Editor" }).getAttribute("aria-selected")).toBe("true");
 
       settingsOverlay.set({ open: false });
       await tick();
       settingsOverlay.set({ open: true });
       await tick();
 
-      expect(screen.getByRole("tab", { name: "General" }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("treeitem", { name: "General" }).getAttribute("aria-selected")).toBe("true");
     });
   });
 
-  describe("tab ARIA wiring", () => {
-    it("gives every tab an aria-controls pointing at the tabpanel's id", async () => {
+  describe("content region labelling", () => {
+    it("labels the content region with the selected category's name, updating when selection changes", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
 
-      const panel = screen.getByRole("tabpanel");
-      for (const tab of screen.getAllByRole("tab")) {
-        expect(tab.getAttribute("aria-controls")).toBe(panel.id);
-      }
-    });
-
-    it("the tabpanel's aria-labelledby matches the selected tab's id, and updates on selection", async () => {
-      settingsOverlay.set({ open: true });
-      render(SettingsDialog);
-      await tick();
-
-      const panel = screen.getByRole("tabpanel");
-      expect(panel.getAttribute("aria-labelledby")).toBe(screen.getByRole("tab", { name: "General" }).id);
+      expect(screen.getByRole("region").getAttribute("aria-label")).toBe("General");
 
       await selectCategory("Appearance");
 
-      expect(panel.getAttribute("aria-labelledby")).toBe(screen.getByRole("tab", { name: "Appearance" }).id);
+      expect(screen.getByRole("region").getAttribute("aria-label")).toBe("Appearance");
     });
 
-    it("keeps the tabpanel named via aria-label when no tabs render (no-match search state)", async () => {
+    it("keeps the content region named via aria-label when no rows render (no-match search state)", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
-      const preSearchLabel = screen.getByRole("tabpanel").getAttribute("aria-label");
+      const preSearchLabel = screen.getByRole("region").getAttribute("aria-label");
 
       await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "nonexistent-setting" } });
       await tick();
 
-      expect(screen.queryAllByRole("tab")).toHaveLength(0);
+      expect(screen.queryAllByRole("treeitem")).toHaveLength(0);
       expect(preSearchLabel).toBeTruthy();
-      expect(screen.getByRole("tabpanel").getAttribute("aria-label")).toBe(preSearchLabel);
+      expect(screen.getByRole("region").getAttribute("aria-label")).toBe(preSearchLabel);
     });
   });
 
-  describe("keyboard navigation (sidebar tablist)", () => {
-    it("gives the selected tab tabindex 0 and every other tab tabindex -1", async () => {
+  describe("keyboard navigation (sidebar tree)", () => {
+    it("ArrowDown moves focus through categories and their sections without switching the mounted category", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
 
-      const tabs = screen.getAllByRole("tab");
-      expect(tabs.map((t) => [t.textContent, t.getAttribute("tabindex")])).toEqual([
-        ["General", "0"],
-        ["Appearance", "-1"],
-        ["Editor", "-1"],
-        ["Markdown", "-1"],
-        ["Terminal", "-1"],
-      ]);
-    });
-
-    it("ArrowRight/ArrowDown selects the next category and moves DOM focus to it", async () => {
-      settingsOverlay.set({ open: true });
-      render(SettingsDialog);
-      await tick();
-
-      const general = screen.getByRole("tab", { name: "General" });
-      await fireEvent.keyDown(general, { key: "ArrowRight" });
+      const general = screen.getByRole("treeitem", { name: "General" });
+      await fireEvent.keyDown(general, { key: "ArrowDown" });
       await flush();
 
-      const appearance = screen.getByRole("tab", { name: "Appearance" });
-      expect(appearance.getAttribute("aria-selected")).toBe("true");
-      expect(appearance.getAttribute("tabindex")).toBe("0");
+      const zoomRow = screen.getByRole("treeitem", { name: "Zoom" });
+      expect(zoomRow.getAttribute("aria-selected")).toBe("true");
+      expect(zoomRow.getAttribute("tabindex")).toBe("0");
+      expect(document.activeElement).toBe(zoomRow);
       expect(general.getAttribute("aria-selected")).toBe("false");
       expect(general.getAttribute("tabindex")).toBe("-1");
+      // Arrowing onto a row must never, by itself, switch the mounted content.
+      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
+
+      await fireEvent.keyDown(zoomRow, { key: "ArrowDown" });
+      await flush();
+
+      const appearance = screen.getByRole("treeitem", { name: "Appearance" });
+      expect(appearance.getAttribute("aria-selected")).toBe("true");
       expect(document.activeElement).toBe(appearance);
+      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
     });
 
-    it("ArrowRight/ArrowDown wraps from the last category back to the first", async () => {
+    it("ArrowUp moves focus to the previous visible row", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
-      await selectCategory("Terminal");
 
-      await fireEvent.keyDown(screen.getByRole("tab", { name: "Terminal" }), { key: "ArrowDown" });
+      const general = screen.getByRole("treeitem", { name: "General" });
+      await fireEvent.keyDown(general, { key: "ArrowDown" });
+      await flush();
+      const zoomRow = screen.getByRole("treeitem", { name: "Zoom" });
+
+      await fireEvent.keyDown(zoomRow, { key: "ArrowUp" });
       await flush();
 
-      const general = screen.getByRole("tab", { name: "General" });
       expect(general.getAttribute("aria-selected")).toBe("true");
       expect(document.activeElement).toBe(general);
     });
 
-    it("ArrowLeft/ArrowUp selects the previous category, wrapping from the first back to the last", async () => {
+    it("Home jumps to the first row and End jumps to the last visible row", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
 
-      await fireEvent.keyDown(screen.getByRole("tab", { name: "General" }), { key: "ArrowUp" });
+      const general = screen.getByRole("treeitem", { name: "General" });
+      await fireEvent.keyDown(general, { key: "End" });
       await flush();
 
-      const terminal = screen.getByRole("tab", { name: "Terminal" });
-      expect(terminal.getAttribute("aria-selected")).toBe("true");
-      expect(document.activeElement).toBe(terminal);
+      const dockPosition = screen.getByRole("treeitem", { name: "Dock Position" });
+      expect(dockPosition.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(dockPosition);
 
-      await fireEvent.keyDown(terminal, { key: "ArrowLeft" });
+      await fireEvent.keyDown(dockPosition, { key: "Home" });
       await flush();
 
-      const markdown = screen.getByRole("tab", { name: "Markdown" });
-      expect(markdown.getAttribute("aria-selected")).toBe("true");
-      expect(document.activeElement).toBe(markdown);
-    });
-
-    it("Home jumps to the first category and End jumps to the last", async () => {
-      settingsOverlay.set({ open: true });
-      render(SettingsDialog);
-      await tick();
-      await selectCategory("Editor");
-
-      await fireEvent.keyDown(screen.getByRole("tab", { name: "Editor" }), { key: "End" });
-      await flush();
-      const terminal = screen.getByRole("tab", { name: "Terminal" });
-      expect(terminal.getAttribute("aria-selected")).toBe("true");
-      expect(document.activeElement).toBe(terminal);
-
-      await fireEvent.keyDown(terminal, { key: "Home" });
-      await flush();
-      const general = screen.getByRole("tab", { name: "General" });
       expect(general.getAttribute("aria-selected")).toBe("true");
       expect(document.activeElement).toBe(general);
+    });
+
+    it("Right expands a collapsed category to reveal its section row, Left collapses it again, neither changing the mounted category", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const appearance = screen.getByRole("treeitem", { name: "Appearance" });
+      await fireEvent.keyDown(appearance, { key: "ArrowLeft" });
+      await flush();
+
+      expect(appearance.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByRole("treeitem", { name: "Theme" })).toBeNull();
+      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
+
+      await fireEvent.keyDown(appearance, { key: "ArrowRight" });
+      await flush();
+
+      expect(appearance.getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByRole("treeitem", { name: "Theme" })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
+    });
+
+    it("Left on a focused section row moves focus to its parent category row", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const general = screen.getByRole("treeitem", { name: "General" });
+      await fireEvent.keyDown(general, { key: "ArrowDown" });
+      await flush();
+      const zoomRow = screen.getByRole("treeitem", { name: "Zoom" });
+
+      await fireEvent.keyDown(zoomRow, { key: "ArrowLeft" });
+      await flush();
+
+      expect(general.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(general);
+    });
+
+    it("Enter activates a focused section row (switches the mounted category and scrolls to it), but arrowing onto it alone does neither", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const general = screen.getByRole("treeitem", { name: "General" });
+      await fireEvent.keyDown(general, { key: "ArrowDown" });
+      await flush();
+      await fireEvent.keyDown(screen.getByRole("treeitem", { name: "Zoom" }), { key: "ArrowDown" });
+      await flush();
+      await fireEvent.keyDown(screen.getByRole("treeitem", { name: "Appearance" }), { key: "ArrowDown" });
+      await flush();
+      const themeRow = screen.getByRole("treeitem", { name: "Theme" });
+      expect(themeRow.getAttribute("aria-selected")).toBe("true");
+
+      // Precondition: arrowing onto the row must not itself have activated it.
+      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
+      expect(screen.queryByRole("heading", { name: "Theme" })).toBeNull();
+      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+
+      await fireEvent.keyDown(themeRow, { key: "Enter" });
+      await flush();
+
+      expect(screen.getByRole("heading", { name: "Theme" })).toBeTruthy();
+      expect(screen.queryByRole("heading", { name: "Zoom" })).toBeNull();
+      expect(scrollIntoViewSpy).toHaveBeenCalled();
+    });
+
+    it("Space activates a focused section row the same way Enter does", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const general = screen.getByRole("treeitem", { name: "General" });
+      await fireEvent.keyDown(general, { key: "ArrowDown" });
+      await flush();
+      await fireEvent.keyDown(screen.getByRole("treeitem", { name: "Zoom" }), { key: "ArrowDown" });
+      await flush();
+      await fireEvent.keyDown(screen.getByRole("treeitem", { name: "Appearance" }), { key: "ArrowDown" });
+      await flush();
+      const themeRow = screen.getByRole("treeitem", { name: "Theme" });
+
+      expect(screen.queryByRole("heading", { name: "Theme" })).toBeNull();
+      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+
+      await fireEvent.keyDown(themeRow, { key: " " });
+      await flush();
+
+      expect(screen.getByRole("heading", { name: "Theme" })).toBeTruthy();
+      expect(scrollIntoViewSpy).toHaveBeenCalled();
+    });
+
+    it("Enter on a focused category row activates it, toggling expansion and switching the mounted category", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const general = screen.getByRole("treeitem", { name: "General" });
+      await fireEvent.keyDown(general, { key: "ArrowDown" });
+      await flush();
+      await fireEvent.keyDown(screen.getByRole("treeitem", { name: "Zoom" }), { key: "ArrowDown" });
+      await flush();
+      const appearance = screen.getByRole("treeitem", { name: "Appearance" });
+      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
+
+      await fireEvent.keyDown(appearance, { key: "Enter" });
+      await flush();
+
+      expect(screen.getByRole("heading", { name: "Theme" })).toBeTruthy();
+      expect(appearance.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("falls the tabbable row back to the first visible row when a search unmounts the focused row, and arrow movement still works from there", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const general = screen.getByRole("treeitem", { name: "General" });
+      await fireEvent.keyDown(general, { key: "End" });
+      await flush();
+      const dockPosition = screen.getByRole("treeitem", { name: "Dock Position" });
+      expect(dockPosition.getAttribute("tabindex")).toBe("0");
+
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "theme" } });
+      await tick();
+
+      const tabbableAfterSearch = screen.getAllByRole("treeitem").filter((r) => r.getAttribute("tabindex") === "0");
+      expect(tabbableAfterSearch).toHaveLength(1);
+
+      // Extends the fallback check with an arrow press: if movement were
+      // still keyed off the stale raw focused id instead of this same
+      // fallback row, this would go inert.
+      await fireEvent.keyDown(tabbableAfterSearch[0], { key: "ArrowDown" });
+      await flush();
+      const tabbableAfterArrow = screen.getAllByRole("treeitem").filter((r) => r.getAttribute("tabindex") === "0");
+      expect(tabbableAfterArrow).toHaveLength(1);
+      expect(tabbableAfterArrow[0]).not.toBe(tabbableAfterSearch[0]);
     });
   });
 
-  describe("collapsible sections", () => {
-    it("start expanded, and the chevron toggles the body's visibility and aria-expanded", async () => {
+  describe("single-selection invariant", () => {
+    it("keeps exactly one treeitem selected at a time, whether a section or a category was clicked last", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
 
-      const header = screen.getByRole("button", { name: "Zoom" });
-      expect(header.getAttribute("aria-expanded")).toBe("true");
-      expect(screen.getByText("Reset")).toBeTruthy();
+      const themeRow = screen.getByRole("treeitem", { name: "Theme" });
+      await fireEvent.click(themeRow);
+      await flush();
 
-      await fireEvent.click(header);
+      let selected = screen.getAllByRole("treeitem").filter((r) => r.getAttribute("aria-selected") === "true");
+      expect(selected).toHaveLength(1);
+      expect(selected[0]).toBe(themeRow);
+      expect(themeRow.getAttribute("tabindex")).toBe("0");
+
+      const editorRow = screen.getByRole("treeitem", { name: "Editor" });
+      await fireEvent.click(editorRow);
+      await flush();
+
+      selected = screen.getAllByRole("treeitem").filter((r) => r.getAttribute("aria-selected") === "true");
+      expect(selected).toHaveLength(1);
+      expect(selected[0]).toBe(editorRow);
+      expect(themeRow.getAttribute("aria-selected")).toBe("false");
+    });
+  });
+
+  describe("clicking a section nav row", () => {
+    it("switches the mounted category when the section belongs to a different one, and scrolls to it", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
       await tick();
 
-      expect(header.getAttribute("aria-expanded")).toBe("false");
-      expect(screen.queryByText("Reset")).toBeNull();
+      const themeRow = screen.getByRole("treeitem", { name: "Theme" });
+      await fireEvent.click(themeRow);
+      await flush();
 
-      await fireEvent.click(header);
+      expect(screen.getByRole("heading", { name: "Theme" })).toBeTruthy();
+      expect(scrollIntoViewSpy).toHaveBeenCalled();
+    });
+
+    it("scrolls to the section even when it already belongs to the mounted category", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
       await tick();
 
-      expect(header.getAttribute("aria-expanded")).toBe("true");
-      expect(screen.getByText("Reset")).toBeTruthy();
+      const zoomRow = screen.getByRole("treeitem", { name: "Zoom" });
+      await fireEvent.click(zoomRow);
+      await flush();
+
+      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
+      expect(scrollIntoViewSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe("panel sizing", () => {
+    it("keeps a fixed panel height regardless of how much content a search narrows the panel to", async () => {
+      settingsOverlay.set({ open: true });
+      const { container } = render(SettingsDialog);
+      await tick();
+
+      const panel = container.querySelector(".settings-panel") as HTMLElement;
+      const heightBefore = getComputedStyle(panel).height;
+      expect(heightBefore).toBe("80vh");
+
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "theme" } });
+      await tick();
+
+      expect(getComputedStyle(panel).height).toBe(heightBefore);
     });
   });
 
@@ -291,9 +466,9 @@ describe("SettingsDialog", () => {
       await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "theme" } });
       await tick();
 
-      const tabs = screen.getAllByRole("tab");
-      expect(tabs.map((t) => t.textContent)).toEqual(["Appearance"]);
-      expect(screen.getByRole("tab", { name: "Appearance" }).getAttribute("aria-selected")).toBe("true");
+      const rows = screen.getAllByRole("treeitem");
+      expect(rows.map((r) => rowLabel(r))).toEqual(["Appearance", "Theme"]);
+      expect(screen.getByRole("treeitem", { name: "Appearance" }).getAttribute("aria-selected")).toBe("true");
       expect(screen.getByRole("heading", { name: "Theme" })).toBeTruthy();
     });
 
@@ -307,74 +482,9 @@ describe("SettingsDialog", () => {
       await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "layout" } });
       await tick();
 
-      expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Terminal"]);
-      expect(screen.getByText("Dock Position")).toBeTruthy();
-    });
-
-    it("auto-expands a matched section that was collapsed, and a click during search can collapse it again", async () => {
-      settingsOverlay.set({ open: true });
-      const { container } = render(SettingsDialog);
-      await tick();
-
-      await selectCategory("Appearance");
-      const header = container.querySelector(".settings-section-header") as HTMLElement;
-      await fireEvent.click(header);
-      await tick();
-      expect(header.getAttribute("aria-expanded")).toBe("false");
-
-      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "theme" } });
-      await tick();
-
-      expect(header.getAttribute("aria-expanded")).toBe("true");
-      expect(container.querySelector(".dropdown-trigger")).not.toBeNull();
-
-      // Clicking the auto-expanded header while searching used to be a
-      // no-op; it now visibly collapses the section.
-      await fireEvent.click(header);
-      await tick();
-      expect(header.getAttribute("aria-expanded")).toBe("false");
-      expect(container.querySelector(".dropdown-trigger")).toBeNull();
-
-      // Clicking again re-expands it: a genuine toggle, not a one-shot
-      // escape from the forced-expanded state.
-      await fireEvent.click(header);
-      await tick();
-      expect(header.getAttribute("aria-expanded")).toBe("true");
-      expect(container.querySelector(".dropdown-trigger")).not.toBeNull();
-
-      // Clearing the query restores the pre-search state (manually
-      // collapsed), proving the search override never leaked into the
-      // persisted `expandedSections`.
-      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "" } });
-      await tick();
-      expect(header.getAttribute("aria-expanded")).toBe("false");
-    });
-
-    it("resets search overrides once the query clears, so a later search auto-expands again", async () => {
-      settingsOverlay.set({ open: true });
-      const { container } = render(SettingsDialog);
-      await tick();
-      await selectCategory("Appearance");
-
-      const searchInput = screen.getByLabelText("Search settings");
-      await fireEvent.input(searchInput, { target: { value: "theme" } });
-      await tick();
-      const header = container.querySelector(".settings-section-header") as HTMLElement;
-      expect(header.getAttribute("aria-expanded")).toBe("true");
-
-      await fireEvent.click(header);
-      await tick();
-      expect(header.getAttribute("aria-expanded")).toBe("false");
-
-      await fireEvent.input(searchInput, { target: { value: "" } });
-      await tick();
-
-      // A different query that also matches the Theme section (via the
-      // "color" keyword synonym rather than "theme" itself).
-      await fireEvent.input(searchInput, { target: { value: "color" } });
-      await tick();
-
-      expect(header.getAttribute("aria-expanded")).toBe("true");
+      const rows = screen.getAllByRole("treeitem");
+      expect(rows.map((r) => rowLabel(r))).toEqual(["Terminal", "Dock Position"]);
+      expect(screen.getByRole("heading", { name: "Dock Position" })).toBeTruthy();
     });
 
     it("shows an empty state when nothing matches", async () => {
@@ -385,7 +495,7 @@ describe("SettingsDialog", () => {
       await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "nonexistent-setting" } });
       await tick();
 
-      expect(screen.queryAllByRole("tab")).toHaveLength(0);
+      expect(screen.queryAllByRole("treeitem")).toHaveLength(0);
       expect(screen.getByText("No settings match your search.")).toBeTruthy();
     });
 
@@ -397,12 +507,13 @@ describe("SettingsDialog", () => {
       const input = screen.getByLabelText("Search settings");
       await fireEvent.input(input, { target: { value: "theme" } });
       await tick();
-      expect(screen.getAllByRole("tab")).toHaveLength(1);
+      expect(screen.getAllByRole("treeitem").map((r) => rowLabel(r))).toEqual(["Appearance", "Theme"]);
 
       await fireEvent.input(input, { target: { value: "" } });
       await tick();
 
-      expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
+      const categoryRows = screen.getAllByRole("treeitem").filter((r) => r.getAttribute("aria-level") === "1");
+      expect(categoryRows.map((r) => rowLabel(r))).toEqual([
         "General",
         "Appearance",
         "Editor",
@@ -412,11 +523,9 @@ describe("SettingsDialog", () => {
     });
   });
 
-  // Both the settings section header and the Dropdown trigger it contains
-  // are `role="button"` elements, and both are labeled after the same
-  // setting name (the section's own title vs. the dropdown's aria-label),
-  // so opening a dropdown queries its trigger via the `.dropdown-trigger`
-  // class rather than an ambiguous `getByRole("button", { name })`.
+  // Both the settings section heading and the Dropdown trigger it contains
+  // are queried by role elsewhere, so opening a dropdown queries its trigger
+  // via the `.dropdown-trigger` class rather than an ambiguous role/name.
   function dropdownTrigger(container: HTMLElement): HTMLButtonElement {
     return container.querySelector(".dropdown-trigger") as HTMLButtonElement;
   }

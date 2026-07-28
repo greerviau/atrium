@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { settingsOverlay, closeSettings } from "../stores/settingsOverlay";
   import { themes } from "../theme/tokens";
   import { themeSelection, setTheme } from "../stores/theme";
@@ -13,14 +14,7 @@
   import SettingsSidebar from "../settings/SettingsSidebar.svelte";
   import SettingsSection from "../settings/SettingsSection.svelte";
   import Dropdown from "../ui/Dropdown.svelte";
-  import {
-    SETTINGS_CATEGORIES,
-    SETTINGS_SECTIONS,
-    SETTINGS_TABPANEL_ID,
-    sectionMatchesQuery,
-    settingsTabId,
-    type SettingsCategoryId,
-  } from "../settings/settingsRegistry";
+  import { SETTINGS_CATEGORIES, SETTINGS_SECTIONS, sectionMatchesQuery, type SettingsCategoryId } from "../settings/settingsRegistry";
 
   const THEME_OPTIONS: { id: string; label: string }[] = [
     { id: "auto", label: "Auto" },
@@ -42,23 +36,16 @@
 
   let panelEl: HTMLDivElement | undefined = $state();
 
-  // Sidebar selection, search query, and each section's collapsed/expanded
-  // state are all transient UI state that resets to defaults every time the
-  // dialog opens rather than persisting — see `resetState` below, mirrored
-  // by every other Atrium overlay (e.g. `SearchOverlay`) resetting its own
-  // transient state the same way.
+  // Sidebar selection and search query are transient UI state that resets to
+  // defaults every time the dialog opens rather than persisting — see
+  // `resetState` below, mirrored by every other Atrium overlay (e.g.
+  // `SearchOverlay`) resetting its own transient state the same way.
   let selectedCategory = $state<SettingsCategoryId>(DEFAULT_CATEGORY);
   let searchQuery = $state("");
-  let expandedSections = $state<Record<string, boolean>>({});
-  // Overrides are scoped to a single active search: once the query is
-  // cleared, the next search starts fresh rather than remembering
-  // collapse/expand choices from an unrelated earlier query.
-  let searchOverrides = $state<Record<string, boolean>>({});
 
   function resetState(): void {
     selectedCategory = DEFAULT_CATEGORY;
     searchQuery = "";
-    expandedSections = Object.fromEntries(SETTINGS_SECTIONS.map((section) => [section.id, true]));
   }
 
   // Same focus-move technique as UnsavedChangesDialog: without moving real
@@ -84,6 +71,11 @@
         )
       : SETTINGS_CATEGORIES,
   );
+  // The nav's per-category section rows need the same search gate the
+  // content pane applies via `isSectionVisible` below — otherwise a section
+  // row for a non-matching sibling would stay in the tree, clickable, and
+  // resolve to a scroll target `isSectionVisible` has kept out of the DOM.
+  let visibleSections = $derived(SETTINGS_SECTIONS.filter((section) => isSectionVisible(section.id)));
   let currentCategoryLabel = $derived(
     SETTINGS_CATEGORIES.find((category) => category.id === selectedCategory)?.label ?? "",
   );
@@ -104,33 +96,26 @@
     if (firstMatch) selectedCategory = firstMatch.id;
   });
 
-  $effect(() => {
-    if (!searching) searchOverrides = {};
-  });
-
   function isSectionVisible(id: string): boolean {
     return !searching || matchingSectionIds.has(id);
   }
 
-  // A matched section that's collapsed auto-expands while a query is
-  // active, so the match is actually visible rather than hidden behind its
-  // own disclosure. A manual toggle taken while searching is recorded in
-  // `searchOverrides` and wins over the auto-expand, so the click is no
-  // longer a no-op; `expandedSections` itself stays untouched while
-  // searching, so clearing the query restores whatever the user had
-  // explicitly set before the search started.
-  function isSectionExpanded(id: string): boolean {
-    if (searching && id in searchOverrides) return searchOverrides[id];
-    if (searching && matchingSectionIds.has(id)) return true;
-    return expandedSections[id] ?? true;
+  function sectionAnchorId(id: string): string {
+    return `settings-section-${id}`;
   }
 
-  function toggleSection(id: string): void {
-    if (searching) {
-      searchOverrides[id] = !isSectionExpanded(id);
-    } else {
-      expandedSections[id] = !isSectionExpanded(id);
+  // Clicking (or activating via Enter/Space) a section's nav row switches to
+  // its parent category if that isn't already mounted, then scrolls the
+  // content pane to it — `block: "nearest"` is what makes "scroll if
+  // necessary" literal, since an element already fully in view doesn't move.
+  async function scrollToSection(sectionId: string): Promise<void> {
+    const section = SETTINGS_SECTIONS.find((s) => s.id === sectionId);
+    if (!section) return;
+    if (selectedCategory !== section.categoryId) {
+      selectedCategory = section.categoryId;
+      await tick();
     }
+    document.getElementById(sectionAnchorId(sectionId))?.scrollIntoView({ block: "nearest" });
   }
 
   function onBackdropKeydown(event: KeyboardEvent): void {
@@ -156,35 +141,33 @@
     >
       <div class="settings-header">
         <h2 class="settings-title">Settings</h2>
-        <input
-          class="settings-search-input"
-          type="text"
-          bind:value={searchQuery}
-          placeholder="Search settings…"
-          aria-label="Search settings"
-          autocomplete="off"
-          autocorrect="off"
-          autocapitalize="off"
-          spellcheck="false"
-        />
       </div>
 
       <div class="settings-body">
-        <SettingsSidebar
-          categories={visibleCategories}
-          selected={selectedCategory}
-          onSelect={(id) => (selectedCategory = id)}
-        />
+        <div class="settings-nav-column">
+          <input
+            class="settings-search-input"
+            type="text"
+            bind:value={searchQuery}
+            placeholder="Search settings…"
+            aria-label="Search settings"
+            autocomplete="off"
+            autocorrect="off"
+            autocapitalize="off"
+            spellcheck="false"
+          />
+          <SettingsSidebar
+            categories={visibleCategories}
+            sections={visibleSections}
+            selected={selectedCategory}
+            onSelectCategory={(id) => (selectedCategory = id)}
+            onSelectSection={(id) => void scrollToSection(id)}
+          />
+        </div>
 
-        <div
-          class="settings-content"
-          id={SETTINGS_TABPANEL_ID}
-          role="tabpanel"
-          aria-labelledby={settingsTabId(selectedCategory)}
-          aria-label={currentCategoryLabel}
-        >
+        <div class="settings-content" role="region" aria-label={currentCategoryLabel}>
           {#if selectedCategory === "general" && isSectionVisible("zoom")}
-            <SettingsSection title="Zoom" expanded={isSectionExpanded("zoom")} onToggle={() => toggleSection("zoom")}>
+            <SettingsSection title="Zoom" id={sectionAnchorId("zoom")}>
               <div class="settings-row">
                 <span class="settings-label">Zoom</span>
                 <div class="settings-zoom">
@@ -207,7 +190,7 @@
           {/if}
 
           {#if selectedCategory === "appearance" && isSectionVisible("theme")}
-            <SettingsSection title="Theme" expanded={isSectionExpanded("theme")} onToggle={() => toggleSection("theme")}>
+            <SettingsSection title="Theme" id={sectionAnchorId("theme")}>
               <div class="settings-row">
                 <span class="settings-label">Theme</span>
                 <Dropdown options={THEME_OPTIONS} value={$themeSelection} onSelect={setTheme} label="Theme" />
@@ -216,11 +199,7 @@
           {/if}
 
           {#if selectedCategory === "editor" && isSectionVisible("minimap")}
-            <SettingsSection
-              title="Minimap"
-              expanded={isSectionExpanded("minimap")}
-              onToggle={() => toggleSection("minimap")}
-            >
+            <SettingsSection title="Minimap" id={sectionAnchorId("minimap")}>
               <div class="settings-row">
                 <span class="settings-label">Show minimap</span>
                 <input
@@ -235,11 +214,7 @@
           {/if}
 
           {#if selectedCategory === "markdown" && isSectionVisible("default-view")}
-            <SettingsSection
-              title="Default View"
-              expanded={isSectionExpanded("default-view")}
-              onToggle={() => toggleSection("default-view")}
-            >
+            <SettingsSection title="Default View" id={sectionAnchorId("default-view")}>
               <div class="settings-row">
                 <span class="settings-label">Default view for markdown files</span>
                 <Dropdown
@@ -253,11 +228,7 @@
           {/if}
 
           {#if selectedCategory === "terminal" && isSectionVisible("dock-position")}
-            <SettingsSection
-              title="Dock Position"
-              expanded={isSectionExpanded("dock-position")}
-              onToggle={() => toggleSection("dock-position")}
-            >
+            <SettingsSection title="Dock Position" id={sectionAnchorId("dock-position")}>
               <div class="settings-row">
                 <span class="settings-label">Terminal dock position</span>
                 <Dropdown
@@ -299,7 +270,7 @@
     border-radius: 8px;
     width: 680px;
     max-width: 90vw;
-    max-height: 80vh;
+    height: 80vh;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -311,12 +282,26 @@
     padding: 20px 20px 12px;
   }
   .settings-title {
-    margin: 0 0 12px;
+    margin: 0;
     font-size: 1.1em;
   }
+  .settings-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    border-top: 1px solid var(--atrium-border);
+  }
+  .settings-nav-column {
+    display: flex;
+    flex-direction: column;
+    width: 200px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--atrium-border);
+  }
   .settings-search-input {
-    width: 100%;
+    flex-shrink: 0;
     box-sizing: border-box;
+    margin: 12px 12px 8px;
     padding: 8px 10px;
     font: inherit;
     background: var(--atrium-bg-surface);
@@ -327,12 +312,6 @@
   .settings-search-input:focus {
     outline: none;
     border-color: var(--atrium-accent);
-  }
-  .settings-body {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    border-top: 1px solid var(--atrium-border);
   }
   .settings-content {
     flex: 1;
