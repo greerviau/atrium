@@ -612,6 +612,31 @@ describe("SearchOverlay", () => {
     expect(await screen.findByText("a.txt")).toBeTruthy();
   });
 
+  it("fires a second findFiles request and shows the browse list again on reopen in the same mode (issue #327)", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([{ path: "/proj/a.txt", displayPath: "a.txt", score: 0, matchIndices: [] }]),
+    );
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(commands.findFiles).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("a.txt")).toBeTruthy();
+
+    // Close without typing anything, then reopen in the same mode: `query`
+    // and `mode` are both already at their post-reset values, so nothing
+    // about them actually changes value on this second open.
+    searchOverlay.set({ open: false, mode: "files" });
+    await tick();
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(commands.findFiles).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText("a.txt")).toBeTruthy();
+  });
+
   it("shows recently-opened files first in the empty-query Files-mode browse list", async () => {
     recordFileOpened("/proj", "/proj/c.txt");
     recordFileOpened("/proj", "/proj/a.txt");
