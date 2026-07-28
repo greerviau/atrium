@@ -169,8 +169,9 @@ struct PtySession {
 
 pub struct PtyManager {
     sessions: Arc<Mutex<HashMap<String, PtySession>>>,
-    /// Counts completed `flush_output_loop` iterations (including ones that
-    /// find nothing pending and flush nothing) — not "flushes performed."
+    /// Incremented at the start of each `flush_output_loop` pass (including
+    /// passes that find nothing pending and flush nothing) — not "flushes
+    /// performed."
     /// Lets tests assert "landed within N observed ticks of this iteration"
     /// instead of "within N wall-clock ms," which is invariant to how long
     /// any individual tick took to actually run under CI scheduling
@@ -1269,10 +1270,11 @@ mod tests {
             // under CI scheduling contention, so this stays meaningful on a
             // slow runner instead of flaking the way a fixed millisecond
             // bound would. `kill_session`'s process-table refresh and signal
-            // loop measured ~28ms for a shell with 5 descendants on this
-            // machine, against which `resize_elapsed < kill_elapsed / 3`
-            // sits essentially on top of the previous fixed 10ms bound —
-            // it only loosens as the runner slows.
+            // loop measured ~75-90ms for a shell with 5 descendants on this
+            // machine (idle), against a `resize_elapsed` of ~15-22us — a
+            // working threshold in the tens of milliseconds, well above the
+            // previous fixed 10ms bound rather than sitting on top of it,
+            // and it only widens further as the runner slows.
             assert!(
                 resize_elapsed < kill_elapsed / 3,
                 "resize() for another terminal ({:?}) was not clearly faster than terminal a's reaping \
@@ -1305,8 +1307,13 @@ mod tests {
         // it — this measurement is about the flood's own event count, not
         // the banner's. Clearing here (rather than budgeting for it in the
         // slop below) removes that term from the bound entirely instead of
-        // estimating it.
+        // estimating it. `ticks_before` is read before the clear, not after:
+        // an event delivered in the gap between the two would otherwise
+        // count toward `received.len()` without contributing to
+        // `ticks_spanned`, which only loosens the bound but costs nothing to
+        // close off.
         std::thread::sleep(Duration::from_millis(200));
+        let ticks_before = manager.flush_ticks.load(Ordering::SeqCst);
         chunks.lock().unwrap().clear();
 
         // `tr` over `/dev/zero` produces a fast, sustained burst with no
@@ -1316,7 +1323,6 @@ mod tests {
         // rather than a literal `A` so the typed command line itself (which
         // the pty echoes back verbatim as it's typed) contains no `A` to
         // contaminate the count.
-        let ticks_before = manager.flush_ticks.load(Ordering::SeqCst);
         manager
             .write(
                 &terminal_id,
