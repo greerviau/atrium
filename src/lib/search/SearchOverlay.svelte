@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { searchOverlay, closeSearch, type SearchMode } from "./searchOverlay";
   import {
     searchWorkspace,
@@ -71,6 +72,16 @@
     if (isOpen && (!previousOpen || storeMode !== previousMode)) {
       resetState();
       mode = storeMode;
+      // `untrack`: `scheduleSearch()` reads `mode`/`query`, both just
+      // written above in this same run. Reading them here without
+      // `untrack` would make this effect track them as dependencies too,
+      // so the very next keystroke would rerun it — re-firing
+      // `inputEl?.focus()`/`.select()` and reselecting the whole input.
+      // That rerun skips this reset branch (isOpen/mode haven't changed
+      // again), so `mode`/`query` aren't read a second time and drop back
+      // out of the dependency set — it's a one-keystroke blip, not a
+      // rerun on every keystroke.
+      untrack(() => scheduleSearch());
     }
     if (isOpen) {
       inputEl?.focus();
@@ -196,16 +207,29 @@
   // here if a content-mode query no longer qualifies for a search at all.
   // Files mode has no such disqualifying length, so it's always "searching"
   // once the debounce fires.
-  $effect(() => {
-    void query;
-    void caseSensitive;
-    void regexMode;
-    void mode;
+  //
+  // Called both reactively below (on a query/toggle/mode value change) and
+  // imperatively from the open/reset effect above, so a fresh open or
+  // mode-switch always schedules a search even when `resetState()` leaves
+  // `query`/`mode` sitting at values that are already equal to what they
+  // were — a value-equality-gated `$effect` wouldn't rerun from that
+  // reassignment alone. `requestId`'s staleness guard makes the occasional
+  // double call (once imperative, once reactive, in the same flush) safe:
+  // the second call's bump simply supersedes the first's in-flight request.
+  function scheduleSearch(): void {
     requestId += 1;
     const myRequestId = requestId;
     isSearching = mode === "content" ? query.length >= MIN_QUERY_LENGTH : true;
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => void runSearch(myRequestId), DEBOUNCE_MS);
+  }
+
+  $effect(() => {
+    void query;
+    void caseSensitive;
+    void regexMode;
+    void mode;
+    scheduleSearch();
   });
 
   let belowMinLength = $derived(

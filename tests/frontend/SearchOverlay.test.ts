@@ -116,6 +116,21 @@ describe("SearchOverlay", () => {
     expect(selectSpy).toHaveBeenCalled();
   });
 
+  it("does not re-select the query input on a keystroke after a fresh open", async () => {
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+
+    const input = (await screen.findByPlaceholderText(PLACEHOLDER)) as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "f" } });
+    await tick();
+
+    // The open/reset effect must not have rerun from this keystroke: a
+    // re-fired `.select()` would leave the whole input selected ([0, 1]),
+    // so the *next* character typed would replace "f" instead of appending.
+    expect([input.selectionStart, input.selectionEnd]).toEqual([1, 1]);
+  });
+
   it("imperatively focuses and selects the files-mode input when switching modes while already open", async () => {
     vi.mocked(commands.searchWorkspace).mockResolvedValue(results([]));
     vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
@@ -223,6 +238,32 @@ describe("SearchOverlay", () => {
     expect(commands.searchWorkspace).not.toHaveBeenCalled();
     expect(await screen.findByText("Type at least 3 characters to search")).toBeTruthy();
 
+    await fireEvent.input(input, { target: { value: "foo" } });
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(commands.searchWorkspace).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire a spurious content-mode search on an empty-query reopen in the same mode", async () => {
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+
+    // Close without typing, then reopen in the same mode: `scheduleSearch()`
+    // fires imperatively from the open/reset effect (issue #327's fix), but
+    // content mode's own minimum-query-length gate must still suppress the
+    // actual backend call for an empty query, exactly as it does on a fresh
+    // first open.
+    searchOverlay.set({ open: false, mode: "content" });
+    await tick();
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(commands.searchWorkspace).not.toHaveBeenCalled();
+
+    const input = await screen.findByPlaceholderText(PLACEHOLDER);
     await fireEvent.input(input, { target: { value: "foo" } });
     await vi.advanceTimersByTimeAsync(150);
 
@@ -609,6 +650,31 @@ describe("SearchOverlay", () => {
     await vi.advanceTimersByTimeAsync(150);
 
     expect(commands.findFiles).toHaveBeenCalledWith("local", "");
+    expect(await screen.findByText("a.txt")).toBeTruthy();
+  });
+
+  it("fires a second findFiles request and shows the browse list again on reopen in the same mode (issue #327)", async () => {
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([{ path: "/proj/a.txt", displayPath: "a.txt", score: 0, matchIndices: [] }]),
+    );
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(commands.findFiles).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("a.txt")).toBeTruthy();
+
+    // Close without typing anything, then reopen in the same mode: `query`
+    // and `mode` are both already at their post-reset values, so nothing
+    // about them actually changes value on this second open.
+    searchOverlay.set({ open: false, mode: "files" });
+    await tick();
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(commands.findFiles).toHaveBeenCalledTimes(2);
     expect(await screen.findByText("a.txt")).toBeTruthy();
   });
 
