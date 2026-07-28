@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { searchOverlay, closeSearch, type SearchMode } from "./searchOverlay";
   import {
     searchWorkspace,
@@ -71,7 +72,13 @@
     if (isOpen && (!previousOpen || storeMode !== previousMode)) {
       resetState();
       mode = storeMode;
-      scheduleSearch();
+      // `untrack`: `scheduleSearch()` reads `mode`/`query`, both just
+      // written above in this same run. Reading them here without
+      // `untrack` would make this effect track them as dependencies too,
+      // so it would rerun on every keystroke afterward — re-firing
+      // `inputEl?.focus()`/`.select()` and reselecting the whole input on
+      // every character typed.
+      untrack(() => scheduleSearch());
     }
     if (isOpen) {
       inputEl?.focus();

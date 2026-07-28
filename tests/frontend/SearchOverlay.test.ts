@@ -229,6 +229,32 @@ describe("SearchOverlay", () => {
     expect(commands.searchWorkspace).toHaveBeenCalledTimes(1);
   });
 
+  it("does not fire a spurious content-mode search on an empty-query reopen in the same mode", async () => {
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+
+    // Close without typing, then reopen in the same mode: `scheduleSearch()`
+    // fires imperatively from the open/reset effect (issue #327's fix), but
+    // content mode's own minimum-query-length gate must still suppress the
+    // actual backend call for an empty query, exactly as it does on a fresh
+    // first open.
+    searchOverlay.set({ open: false, mode: "content" });
+    await tick();
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(commands.searchWorkspace).not.toHaveBeenCalled();
+
+    const input = await screen.findByPlaceholderText(PLACEHOLDER);
+    await fireEvent.input(input, { target: { value: "foo" } });
+    await vi.advanceTimersByTimeAsync(150);
+
+    expect(commands.searchWorkspace).toHaveBeenCalledTimes(1);
+  });
+
   it("discards a search response that resolves after the query was cleared or shortened below the minimum", async () => {
     const first = deferred<SearchResults>();
     vi.mocked(commands.searchWorkspace).mockReturnValueOnce(first.promise);
