@@ -23,6 +23,13 @@ describe("FILE_PATH_REGEX", () => {
     ["./relative/path.ts:10", ["./relative/path.ts:10"]],
     ["  package.json | 3 +++", ["package.json"]],
     ["just some prose with no path here", []],
+    ["open ~/relative/path.ts:10", ["~/relative/path.ts:10"]],
+    ["cat: 'my file.txt': No such file or directory", ["'my file.txt'"]],
+    ['File "src/foo.py", line 42, in <module>', ['"src/foo.py"']],
+    ["error at 'src/lib/foo.ts':42:7", ["'src/lib/foo.ts':42:7"]],
+    ["cat: '~/notes/todo.md': permission denied", ["'~/notes/todo.md'"]],
+    ["I couldn't read pkg.json's contents", ["pkg.json"]],
+    ["can't open src/main.rs's parent", ["src/main.rs"]],
   ];
 
   it.each(cases)("matches candidates in %j", (line, expected) => {

@@ -1,4 +1,4 @@
-import type { Terminal, ILink, ILinkProvider } from "@xterm/xterm";
+import type { Terminal, ILink, ILinkProvider, IMarker } from "@xterm/xterm";
 import { PR_LINK_REGEX } from "./prLinkRegex";
 import { FILE_PATH_REGEX } from "./filePathRegex";
 import { fsResolveCandidates, shellOpenExternal, type PathCandidate } from "../ipc/commands";
@@ -19,6 +19,19 @@ function parseTrailingLineCol(raw: string): { path: string; line?: number; col?:
     return { path: parts.slice(0, -1).join(":"), line: Number(parts[parts.length - 1]) };
   }
   return { path: raw };
+}
+
+/**
+ * Strips one layer of surrounding matching leading/trailing quotes from a
+ * quoted-path match, preserving any trailing `:line[:col]` suffix after the
+ * closing quote untouched. Returns `raw` unchanged if it isn't quoted.
+ */
+function unquotePathCandidate(raw: string): string {
+  const quote = raw[0];
+  if (quote !== "'" && quote !== '"') return raw;
+  const closeIndex = raw.indexOf(quote, 1);
+  if (closeIndex === -1) return raw;
+  return raw.slice(1, closeIndex) + raw.slice(closeIndex + 1);
 }
 
 class PrLinkProvider implements ILinkProvider {
@@ -103,15 +116,73 @@ class ResolveBatcher {
   }
 }
 
+/** One observed `cd`: the buffer line (tracked live via an xterm marker) where `cwd` started applying. */
+interface CwdSegment {
+  marker: IMarker;
+  cwd: string;
+}
+
 class FilePathLinkProvider implements ILinkProvider {
   private batcher: ResolveBatcher;
+  /** Append-only, one entry per `setCwdHint` call (i.e. per observed `cd`), oldest first. */
+  private segments: CwdSegment[] = [];
 
   constructor(
     private terminal: Terminal,
     private workspaceId: string,
-    private cwdHint: string,
+    /** The cwd in effect for any buffer line before the first recorded segment. */
+    private spawnCwd: string,
   ) {
     this.batcher = new ResolveBatcher(workspaceId);
+  }
+
+  /**
+   * Records a `cd` boundary at the terminal's current cursor line. Callers
+   * must only invoke this on an actual cwd change (see TerminalPane.svelte)
+   * — each call allocates a new xterm marker.
+   */
+  setCwdHint(cwd: string): void {
+    this.segments = this.segments.filter((s) => s.marker.line !== -1);
+    this.registerSegment(cwd);
+  }
+
+  /**
+   * Registers a new marker for `cwd` at the terminal's current cursor line.
+   * Also used to re-anchor a segment whose marker was disposed out of order
+   * (see the `onDispose` handler below) rather than trimmed oldest-first as
+   * scrollback trimming normally does.
+   */
+  private registerSegment(cwd: string): void {
+    const marker = this.terminal.registerMarker();
+    marker.onDispose(() => {
+      // Ordinary scrollback trimming always disposes the oldest segment
+      // first. But `ESC[2J` (erase-in-display) and exiting the alt screen
+      // can dispose a newer marker while an older one survives — without
+      // re-anchoring here, later output would then wrongly resolve against
+      // the older `cd`'s cwd instead of this (still current) one.
+      const wasNewest = this.segments[this.segments.length - 1]?.marker === marker;
+      this.segments = this.segments.filter((s) => s.marker.line !== -1);
+      if (wasNewest) {
+        this.registerSegment(cwd);
+      }
+    });
+    this.segments.push({ marker, cwd });
+  }
+
+  /**
+   * The cwd in effect at 1-based buffer line `bufferLineNumber`: the most
+   * recent segment whose marker sits at or before it, else `spawnCwd`.
+   * `IMarker.line` is 0-based, hence the `- 1`.
+   */
+  private cwdForLine(bufferLineNumber: number): string {
+    const line0 = bufferLineNumber - 1;
+    this.segments = this.segments.filter((s) => s.marker.line !== -1);
+    for (let i = this.segments.length - 1; i >= 0; i--) {
+      if (this.segments[i].marker.line <= line0) {
+        return this.segments[i].cwd;
+      }
+    }
+    return this.spawnCwd;
   }
 
   provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void): void {
@@ -126,7 +197,8 @@ class FilePathLinkProvider implements ILinkProvider {
       callback(undefined);
       return;
     }
-    const candidates: PathCandidate[] = matches.map((m) => ({ raw: m[0], cwdHint: this.cwdHint }));
+    const cwdHint = this.cwdForLine(bufferLineNumber);
+    const candidates: PathCandidate[] = matches.map((m) => ({ raw: unquotePathCandidate(m[0]), cwdHint }));
     void this.batcher.resolve(candidates).then((resolved) => {
       const links: ILink[] = [];
       matches.forEach((m, i) => {
@@ -155,7 +227,13 @@ class FilePathLinkProvider implements ILinkProvider {
   }
 }
 
-export function registerLinkProviders(terminal: Terminal, workspaceId: string, cwdHint: string): void {
+export interface LinkProviderHandle {
+  setCwdHint(cwd: string): void;
+}
+
+export function registerLinkProviders(terminal: Terminal, workspaceId: string, cwdHint: string): LinkProviderHandle {
   terminal.registerLinkProvider(new PrLinkProvider(terminal));
-  terminal.registerLinkProvider(new FilePathLinkProvider(terminal, workspaceId, cwdHint));
+  const filePathProvider = new FilePathLinkProvider(terminal, workspaceId, cwdHint);
+  terminal.registerLinkProvider(filePathProvider);
+  return { setCwdHint: (cwd) => filePathProvider.setCwdHint(cwd) };
 }
