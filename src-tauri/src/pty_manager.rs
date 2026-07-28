@@ -235,6 +235,15 @@ impl PtyManager {
             .or_else(|| std::env::var("SHELL").ok())
             .unwrap_or_else(|| "/bin/zsh".to_string());
         let mut cmd = CommandBuilder::new(shell);
+        // A login shell, the same as every other terminal emulator opens. The
+        // built app is launched by `launchd` and inherits its bare `PATH`, so
+        // the shell's own startup is the only thing that can put the user's
+        // tools on it — and on macOS the Homebrew/`path_helper` entries live in
+        // `~/.zprofile` and `/etc/zprofile`, which zsh reads for login shells
+        // only. `portable_pty` applies the conventional `-zsh` argv0 itself,
+        // but only for `new_default_prog`, which can't honour
+        // `shell_override`; passing `-l` gets the same behaviour for both.
+        cmd.arg("-l");
         cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");
 
@@ -828,6 +837,64 @@ mod tests {
         assert!(
             !output.contains("TERM environment variable not set"),
             "clear reported a missing TERM: {output}"
+        );
+
+        manager.kill(&terminal_id).unwrap();
+    }
+
+    /// Proves #335's fix: the spawned shell is a login shell. The built app is
+    /// launched by `launchd`, so it inherits a bare `PATH` — on macOS the
+    /// entries that put Homebrew (and everything installed through it) on
+    /// `PATH` come from `~/.zprofile`, which zsh reads only for a login shell.
+    /// Without the login flag, `brew`, `bun`, `node` and friends are missing
+    /// from every terminal atrium opens, even though they resolve fine in
+    /// every other terminal on the same machine.
+    ///
+    /// Asserted against a stub shell that reports its own argv, so the test
+    /// depends on neither the host's dotfiles nor its installed tools.
+    #[test]
+    fn spawned_shell_is_a_login_shell() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let stub = dir.path().join("argv-reporting-shell");
+        std::fs::write(&stub, "#!/bin/sh\necho \"atrium-argv:$*\"\n").unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let manager = PtyManager::new();
+        let terminal_id = manager
+            .spawn(
+                dir.path().to_string_lossy().to_string(),
+                80,
+                24,
+                Some(stub.to_string_lossy().to_string()),
+            )
+            .unwrap();
+
+        let received: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let received_clone = received.clone();
+        let channel = Channel::new(move |body| {
+            if let InvokeResponseBody::Json(json) = body {
+                if let Ok(PtyEvent::Data { data }) = serde_json::from_str::<PtyEvent>(&json) {
+                    if let Ok(bytes) = STANDARD.decode(data) {
+                        received_clone.lock().unwrap().extend_from_slice(&bytes);
+                    }
+                }
+            }
+            Ok(())
+        });
+        manager.subscribe(&terminal_id, channel).unwrap();
+
+        wait_for(
+            Duration::from_secs(10),
+            "stub shell never reported its argv",
+            || String::from_utf8_lossy(&received.lock().unwrap()).contains("atrium-argv:"),
+        );
+
+        let output = String::from_utf8_lossy(&received.lock().unwrap()).into_owned();
+        assert!(
+            output.contains("-l"),
+            "shell was not spawned as a login shell, argv was: {output}"
         );
 
         manager.kill(&terminal_id).unwrap();
