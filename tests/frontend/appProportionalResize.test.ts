@@ -112,6 +112,14 @@ function renderApp() {
  * on a single queried element used elsewhere in this file.
  */
 async function withStubbedContainerSize(width: number, height: number, fn: () => Promise<void>): Promise<void> {
+  // `clientWidth`/`clientHeight` are owned by `Element.prototype`, not
+  // `HTMLElement.prototype` — so `getOwnPropertyDescriptor(HTMLElement...)`
+  // is undefined here, and stubbing on `HTMLElement.prototype` adds a new
+  // *own* property that shadows the inherited one, rather than overwriting
+  // an existing own one. Restoring must therefore `delete` that added own
+  // property when there was no prior own descriptor, not skip restoring —
+  // skipping would leave the stub permanently shadowing every element
+  // created for the rest of the test run.
   const widthDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
   const heightDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
   Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => width });
@@ -120,7 +128,9 @@ async function withStubbedContainerSize(width: number, height: number, fn: () =>
     await fn();
   } finally {
     if (widthDescriptor) Object.defineProperty(HTMLElement.prototype, "clientWidth", widthDescriptor);
+    else delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientWidth;
     if (heightDescriptor) Object.defineProperty(HTMLElement.prototype, "clientHeight", heightDescriptor);
+    else delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientHeight;
   }
 }
 
@@ -281,6 +291,31 @@ describe("App proportional panel resize (#301)", () => {
       await tick();
 
       expect(terminalStyle(container).height).toBe("796px");
+    });
+  });
+
+  it("cold start clamps the INACTIVE dimension too: a bottom-docked start with an oversized persisted width, then a dock switch, never renders the unclamped raw width", async () => {
+    terminalPosition.set("bottom");
+    explorerVisible.set(false);
+    // width (1200) is inactive while docked "bottom" — never dragged, never
+    // touched by a resize, so it holds whatever was last persisted.
+    saveTerminalLayout({ position: "bottom", height: 300, width: 1200 });
+
+    await withStubbedContainerSize(1000, 1000, async () => {
+      const { container } = renderApp();
+      await tick();
+      await tick();
+
+      // Switching the dock (as the settings dialog does) makes width the
+      // active dimension. Nothing re-renders from a resize here — this only
+      // passes if width was already clamped against the container back at
+      // cold start, alongside height, even though it wasn't the active
+      // dimension at the time.
+      setTerminalPosition("left");
+      await tick();
+      await tick();
+
+      expect(terminalStyle(container).width).toBe("796px");
     });
   });
 
