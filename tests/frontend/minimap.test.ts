@@ -30,6 +30,39 @@ function allStyleText(): string {
     .join("\n");
 }
 
+/**
+ * Fakes the geometry jsdom does not provide (getBoundingClientRect, scroll
+ * metrics), needed to exercise onMouseDown/onMouseMove's actual pixel math:
+ * a 500px viewport over 5000px of content, with the minimap track spanning
+ * y = 0..500 on screen.
+ */
+function fakeGeometry(root: HTMLElement) {
+  const scrollDOM = view!.scrollDOM;
+  let scrollTop = 0;
+  Object.defineProperty(scrollDOM, "clientHeight", { configurable: true, get: () => 500 });
+  Object.defineProperty(scrollDOM, "scrollHeight", { configurable: true, get: () => 5000 });
+  Object.defineProperty(scrollDOM, "scrollTop", {
+    configurable: true,
+    get: () => scrollTop,
+    // Mimics the browser clamping scrollTop into [0, scrollHeight - clientHeight].
+    set: (v: number) => {
+      scrollTop = Number.isNaN(v) ? scrollTop : Math.min(Math.max(0, v), 4500);
+    },
+  });
+
+  const overlayContainer = root.querySelector(".cm-minimap-overlay-container") as HTMLElement;
+  const indicator = root.querySelector(".cm-minimap-overlay") as HTMLElement;
+  overlayContainer.getBoundingClientRect = () => ({ top: 0, y: 0, height: 500, bottom: 500 }) as DOMRect;
+  indicator.getBoundingClientRect = () =>
+    ({
+      top: parseFloat(indicator.style.top || "0"),
+      y: parseFloat(indicator.style.top || "0"),
+      height: 62.5,
+    }) as DOMRect;
+
+  return { scrollDOM, overlayContainer, indicator, read: () => scrollTop };
+}
+
 describe("minimapExtension", () => {
   it("renders the minimap gutter DOM node when enabled", () => {
     const container = mount(true);
@@ -90,5 +123,56 @@ describe("minimapExtension", () => {
     view?.destroy();
     view = undefined;
     expect(document.body.style.cursor).toBe("");
+  });
+
+  it("keeps the jumped-to scroll position across the first pointer move of a drag", () => {
+    const container = mount(true);
+    const g = fakeGeometry(container);
+    g.indicator.style.top = "0px";
+
+    // Click three quarters of the way down the minimap track.
+    g.overlayContainer.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, clientY: 400 }),
+    );
+    const afterJump = g.read();
+
+    // Nudge the pointer 2px, as any real click-and-drag does.
+    window.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, clientY: 402 }));
+    const afterNudge = g.read();
+
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+
+    // A 2px nudge must not move the document by more than a few percent of the viewport.
+    expect(Math.abs(afterNudge - afterJump)).toBeLessThan(100);
+  });
+
+  it("leaves a right-click on the container untouched", () => {
+    const container = mount(true);
+    const g = fakeGeometry(container);
+
+    const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 2, clientY: 400 });
+    g.overlayContainer.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.body.style.cursor).toBe("");
+    expect(g.overlayContainer.classList.contains("cm-minimap-overlay-active")).toBe(false);
+    expect(g.read()).toBe(0);
+  });
+
+  it("only performs the click-to-jump scroll write for a canvas click, not a mousedown on the indicator", () => {
+    const container = mount(true);
+    const g = fakeGeometry(container);
+
+    g.indicator.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, clientY: 400 }),
+    );
+    expect(g.read()).toBe(0);
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+
+    g.overlayContainer.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, clientY: 400 }),
+    );
+    expect(g.read()).toBeGreaterThan(0);
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
   });
 });
