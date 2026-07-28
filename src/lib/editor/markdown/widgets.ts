@@ -57,9 +57,10 @@ export class CheckboxWidget extends WidgetType {
 /**
  * Replaces an `![alt](url)` image node with a rendered `<img>`. Local
  * relative URLs are resolved against the markdown file's own directory and
- * loaded through Tauri's `convertFileSrc` asset protocol; `http(s)://` URLs
- * load directly. Clicking places the cursor on that line (revealing the raw
- * syntax) instead of doing anything else, matching Obsidian.
+ * loaded through Tauri's `convertFileSrc` via the `atriumasset` protocol;
+ * `http(s)://` URLs load directly. Clicking places the cursor on that line
+ * (revealing the raw syntax) instead of doing anything else, matching
+ * Obsidian.
  */
 export class ImageWidget extends WidgetType {
   constructor(
@@ -271,7 +272,7 @@ function resolveImageSrc(url: string, documentPath: string): string {
     return url;
   }
   const absolute = path.resolveRelative(path.dirname(documentPath), url);
-  return convertFileSrc(absolute);
+  return convertFileSrc(absolute, "atriumasset");
 }
 
 /**
