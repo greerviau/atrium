@@ -1186,6 +1186,10 @@ impl Workspace for LocalWorkspace {
         self.root.to_str().unwrap_or("")
     }
 
+    fn resolve_within_root(&self, path: &str) -> Result<PathBuf, AppError> {
+        self.resolve_within_root_impl(path, true)
+    }
+
     fn watch(&self, tx: UnboundedSender<FsChangeEvent>) {
         let mut guard = self.watcher.lock().unwrap();
         if guard.is_some() {

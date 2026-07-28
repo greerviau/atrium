@@ -179,6 +179,12 @@ pub trait Workspace: Send + Sync {
     /// The workspace root, used by `fs_resolve_candidates`'s third resolution
     /// step (relative to the workspace root).
     fn root(&self) -> &str;
+    /// Resolves `path` (absolute, or relative to this workspace's root)
+    /// against the root, rejecting anything that would escape it — the same
+    /// check every read/write/rename/delete command already goes through.
+    /// Exposed on the trait so the custom asset URI-scheme handler in
+    /// `main.rs` can reuse it without depending on `LocalWorkspace` directly.
+    fn resolve_within_root(&self, path: &str) -> Result<std::path::PathBuf, AppError>;
     /// Starts (or is a no-op if already started) a recursive filesystem
     /// watcher rooted at this workspace, forwarding debounced events to `tx`.
     /// Best-effort: if the underlying watcher fails to start (e.g. the OS
