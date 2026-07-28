@@ -1,12 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window. Grants only the app's own hand-written commands (default for #[tauri::command], no plugin scope needed — including opening PR and external links via shell_open_external/open_external_link), the folder picker, Reveal in Finder, OS clipboard read/write, and starting a window drag from the custom title bar.",
+  "description": "Capability for the main window. Grants only the app's own hand-written commands (default for #[tauri::command], no plugin scope needed — including opening PR and external links via shell_open_external/open_external_link, and picking a folder via workspace_open_folder_dialog), Reveal in Finder, OS clipboard read/write, and starting a window drag from the custom title bar.",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
-    "dialog:allow-open",
     "opener:allow-reveal-item-in-dir",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text"

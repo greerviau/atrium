@@ -29,7 +29,11 @@ fn percent_decode(encoded: &str) -> String {
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && bytes[i + 1].is_ascii_hexdigit()
+            && bytes[i + 2].is_ascii_hexdigit()
+        {
             if let Ok(byte) = u8::from_str_radix(
                 std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or_default(),
                 16,
@@ -66,7 +70,7 @@ pub async fn resolve_atriumasset_request(
     app_handle: &tauri::AppHandle,
     request: tauri::http::Request<Vec<u8>>,
 ) -> tauri::http::Response<Vec<u8>> {
-    let requested = percent_decode(&request.uri().path()[1..]);
+    let requested = percent_decode(request.uri().path().strip_prefix('/').unwrap_or(""));
 
     let Some(state) = app_handle.try_state::<AppState>() else {
         return empty_response(403);
@@ -101,6 +105,30 @@ pub async fn resolve_atriumasset_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace::local::LocalWorkspace;
+    use crate::workspace::Workspace;
+
+    #[test]
+    fn decoded_percent_encoded_traversal_is_still_rejected_by_resolve_within_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = LocalWorkspace::new("local".to_string(), dir.path().to_path_buf());
+
+        let traversal = percent_decode("%2e%2e%2f%2e%2e%2fetc%2fpasswd");
+        assert_eq!(traversal, "../../etc/passwd");
+        assert!(workspace.resolve_within_root(&traversal).is_err());
+    }
+
+    #[test]
+    fn decoded_percent_encoded_in_workspace_path_still_resolves() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("My Notes")).unwrap();
+        std::fs::write(dir.path().join("My Notes/img.png"), b"png bytes").unwrap();
+        let workspace = LocalWorkspace::new("local".to_string(), dir.path().to_path_buf());
+
+        let decoded = percent_decode("My%20Notes/img.png");
+        assert_eq!(decoded, "My Notes/img.png");
+        assert!(workspace.resolve_within_root(&decoded).is_ok());
+    }
 
     #[test]
     fn percent_decode_leaves_plain_ascii_untouched() {
@@ -127,5 +155,14 @@ mod tests {
     #[test]
     fn percent_decode_tolerates_invalid_hex_digits() {
         assert_eq!(percent_decode("bad%zzpath"), "bad%zzpath");
+    }
+
+    #[test]
+    fn percent_decode_rejects_a_non_hex_digit_sign_disguised_as_hex() {
+        // `u8::from_str_radix` accepts a leading `+`/`-` sign, which would
+        // otherwise let `%+5` decode to byte `0x05` — not a valid percent
+        // escape by the URI spec. The `is_ascii_hexdigit` guard rejects this
+        // before it ever reaches `from_str_radix`.
+        assert_eq!(percent_decode("weird%+5path"), "weird%+5path");
     }
 }

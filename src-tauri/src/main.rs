@@ -294,7 +294,13 @@ fn main() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .register_asynchronous_uri_scheme_protocol("atriumasset", |ctx, request, responder| {
             let app_handle = ctx.app_handle().clone();
-            tokio::spawn(async move {
+            // `tauri::async_runtime::spawn`, not a bare `tokio::spawn`: this
+            // closure is invoked directly on the webview's own UI thread
+            // (GTK main loop on Linux, the equivalent on macOS/Windows), not
+            // on a Tokio worker, so a bare `tokio::spawn` has no runtime
+            // context to enter and panics. `async_runtime::spawn` enters the
+            // runtime first before scheduling the task.
+            tauri::async_runtime::spawn(async move {
                 responder.respond(
                     asset_protocol::resolve_atriumasset_request(&app_handle, request).await,
                 );
