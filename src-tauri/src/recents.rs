@@ -110,11 +110,6 @@ pub fn remove_recent<R: Runtime>(app: &AppHandle<R>, path: &str) -> Result<(), A
     write_store(app, &recents)
 }
 
-/// Removes every entry from the recents list.
-pub fn clear_recents<R: Runtime>(app: &AppHandle<R>) -> Result<(), AppError> {
-    write_store(app, &[])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
