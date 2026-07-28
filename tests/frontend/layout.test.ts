@@ -9,6 +9,7 @@ import {
   WIDTH_MIN,
   loadExplorerWidth,
   saveExplorerWidth,
+  clampExplorerToContainer,
   EXPLORER_WIDTH_MIN,
   EXPLORER_WIDTH_MAX,
 } from "../../src/lib/stores/layout";
@@ -65,6 +66,43 @@ describe("clampToContainer", () => {
 
   it("never returns less than min, even when the container is smaller than min + reserved", () => {
     expect(clampToContainer(50, WIDTH_MIN, 300, 204)).toBe(WIDTH_MIN);
+  });
+});
+
+describe("clampExplorerToContainer", () => {
+  it("passes through a value that leaves room for the reserved space", () => {
+    expect(clampExplorerToContainer(300, 1000)).toBe(300);
+  });
+
+  it("caps at EXPLORER_WIDTH_MAX on a huge container", () => {
+    // Old fixed-600 clamp is *kept* deliberately for the explorer (unlike the
+    // terminal's own clamp, this one intentionally does not scale past its
+    // ceiling on a very large container — see plan §7).
+    expect(clampExplorerToContainer(4000, 3440)).toBe(EXPLORER_WIDTH_MAX);
+  });
+
+  it("caps at the container-reserved bound on a small container", () => {
+    // A container of 700 reserves 204, leaving 496 (below EXPLORER_WIDTH_MAX,
+    // so the container-relative bound binds instead of the fixed ceiling).
+    expect(clampExplorerToContainer(900, 700)).toBe(700 - 204);
+  });
+
+  it("never returns less than EXPLORER_WIDTH_MIN, even when the container is smaller than min + reserved", () => {
+    expect(clampExplorerToContainer(50, 300)).toBe(EXPLORER_WIDTH_MIN);
+  });
+});
+
+describe("persistence shape is unchanged by proportional resize (#301, no migration)", () => {
+  it("a width saved after this change round-trips as a bare number, not an object", () => {
+    saveExplorerWidth(444);
+    expect(JSON.parse(localStorage.getItem(EXPLORER_STORAGE_KEY) ?? "")).toBe(444);
+    expect(loadExplorerWidth()).toBe(444);
+  });
+
+  it("a terminal layout saved after this change round-trips as {position, height, width}, not a ratio", () => {
+    saveTerminalLayout({ position: "right", height: 280, width: 360 });
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "")).toEqual({ position: "right", height: 280, width: 360 });
+    expect(loadTerminalLayout()).toEqual({ position: "right", height: 280, width: 360 });
   });
 });
 
