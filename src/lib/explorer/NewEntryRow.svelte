@@ -15,7 +15,13 @@
   } = $props();
 </script>
 
-<div class="row" style={`padding-left: ${depth * 14 + 6}px`} role="treeitem" aria-selected="false">
+<div
+  class="row"
+  style={`padding-left: ${depth * 14 + 6}px`}
+  role="treeitem"
+  aria-selected="false"
+  aria-level={depth + 1}
+>
   <ExplorerIcon entry={{ name: "", path: "", isDir, isSymlink: false }} expanded={false} />
   <InlineNameInput initialValue="" selectBaseNameOnly={false} {onCommit} {onCancel} />
 </div>

@@ -10,7 +10,17 @@
   import NewEntryRow from "./NewEntryRow.svelte";
   import FileTreeNode from "./FileTreeNode.svelte";
 
-  let { node, depth = 0 }: { node: TreeNode; depth?: number } = $props();
+  let {
+    node,
+    depth = 0,
+    focusedPath = null,
+    onFocusRow = () => {},
+  }: {
+    node: TreeNode;
+    depth?: number;
+    focusedPath?: string | null;
+    onFocusRow?: (path: string) => void;
+  } = $props();
 
   // Mirrors `TerminalPane.svelte`'s own platform check: the file-explorer
   // shortcuts below need the same Cmd-on-Mac/Ctrl-elsewhere branching
@@ -108,10 +118,12 @@
     onkeydown={isEditing ? undefined : onKeydown}
     oncontextmenu={isEditing ? undefined : onContextMenu}
     onpointerdown={isEditing ? undefined : onRowPointerDown}
+    onfocus={() => onFocusRow(node.entry.path)}
     role="treeitem"
-    aria-selected="false"
+    aria-selected={focusedPath === node.entry.path}
     aria-expanded={node.entry.isDir ? node.expanded : undefined}
-    tabindex="0"
+    aria-level={depth + 1}
+    tabindex={focusedPath === node.entry.path ? 0 : -1}
   >
     <ExplorerIcon entry={node.entry} expanded={node.expanded} />
     {#if isEditing}
@@ -128,28 +140,30 @@
   {#if node.entry.isDir && node.expanded && node.children}
     {@const splitIdx = node.children.findIndex((c) => !c.entry.isDir)}
     {@const dirEnd = splitIdx === -1 ? node.children.length : splitIdx}
-    {#if $pendingCreate?.parentPath === node.entry.path && $pendingCreate.isDir}
-      <NewEntryRow
-        depth={depth + 1}
-        isDir={true}
-        onCommit={(v) => commitCreate(node.entry.path, true, v)}
-        onCancel={() => pendingCreate.set(null)}
-      />
-    {/if}
-    {#each node.children.slice(0, dirEnd) as child (child.entry.path)}
-      <FileTreeNode node={child} depth={depth + 1} />
-    {/each}
-    {#if $pendingCreate?.parentPath === node.entry.path && !$pendingCreate.isDir}
-      <NewEntryRow
-        depth={depth + 1}
-        isDir={false}
-        onCommit={(v) => commitCreate(node.entry.path, false, v)}
-        onCancel={() => pendingCreate.set(null)}
-      />
-    {/if}
-    {#each node.children.slice(dirEnd) as child (child.entry.path)}
-      <FileTreeNode node={child} depth={depth + 1} />
-    {/each}
+    <div role="group">
+      {#if $pendingCreate?.parentPath === node.entry.path && $pendingCreate.isDir}
+        <NewEntryRow
+          depth={depth + 1}
+          isDir={true}
+          onCommit={(v) => commitCreate(node.entry.path, true, v)}
+          onCancel={() => pendingCreate.set(null)}
+        />
+      {/if}
+      {#each node.children.slice(0, dirEnd) as child (child.entry.path)}
+        <FileTreeNode node={child} depth={depth + 1} {focusedPath} {onFocusRow} />
+      {/each}
+      {#if $pendingCreate?.parentPath === node.entry.path && !$pendingCreate.isDir}
+        <NewEntryRow
+          depth={depth + 1}
+          isDir={false}
+          onCommit={(v) => commitCreate(node.entry.path, false, v)}
+          onCancel={() => pendingCreate.set(null)}
+        />
+      {/if}
+      {#each node.children.slice(dirEnd) as child (child.entry.path)}
+        <FileTreeNode node={child} depth={depth + 1} {focusedPath} {onFocusRow} />
+      {/each}
+    </div>
   {/if}
 </div>
 
