@@ -75,9 +75,12 @@
       // `untrack`: `scheduleSearch()` reads `mode`/`query`, both just
       // written above in this same run. Reading them here without
       // `untrack` would make this effect track them as dependencies too,
-      // so it would rerun on every keystroke afterward — re-firing
-      // `inputEl?.focus()`/`.select()` and reselecting the whole input on
-      // every character typed.
+      // so the very next keystroke would rerun it — re-firing
+      // `inputEl?.focus()`/`.select()` and reselecting the whole input.
+      // That rerun skips this reset branch (isOpen/mode haven't changed
+      // again), so `mode`/`query` aren't read a second time and drop back
+      // out of the dependency set — it's a one-keystroke blip, not a
+      // rerun on every keystroke.
       untrack(() => scheduleSearch());
     }
     if (isOpen) {

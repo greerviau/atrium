@@ -116,6 +116,21 @@ describe("SearchOverlay", () => {
     expect(selectSpy).toHaveBeenCalled();
   });
 
+  it("does not re-select the query input on a keystroke after a fresh open", async () => {
+    render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+
+    const input = (await screen.findByPlaceholderText(PLACEHOLDER)) as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "f" } });
+    await tick();
+
+    // The open/reset effect must not have rerun from this keystroke: a
+    // re-fired `.select()` would leave the whole input selected ([0, 1]),
+    // so the *next* character typed would replace "f" instead of appending.
+    expect([input.selectionStart, input.selectionEnd]).toEqual([1, 1]);
+  });
+
   it("imperatively focuses and selects the files-mode input when switching modes while already open", async () => {
     vi.mocked(commands.searchWorkspace).mockResolvedValue(results([]));
     vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));
