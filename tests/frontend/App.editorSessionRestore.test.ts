@@ -8,6 +8,11 @@ import { tabsState, openFile } from "../../src/lib/stores/tabs";
 import { focusedEditorPaneId, editorPaneTree } from "../../src/lib/stores/editorPanes";
 import { closePrompt } from "../../src/lib/stores/closePrompt";
 import { loadEditorSession } from "../../src/lib/stores/editorSession";
+import {
+  restoreTabsOnStartup,
+  setRestoreTabsOnStartup,
+  DEFAULT_RESTORE_TABS_ON_STARTUP,
+} from "../../src/lib/stores/restoreTabsOnStartup";
 import * as commands from "../../src/lib/ipc/commands";
 
 // Reproduces the cross-project restore race flagged in review of #324:
@@ -66,6 +71,7 @@ function resetStores(): void {
   focusedEditorPaneId.set(null);
   editorPaneTree.set(null);
   closePrompt.set(null);
+  restoreTabsOnStartup.set(DEFAULT_RESTORE_TABS_ON_STARTUP);
 }
 
 async function flush(): Promise<void> {
@@ -132,6 +138,50 @@ describe("App editor session restore (review of #324)", () => {
       },
       focusedPaneId: "LA",
     });
+  });
+
+  it("does not restore a persisted session when restoreTabsOnStartup is off, but the no-persisted-session merge path (standalone-tab preservation) still runs", async () => {
+    // A project of its own, distinct from PROJECT_A/PROJECT_B used by the
+    // other cases in this file — this test's own persist-effect writes are
+    // real-timer debounced (~400ms) and must never land on a storage key a
+    // sibling test also reads, however long after this test returns.
+    const PROJECT_NO_RESTORE = "/projects/no-restore";
+    localStorage.setItem(
+      "atrium.editorSession." + PROJECT_NO_RESTORE,
+      JSON.stringify({
+        paneTree: {
+          type: "leaf",
+          id: "LX",
+          tabs: [PROJECT_NO_RESTORE + "/x.ts"],
+          activeTabPath: PROJECT_NO_RESTORE + "/x.ts",
+        },
+        focusedPaneId: "LX",
+      }),
+    );
+    setRestoreTabsOnStartup(false);
+
+    render(App);
+    await flush();
+
+    // A standalone tab (open with no project) must still survive the
+    // switch into a project even when restore-on-startup is off — this is
+    // the same "no persisted session" merge path every brand-new workspace
+    // already exercises, just reached via the setting instead of an empty
+    // storage key.
+    await openFile("/tmp/standalone.md", undefined, "standalone");
+    await flush();
+
+    await openWorkspacePath(PROJECT_NO_RESTORE);
+    await flush();
+
+    // The persisted path never appears — restore was skipped — while the
+    // standalone tab survives the switch, proving the merge path still ran.
+    expect(get(tabsState).tabs.map((t) => t.path)).toEqual(["/tmp/standalone.md"]);
+    expect(get(workspace).root).toBe(PROJECT_NO_RESTORE);
+
+    // Wait out the persist-effect's real debounce so this test's own write
+    // never lands after the test (and this file's other checks) has moved on.
+    await new Promise((resolve) => setTimeout(resolve, 450));
   });
 
   it("a project switch started before a stale restore resolves never applies the stale project's state or corrupts the new project's storage key", async () => {

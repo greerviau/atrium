@@ -292,11 +292,12 @@ export function markdownExtensions(documentPath: string): Extension[] {
 
 /**
  * Raw/source markdown extension set: the same GFM-flavored language (so
- * fenced code blocks still get nested-language highlighting) and a
- * line-number gutter, but no decoration plugin and no link-click handler —
- * syntax stays visible, checkboxes and images stay plain text, and links
- * don't navigate. Behaves like editing any other file type.
+ * fenced code blocks still get nested-language highlighting) and, unless the
+ * Line Numbers setting is off, a line-number gutter — but no decoration
+ * plugin and no link-click handler — syntax stays visible, checkboxes and
+ * images stay plain text, and links don't navigate. Behaves like editing any
+ * other file type.
  */
-export function markdownSourceExtensions(_documentPath: string): Extension[] {
-  return [markdown({ base: markdownLanguage, codeLanguages: languages }), lineNumbers()];
+export function markdownSourceExtensions(_documentPath: string, lineNumbersEnabled: boolean): Extension[] {
+  return [markdown({ base: markdownLanguage, codeLanguages: languages }), ...(lineNumbersEnabled ? [lineNumbers()] : [])];
 }

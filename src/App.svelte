@@ -60,6 +60,7 @@
     RESIZER_THICKNESS,
   } from "./lib/stores/layout";
   import { restoreEditorSession, saveEditorSession, flushEditorSession } from "./lib/stores/editorSession";
+  import { restoreTabsOnStartup } from "./lib/stores/restoreTabsOnStartup";
   import { folderName } from "./lib/terminal/tabTitle";
   import {
     splitPane,
@@ -774,7 +775,13 @@
     terminalPaneTree = null;
     focusedPaneId = null;
     if (root) {
-      void restoreEditorSession(root).then((restored) => {
+      // Gates only the *restore* (apply-on-open) step, not the *persist*
+      // (write-on-change) step below — that effect keeps running
+      // unconditionally regardless of this setting, so toggling it back on
+      // immediately picks up the most recent session rather than starting
+      // from whatever was last persisted while it happened to be off.
+      const restoreOnStartup = get(restoreTabsOnStartup);
+      void (restoreOnStartup ? restoreEditorSession(root) : Promise.resolve(null)).then((restored) => {
         // A later switch started (and possibly already finished) while this
         // one's `fsReadFile` calls were still in flight — see the
         // `switchToken` comment above. Applying a stale restore here would

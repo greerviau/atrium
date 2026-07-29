@@ -46,10 +46,40 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ["zoom", "text size", "font size", "editor"],
   },
   {
+    id: "restore-tabs-on-startup",
+    categoryId: "general",
+    title: "Restore Tabs on Startup",
+    keywords: ["restore", "startup", "session", "reopen", "tabs", "relaunch"],
+  },
+  {
     id: "minimap",
     categoryId: "editor",
     title: "Minimap",
     keywords: ["minimap", "map", "overview", "navigation", "editor"],
+  },
+  {
+    id: "word-wrap",
+    categoryId: "editor",
+    title: "Word Wrap",
+    keywords: ["word wrap", "wrap", "line wrap", "soft wrap", "editor"],
+  },
+  {
+    id: "tab-size",
+    categoryId: "editor",
+    title: "Tab Size",
+    keywords: ["tab size", "indent", "indentation", "spaces", "editor"],
+  },
+  {
+    id: "line-numbers",
+    categoryId: "editor",
+    title: "Line Numbers",
+    keywords: ["line numbers", "gutter", "editor"],
+  },
+  {
+    id: "auto-save",
+    categoryId: "editor",
+    title: "Auto Save",
+    keywords: ["auto save", "autosave", "save", "editor"],
   },
   {
     id: "default-view",

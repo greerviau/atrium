@@ -10,6 +10,11 @@ import { terminalPosition } from "../../src/lib/stores/layout";
 import { zoom, zoomIn, DEFAULT_ZOOM } from "../../src/lib/stores/textSize";
 import { minimapEnabled, DEFAULT_MINIMAP_ENABLED } from "../../src/lib/stores/minimapEnabled";
 import { markdownDefaultView, DEFAULT_MARKDOWN_VIEW } from "../../src/lib/stores/markdownDefaultView";
+import { wordWrapEnabled, DEFAULT_WORD_WRAP_ENABLED } from "../../src/lib/stores/wordWrap";
+import { tabSize, DEFAULT_TAB_SIZE } from "../../src/lib/stores/tabSize";
+import { lineNumbersEnabled, DEFAULT_LINE_NUMBERS_ENABLED } from "../../src/lib/stores/lineNumbersEnabled";
+import { autoSaveEnabled, DEFAULT_AUTO_SAVE_ENABLED } from "../../src/lib/stores/autoSave";
+import { restoreTabsOnStartup, DEFAULT_RESTORE_TABS_ON_STARTUP } from "../../src/lib/stores/restoreTabsOnStartup";
 
 async function flush(): Promise<void> {
   for (let i = 0; i < 5; i++) {
@@ -47,6 +52,11 @@ describe("SettingsDialog", () => {
     zoom.set(DEFAULT_ZOOM);
     minimapEnabled.set(DEFAULT_MINIMAP_ENABLED);
     markdownDefaultView.set(DEFAULT_MARKDOWN_VIEW);
+    wordWrapEnabled.set(DEFAULT_WORD_WRAP_ENABLED);
+    tabSize.set(DEFAULT_TAB_SIZE);
+    lineNumbersEnabled.set(DEFAULT_LINE_NUMBERS_ENABLED);
+    autoSaveEnabled.set(DEFAULT_AUTO_SAVE_ENABLED);
+    restoreTabsOnStartup.set(DEFAULT_RESTORE_TABS_ON_STARTUP);
     scrollIntoViewSpy = vi.fn();
     Element.prototype.scrollIntoView = scrollIntoViewSpy;
   });
@@ -104,7 +114,7 @@ describe("SettingsDialog", () => {
   });
 
   describe("sidebar navigation", () => {
-    it("renders all five categories expanded with their one section each, General selected and its content shown by default", async () => {
+    it("renders all five categories expanded with their sections, General selected and its content shown by default", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
@@ -203,6 +213,14 @@ describe("SettingsDialog", () => {
       expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
 
       await fireEvent.keyDown(zoomRow, { key: "ArrowDown" });
+      await flush();
+
+      const restoreOnStartupRow = screen.getByRole("treeitem", { name: "Restore Tabs on Startup" });
+      expect(restoreOnStartupRow.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(restoreOnStartupRow);
+      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
+
+      await fireEvent.keyDown(restoreOnStartupRow, { key: "ArrowDown" });
       await flush();
 
       const appearance = screen.getByRole("treeitem", { name: "Appearance" });
@@ -665,6 +683,30 @@ describe("SettingsDialog", () => {
     });
   });
 
+  describe("restore tabs on startup", () => {
+    it("shows the checkbox checked by default (on by default)", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("General");
+
+      expect(screen.getByLabelText("Restore previously open tabs on startup")).toHaveProperty("checked", true);
+    });
+
+    it("unchecking the toggle turns the setting off, reflected in the shared store", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("General");
+
+      await fireEvent.click(screen.getByLabelText("Restore previously open tabs on startup"));
+      await flush();
+
+      expect(get(restoreTabsOnStartup)).toBe(false);
+      expect(screen.getByLabelText("Restore previously open tabs on startup")).toHaveProperty("checked", false);
+    });
+  });
+
   describe("minimap", () => {
     it("shows the checkbox checked by default (on by default)", async () => {
       settingsOverlay.set({ open: true });
@@ -699,6 +741,144 @@ describe("SettingsDialog", () => {
       await flush();
 
       expect(get(minimapEnabled)).toBe(true);
+    });
+  });
+
+  describe("word wrap", () => {
+    it("shows the checkbox unchecked by default (off by default, preserving current code-pane behavior)", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      expect(screen.getByLabelText("Wrap long lines")).toHaveProperty("checked", false);
+    });
+
+    it("checking the toggle turns the setting on, reflected in the shared store", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      await fireEvent.click(screen.getByLabelText("Wrap long lines"));
+      await flush();
+
+      expect(get(wordWrapEnabled)).toBe(true);
+      expect(screen.getByLabelText("Wrap long lines")).toHaveProperty("checked", true);
+    });
+  });
+
+  describe("tab size", () => {
+    async function openTabSizeDropdown(): Promise<HTMLElement> {
+      settingsOverlay.set({ open: true });
+      const { container } = render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+      await fireEvent.click(dropdownTrigger(container));
+      await flush();
+      return container;
+    }
+
+    it("marks the current tab size as selected", async () => {
+      tabSize.set(4);
+      await openTabSizeDropdown();
+
+      expect(screen.getByRole("option", { name: "2" }).getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByRole("option", { name: "4" }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("option", { name: "8" }).getAttribute("aria-selected")).toBe("false");
+    });
+
+    it("clicking a size option updates the shared tabSize store and closes the dropdown", async () => {
+      await openTabSizeDropdown();
+
+      await fireEvent.click(screen.getByRole("option", { name: "8" }));
+      await flush();
+
+      expect(get(tabSize)).toBe(8);
+      expect(screen.queryByRole("listbox")).toBeNull();
+    });
+  });
+
+  describe("line numbers", () => {
+    it("shows the checkbox checked by default (on by default)", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      expect(screen.getByLabelText("Show line numbers")).toHaveProperty("checked", true);
+    });
+
+    it("unchecking the toggle turns the setting off, reflected in the shared store", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      await fireEvent.click(screen.getByLabelText("Show line numbers"));
+      await flush();
+
+      expect(get(lineNumbersEnabled)).toBe(false);
+      expect(screen.getByLabelText("Show line numbers")).toHaveProperty("checked", false);
+    });
+  });
+
+  describe("auto save", () => {
+    it("shows the checkbox unchecked by default (off by default, preserving current always-manual-save behavior)", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      expect(screen.getByLabelText("Automatically save changes")).toHaveProperty("checked", false);
+    });
+
+    it("checking the toggle turns the setting on, reflected in the shared store", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      await fireEvent.click(screen.getByLabelText("Automatically save changes"));
+      await flush();
+
+      expect(get(autoSaveEnabled)).toBe(true);
+      expect(screen.getByLabelText("Automatically save changes")).toHaveProperty("checked", true);
+    });
+  });
+
+  describe("search: new settings are findable", () => {
+    it("finds Word Wrap by keyword", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "wrap" } });
+      await tick();
+
+      expect(screen.getByRole("heading", { name: "Word Wrap" })).toBeTruthy();
+    });
+
+    it("finds Auto Save by the 'autosave' synonym", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "autosave" } });
+      await tick();
+
+      expect(screen.getByRole("heading", { name: "Auto Save" })).toBeTruthy();
+    });
+
+    it("finds Restore Tabs on Startup by the 'reopen' synonym", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "reopen" } });
+      await tick();
+
+      expect(screen.getByRole("heading", { name: "Restore Tabs on Startup" })).toBeTruthy();
     });
   });
 
