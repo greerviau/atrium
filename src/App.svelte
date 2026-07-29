@@ -905,7 +905,7 @@
    * drag-a-file-into-the-editor plan): a dropped directory imports into the
    * workspace root exactly like the explorer's own empty-space drop; each
    * dropped file opens as its own tab, granting external-file access first
-   * (swallowing its own failure — `openFileReportingErrors` below surfaces
+   * (not toasting its own failure — `openFileReportingErrors` below surfaces
    * its own, already-tested error via the standard toast, so a separate
    * toast here would double-report) if the workspace has one open.
    */
