@@ -84,6 +84,7 @@
     addTabToLeaf as addEditorTabToLeaf,
     closeTabInLeaf as closeEditorTabInLeaf,
     setActiveTabInLeaf as setActiveTabInEditorLeaf,
+    moveTabInLeaf as moveTabInEditorLeaf,
     pruneMissingTabs,
     renamePathInTree as renamePathInEditorTree,
     type EditorPaneNode,
@@ -448,6 +449,11 @@
     $editorPaneTree = setActiveTabInEditorLeaf($editorPaneTree, paneId, path);
     $focusedEditorPaneId = paneId;
     syncActiveTabToFocusedPane();
+  }
+
+  function reorderTabInEditorPane(paneId: string, path: string, toIndex: number): void {
+    if (!$editorPaneTree) return;
+    $editorPaneTree = moveTabInEditorLeaf($editorPaneTree, paneId, path, toIndex);
   }
 
   // Splits `paneId`, duplicating its own currently-active tab into the new
@@ -942,6 +948,7 @@
                   onSplit={(paneId, direction) => splitEditorPaneAt(paneId, direction)}
                   onSetActiveTab={(paneId, path) => setActiveTabInEditorPane(paneId, path)}
                   onCloseTab={(paneId, path) => closeTabInEditorPane(paneId, path)}
+                  onReorderTab={(paneId, path, toIndex) => reorderTabInEditorPane(paneId, path, toIndex)}
                   onResizeSplit={(splitId, index, delta, containerSizePx) =>
                     resizeEditorPaneSplit(splitId, index, delta, containerSizePx)}
                 />

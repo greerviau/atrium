@@ -106,6 +106,10 @@
     flex: 1;
     min-width: 0;
     overflow-x: auto;
+    scrollbar-width: none; /* Firefox; inert on Atrium's WKWebView, harmless elsewhere */
+  }
+  .tab-list::-webkit-scrollbar {
+    display: none; /* removes the bar entirely — unlike width/height: 0, this reserves no track space */
   }
 
   .tab-strip-controls {

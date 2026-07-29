@@ -26,3 +26,54 @@ for (const key of ["localStorage", "sessionStorage"] as const) {
     writable: true,
   });
 }
+
+/**
+ * jsdom implements no Web Animations API at all — `Element.prototype.animate`
+ * and `.getAnimations` are simply absent, so any component rendered under a
+ * test that uses Svelte's `animate:` directive (`EditorPanel.svelte`'s
+ * `animate:flip` on the tab strip, its first use anywhere in `src/`) throws
+ * `element.getAnimations is not a function`/`element.animate is not a
+ * function` the moment a keyed `{#each}` reconciliation touches an animated
+ * node — which happens on any tab add/remove/reorder, not just a drag, so
+ * this reaches far past `EditorPanel.svelte`'s own tests into any
+ * `App.svelte`-level test that renders a real (non-stubbed) tab strip.
+ * jsdom has no layout engine either, so the animation's actual visual
+ * progression is never something a test could assert on regardless — this
+ * polyfill exists purely to let Svelte's internal animation state machine
+ * (`transitions.js`) run to completion without crashing: `getAnimations`
+ * reports no in-progress animations (so `fix()` always proceeds), and
+ * `animate()` returns a minimal `Animation`-shaped object whose `onfinish`
+ * fires on the next microtask, close enough to real timing (a real
+ * zero-duration dummy animation resolves next-microtask too) for Svelte's
+ * own dummy-delay-then-real-animation sequencing to progress correctly.
+ */
+if (typeof Element.prototype.getAnimations !== "function") {
+  Element.prototype.getAnimations = function (): Animation[] {
+    return [];
+  };
+}
+
+if (typeof Element.prototype.animate !== "function") {
+  Element.prototype.animate = function (): Animation {
+    const animation = {
+      onfinish: null as (() => void) | null,
+      oncancel: null as (() => void) | null,
+      currentTime: 0,
+      playState: "running" as AnimationPlayState,
+      effect: null,
+      finished: Promise.resolve() as unknown as Animation["finished"],
+      cancel(): void {
+        animation.playState = "idle";
+      },
+      finish(): void {
+        animation.playState = "finished";
+        animation.onfinish?.();
+      },
+      play(): void {},
+      pause(): void {},
+      reverse(): void {},
+    } as unknown as Animation;
+    queueMicrotask(() => (animation as unknown as { finish(): void }).finish());
+    return animation;
+  };
+}

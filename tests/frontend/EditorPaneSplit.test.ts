@@ -38,6 +38,7 @@ const baseProps = {
   onSplit: noop,
   onSetActiveTab: noop,
   onCloseTab: noop,
+  onReorderTab: noop,
   onResizeSplit: noop,
 };
 

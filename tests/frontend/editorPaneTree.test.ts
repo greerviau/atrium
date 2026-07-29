@@ -8,6 +8,7 @@ import {
   addTabToLeaf,
   closeTabInLeaf,
   setActiveTabInLeaf,
+  moveTabInLeaf,
   nextActivePane,
   pruneMissingTabs,
   renamePathInTree,
@@ -158,6 +159,73 @@ describe("leaf-local tab operations", () => {
 
   it("closeTabInLeaf returns null when closing the tree's only leaf's only tab", () => {
     expect(closeTabInLeaf(leaf("L1"), "L1", "L1.txt")).toBeNull();
+  });
+});
+
+describe("moveTabInLeaf", () => {
+  it("moves a tab from the middle to the front", () => {
+    const tree: EditorPaneNode = leaf("L1", ["a.txt", "b.txt", "c.txt"]);
+    const result = moveTabInLeaf(tree, "L1", "b.txt", 0);
+    expect(findLeaf(result, "L1")?.tabs).toEqual(["b.txt", "a.txt", "c.txt"]);
+  });
+
+  it("moves a tab from the front to the back", () => {
+    const tree: EditorPaneNode = leaf("L1", ["a.txt", "b.txt", "c.txt"]);
+    const result = moveTabInLeaf(tree, "L1", "a.txt", 2);
+    expect(findLeaf(result, "L1")?.tabs).toEqual(["b.txt", "c.txt", "a.txt"]);
+  });
+
+  it("is a no-op (returns the leaf itself) when toIndex leaves the tab in the same slot", () => {
+    const tree: EditorPaneNode = leaf("L1", ["a.txt", "b.txt", "c.txt"]);
+    const result = moveTabInLeaf(tree, "L1", "a.txt", 0);
+    expect(findLeaf(result, "L1")).toBe(findLeaf(tree, "L1"));
+  });
+
+  it("is a no-op when the path isn't open in this leaf", () => {
+    const tree: EditorPaneNode = leaf("L1", ["a.txt", "b.txt"]);
+    const result = moveTabInLeaf(tree, "L1", "missing.txt", 0);
+    expect(findLeaf(result, "L1")).toBe(findLeaf(tree, "L1"));
+  });
+
+  it("clamps an out-of-range toIndex to the nearest valid end instead of throwing or silently doing nothing", () => {
+    const tree: EditorPaneNode = leaf("L1", ["a.txt", "b.txt", "c.txt"]);
+    const overshoot = moveTabInLeaf(tree, "L1", "a.txt", 999);
+    expect(findLeaf(overshoot, "L1")?.tabs).toEqual(["b.txt", "c.txt", "a.txt"]);
+
+    const undershoot = moveTabInLeaf(tree, "L1", "c.txt", -999);
+    expect(findLeaf(undershoot, "L1")?.tabs).toEqual(["c.txt", "a.txt", "b.txt"]);
+  });
+
+  it("moves correctly at every position, both edges included, in a 4-tab leaf", () => {
+    const base = ["a.txt", "b.txt", "c.txt", "d.txt"];
+    const cases: Array<[string, number, string[]]> = [
+      ["a.txt", 0, ["a.txt", "b.txt", "c.txt", "d.txt"]],
+      ["a.txt", 3, ["b.txt", "c.txt", "d.txt", "a.txt"]],
+      ["c.txt", 0, ["c.txt", "a.txt", "b.txt", "d.txt"]],
+      ["d.txt", 0, ["d.txt", "a.txt", "b.txt", "c.txt"]],
+    ];
+    for (const [path, toIndex, expected] of cases) {
+      const tree: EditorPaneNode = leaf("L1", [...base]);
+      const result = moveTabInLeaf(tree, "L1", path, toIndex);
+      expect(findLeaf(result, "L1")?.tabs).toEqual(expected);
+    }
+  });
+
+  it("closeTabInLeaf's neighbour-on-close logic reads the reordered array, not the pre-reorder one (proving §3.3 directly)", () => {
+    let tree: EditorPaneNode = leaf("L1", ["a.txt", "b.txt", "c.txt", "d.txt"]);
+    tree = setActiveTabInLeaf(tree, "L1", "c.txt");
+    tree = moveTabInLeaf(tree, "L1", "c.txt", 0); // drag C to the front: c, a, b, d
+    expect(findLeaf(tree, "L1")?.tabs).toEqual(["c.txt", "a.txt", "b.txt", "d.txt"]);
+
+    tree = closeTabInLeaf(tree, "L1", "c.txt")!;
+
+    // C's neighbour after the reorder is A (whatever now sits at its own
+    // index), not D (what would activate had closeTabInLeaf used C's
+    // pre-reorder index into the pre-reorder array instead) — proving
+    // closeTabInLeaf reads the reorder's result, not a stale pre-drag order.
+    const target = findLeaf(tree, "L1")!;
+    expect(target.tabs).toEqual(["a.txt", "b.txt", "d.txt"]);
+    expect(target.activeTabPath).toBe("a.txt");
   });
 });
 

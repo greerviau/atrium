@@ -131,6 +131,30 @@ describe("reconcileRestoredSession", () => {
     expect(result).toEqual({ tabs: [], activeTabPath: null, paneTree: null, focusedPaneId: null });
   });
 
+  // Proves §3.2's "reordering rides the existing save path for free" claim
+  // directly, rather than asserting it: a deliberately non-alphabetical,
+  // non-insertion order (c, a, b — what a user-driven drag reorder would
+  // produce) must survive the reconcile step verbatim. `reconcileRestoredSession`
+  // rebuilds `tabs` from a `Set` built by iterating `leaf.tabs` itself (not
+  // `readable`'s own insertion order), so a bug that switched to iterating
+  // `readable` instead would silently reorder to whatever order the paths
+  // happened to be read off disk in.
+  it("preserves a reordered (non-alphabetical) leaf.tabs order through the reconcile step", () => {
+    const session: PersistedEditorSession = {
+      paneTree: leaf("L1", ["/proj/c.ts", "/proj/a.ts", "/proj/b.ts"], "/proj/c.ts"),
+      focusedPaneId: "L1",
+    };
+    const readable = new Map([
+      ["/proj/a.ts", "const a = 1;"],
+      ["/proj/b.ts", "const b = 1;"],
+      ["/proj/c.ts", "const c = 1;"],
+    ]);
+
+    const result = reconcileRestoredSession(session, readable);
+
+    expect(result.paneTree).toEqual(leaf("L1", ["/proj/c.ts", "/proj/a.ts", "/proj/b.ts"], "/proj/c.ts"));
+  });
+
   it("rebuilds tabs and keeps the tree intact when every path is readable", () => {
     const session: PersistedEditorSession = {
       paneTree: leaf("L1", ["/proj/a.md", "/proj/b.ts"], "/proj/b.ts"),

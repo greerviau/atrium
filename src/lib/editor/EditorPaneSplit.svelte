@@ -21,6 +21,7 @@
     onSplit,
     onSetActiveTab,
     onCloseTab,
+    onReorderTab,
     onResizeSplit,
   }: {
     tree: EditorPaneNode;
@@ -29,6 +30,7 @@
     onSplit: (paneId: string, direction: SplitDirection) => void;
     onSetActiveTab: (paneId: string, path: string) => void;
     onCloseTab: (paneId: string, path: string) => void;
+    onReorderTab: (paneId: string, path: string, toIndex: number) => void;
     onResizeSplit: (splitId: string, index: number, delta: number, containerSizePx: number) => void;
   } = $props();
 
@@ -84,6 +86,7 @@
           onSplit={(direction) => onSplit(leaf.id, direction)}
           onSetActiveTab={(path) => onSetActiveTab(leaf.id, path)}
           onCloseTab={(path) => onCloseTab(leaf.id, path)}
+          onReorderTab={(path, toIndex) => onReorderTab(leaf.id, path, toIndex)}
         />
       </div>
     </div>

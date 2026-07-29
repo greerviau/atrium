@@ -65,6 +65,26 @@ export function setActiveTabInLeaf(tree: EditorPaneNode, leafId: string, path: s
 }
 
 /**
+ * Moves `path` to `toIndex` within `leafId`'s own tab strip — a no-op if
+ * `path` isn't in this leaf, and clamped so an out-of-range `toIndex` (drag
+ * released past the last tab, or the mid-drag target math over/undershooting)
+ * lands at the nearest valid end instead of throwing or silently doing
+ * nothing. `toIndex` is the index *within the array with `path` already
+ * removed* — i.e. exactly what a caller measuring "how many other tabs sit
+ * left of the drop point" naturally produces (see tabDrag.ts).
+ */
+export function moveTabInLeaf(tree: EditorPaneNode, leafId: string, path: string, toIndex: number): EditorPaneNode {
+  return mapLeaf(tree, leafId, (leaf) => {
+    const withoutPath = leaf.tabs.filter((p) => p !== path);
+    if (withoutPath.length === leaf.tabs.length) return leaf; // path not in this leaf
+    const clamped = Math.max(0, Math.min(toIndex, withoutPath.length));
+    const tabs = [...withoutPath.slice(0, clamped), path, ...withoutPath.slice(clamped)];
+    const unchanged = tabs.length === leaf.tabs.length && tabs.every((p, i) => p === leaf.tabs[i]);
+    return unchanged ? leaf : { ...leaf, tabs };
+  });
+}
+
+/**
  * Reconciles the tree against the current set of globally open paths
  * (`tabsState.tabs`), for the direction split panes add that a flat tab
  * strip never had to handle: a path can be closed at the `tabsState` level

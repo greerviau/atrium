@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { tick } from "svelte";
 import { get } from "svelte/store";
 import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import EditorPanel from "../../src/lib/editor/EditorPanel.svelte";
-import type { EditorLeafPane } from "../../src/lib/editor/editorPaneTree";
+import { moveTabInLeaf, type EditorLeafPane } from "../../src/lib/editor/editorPaneTree";
 import { tabsState, saveRequest, notifySaveFailed, type Tab } from "../../src/lib/stores/tabs";
 import { errorToast } from "../../src/lib/stores/errorToast";
+import { mountLog } from "./mountLog";
 
 vi.mock("../../src/lib/editor/EditorPane.svelte", async () => {
   const mod = await import("./EditorPaneStub.svelte");
@@ -14,6 +16,7 @@ vi.mock("../../src/lib/editor/EditorPane.svelte", async () => {
 afterEach(() => {
   cleanup();
   tabsState.set({ tabs: [], activeTabPath: null });
+  mountLog.length = 0;
 });
 
 function tab(path: string, patch: Partial<Tab> = {}): Tab {
@@ -44,6 +47,7 @@ const baseProps = {
   onSplit: noop,
   onSetActiveTab: noop,
   onCloseTab: noop,
+  onReorderTab: noop,
 };
 
 describe("EditorPanel", () => {
@@ -187,5 +191,137 @@ describe("EditorPanel", () => {
     const stubs = container.querySelectorAll(".editor-pane-stub");
     expect([...stubs].every((el) => el.getAttribute("data-pane-id") === "p1")).toBe(true);
     expect([...stubs].map((el) => el.getAttribute("data-file-path"))).toEqual(["/a.ts", "/b.ts"]);
+  });
+
+  it(".tab-list carries role=tablist, for the individual role=tab children to sit inside", () => {
+    tabsState.set({ tabs: [tab("/a.ts"), tab("/b.ts")], activeTabPath: "/a.ts" });
+    const { container } = render(EditorPanel, { tree: TWO_TABS, ...baseProps });
+
+    expect(container.querySelector(".tab-list")?.getAttribute("role")).toBe("tablist");
+  });
+
+  it("a pointerdown that never crosses the drag threshold still lets the tab's own click activate it", async () => {
+    tabsState.set({ tabs: [tab("/a.ts"), tab("/b.ts")], activeTabPath: "/a.ts" });
+    const onSetActiveTab = vi.fn();
+    const { container } = render(EditorPanel, { tree: TWO_TABS, ...baseProps, onSetActiveTab });
+
+    const target = container.querySelectorAll('.tab-list .tab[role="tab"]')[1];
+    Object.defineProperty(target, "getBoundingClientRect", {
+      value: () => ({ left: 0, right: 50, top: 0, bottom: 20, width: 50, height: 20, x: 0, y: 0, toJSON: () => ({}) }),
+      configurable: true,
+    });
+    await fireEvent.pointerDown(target, { clientX: 5, clientY: 5, button: 0 });
+    await fireEvent.click(target);
+
+    expect(onSetActiveTab).toHaveBeenCalledWith("/b.ts");
+  });
+
+  it("⌘⇧→ on a focused tab calls onReorderTab with the next index", async () => {
+    tabsState.set({ tabs: [tab("/a.ts"), tab("/b.ts")], activeTabPath: "/a.ts" });
+    const onReorderTab = vi.fn();
+    const { container } = render(EditorPanel, { tree: TWO_TABS, ...baseProps, onReorderTab });
+
+    const firstTab = container.querySelectorAll('.tab-list .tab[role="tab"]')[0] as HTMLElement;
+    await fireEvent.keyDown(firstTab, { key: "ArrowRight", metaKey: true, shiftKey: true });
+
+    expect(onReorderTab).toHaveBeenCalledWith("/a.ts", 1);
+  });
+
+  it("⌘⇧← on a focused tab calls onReorderTab with the previous index", async () => {
+    tabsState.set({ tabs: [tab("/a.ts"), tab("/b.ts")], activeTabPath: "/a.ts" });
+    const onReorderTab = vi.fn();
+    const { container } = render(EditorPanel, { tree: TWO_TABS, ...baseProps, onReorderTab });
+
+    const secondTab = container.querySelectorAll('.tab-list .tab[role="tab"]')[1] as HTMLElement;
+    await fireEvent.keyDown(secondTab, { key: "ArrowLeft", metaKey: true, shiftKey: true });
+
+    expect(onReorderTab).toHaveBeenCalledWith("/b.ts", 0);
+  });
+
+  it("a plain ArrowRight/ArrowLeft with no meta/shift does not call onReorderTab", async () => {
+    tabsState.set({ tabs: [tab("/a.ts"), tab("/b.ts")], activeTabPath: "/a.ts" });
+    const onReorderTab = vi.fn();
+    const { container } = render(EditorPanel, { tree: TWO_TABS, ...baseProps, onReorderTab });
+
+    const firstTab = container.querySelectorAll('.tab-list .tab[role="tab"]')[0] as HTMLElement;
+    await fireEvent.keyDown(firstTab, { key: "ArrowRight" });
+
+    expect(onReorderTab).not.toHaveBeenCalled();
+  });
+
+  // Regression coverage for M4 (round 1): the pane stack must iterate a
+  // reorder-stable order derived from `tabsState.tabs`, never `tree.tabs`
+  // directly — otherwise a tab-strip reorder physically detaches/reinserts
+  // the visible `.editor-pane-slot`'s live CodeMirror DOM, dropping its
+  // scroll position and focus. `tabsState.tabs` (insertion order: a, b) is
+  // never touched by a reorder, so re-rendering with `tree.tabs` reordered
+  // to [b, a] (simulating a completed drag) must leave the pane-stack's own
+  // DOM order at [a, b] — unchanged — even though the tab *strip*'s order
+  // does follow the new [b, a].
+  it("the pane stack's own DOM order stays pinned to tabsState.tabs's order across a tab-strip reorder (M4)", async () => {
+    tabsState.set({ tabs: [tab("/a.ts"), tab("/b.ts")], activeTabPath: "/a.ts" });
+    const { container, rerender } = render(EditorPanel, { tree: TWO_TABS, ...baseProps });
+    mountLog.length = 0;
+
+    const reordered: EditorLeafPane = { ...TWO_TABS, tabs: ["/b.ts", "/a.ts"] };
+    await rerender({ tree: reordered, ...baseProps });
+    await tick();
+
+    const paneOrder = [...container.querySelectorAll(".editor-pane-stub")].map((el) =>
+      el.getAttribute("data-file-path"),
+    );
+    expect(paneOrder).toEqual(["/a.ts", "/b.ts"]);
+
+    const stripOrder = [...container.querySelectorAll('.tab-list .tab[role="tab"]')].map((el) =>
+      el.getAttribute("data-tab-path"),
+    );
+    expect(stripOrder).toEqual(["/b.ts", "/a.ts"]);
+
+    // Nothing was destroyed/remounted by the reorder — same live EditorPane instances throughout.
+    expect(mountLog).not.toContain("destroy:p1:/a.ts");
+    expect(mountLog).not.toContain("destroy:p1:/b.ts");
+  });
+
+  // Regression coverage for round 2's must-fix: without the tick()-then-
+  // .focus() step in onTabKeyDown, moving a focused tab RIGHT relocates the
+  // focused node itself in Svelte's keyed {#each}, dropping focus to
+  // <body> — so a second ⌘⇧→ press (dispatched, as a real second keystroke
+  // would be, on whatever element currently holds focus) never reaches the
+  // tab's own keydown handler at all, and the tab never reaches the third
+  // slot a second successful move would produce.
+  it("two consecutive ⌘⇧→ presses on the same tab both keep it focused (round 2 regression)", async () => {
+    tabsState.set({ tabs: [tab("/a.ts"), tab("/b.ts"), tab("/c.ts")], activeTabPath: "/a.ts" });
+    let tree: EditorLeafPane = { type: "leaf", id: "p1", tabs: ["/a.ts", "/b.ts", "/c.ts"], activeTabPath: "/a.ts" };
+
+    function onReorderTab(path: string, toIndex: number): void {
+      tree = moveTabInLeaf(tree, "p1", path, toIndex) as EditorLeafPane;
+      rerender({ tree, ...baseProps, onReorderTab });
+    }
+
+    const { container, rerender } = render(EditorPanel, { tree, ...baseProps, onReorderTab });
+
+    const firstTabEl = container.querySelector<HTMLElement>('[data-tab-path="/a.ts"]')!;
+    firstTabEl.focus();
+    expect(document.activeElement).toBe(firstTabEl);
+
+    await fireEvent.keyDown(firstTabEl, { key: "ArrowRight", metaKey: true, shiftKey: true });
+    await tick();
+    expect(tree.tabs).toEqual(["/b.ts", "/a.ts", "/c.ts"]);
+    // Same DOM node (keyed {#each} preserves identity across the move) — but
+    // only still focused if onTabKeyDown explicitly restored it.
+    expect(document.activeElement).toBe(container.querySelector('[data-tab-path="/a.ts"]'));
+
+    // A real second keystroke lands wherever focus currently is — if the
+    // first press silently dropped focus to <body>, this dispatch never
+    // reaches the tab's own onkeydown handler at all.
+    await fireEvent.keyDown(document.activeElement as HTMLElement, {
+      key: "ArrowRight",
+      metaKey: true,
+      shiftKey: true,
+    });
+    await tick();
+
+    expect(tree.tabs).toEqual(["/b.ts", "/c.ts", "/a.ts"]);
+    expect(document.activeElement).toBe(container.querySelector('[data-tab-path="/a.ts"]'));
   });
 });

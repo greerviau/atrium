@@ -72,6 +72,13 @@
       ],
     },
     {
+      title: "Editor Tabs",
+      rows: [
+        { label: "Move Tab Left", keys: "⌘⇧←" },
+        { label: "Move Tab Right", keys: "⌘⇧→" },
+      ],
+    },
+    {
       title: "Terminal",
       rows: [
         { label: "Insert Newline Without Submitting", keys: "⇧⏎" },
