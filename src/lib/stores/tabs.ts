@@ -265,17 +265,52 @@ export function clearPendingSelection(path: string): void {
   }));
 }
 
-/** Saves `contents` for `path` and flips the tab back to clean. */
-export async function saveTab(path: string, contents: string): Promise<void> {
-  const workspaceId = get(tabsState).tabs.find((t) => t.path === path)?.workspaceId ?? localWorkspaceId();
+/**
+ * Saves `contents` for `path` and flips the tab back to clean.
+ *
+ * `hasExternalConflict`/`isDeleted` are only cleared here when they were
+ * already set *before* this write started (captured in `before`, taken from
+ * the same pre-`await` read `workspaceId` comes from) — a successful save
+ * resolving a conflict or deletion the caller already knew about is the
+ * existing "keep mine" / recreate-on-save behavior. A flag that turns true
+ * only *during* the write — a genuinely new external event racing with this
+ * save — is left untouched: this write knows nothing about it, and clearing
+ * it would make the conflict banner disappear the instant it appears,
+ * exactly the failure `reconcileExternalChange` was fixed to avoid, one
+ * layer down.
+ *
+ * `getLiveContent`, when given (`EditorPane.svelte`'s `save()` passes its own
+ * `currentDoc`), is called from *inside* the same `tabsState.update` that
+ * applies this write's result, not after a further `await` back in the
+ * caller — a keystroke landing while `fsWriteFile`'s round trip was in
+ * flight moves the live buffer on before `savedDoc`/`isDirty` are decided,
+ * and only a check made at that exact synchronous moment can see it. A
+ * post-`await` check back in the caller is a tick too late: resolving this
+ * function's own promise takes one more microtask hop than the
+ * `tabsState.update` below, and the external-change reconciliation effect's
+ * own re-run is already scheduled off that update, ahead of the caller's
+ * continuation — it would silently replace the buffer with the
+ * (already-stale) `savedDoc` before the caller ever got to react. Without
+ * `getLiveContent`, this behaves as it always did: `isDirty` unconditionally
+ * flips to `false`.
+ */
+export async function saveTab(path: string, contents: string, getLiveContent?: () => string): Promise<void> {
+  const before = get(tabsState).tabs.find((t) => t.path === path);
+  const workspaceId = before?.workspaceId ?? localWorkspaceId();
   await fsWriteFile(workspaceId, path, contents);
   tabsState.update((s) => ({
     ...s,
-    tabs: s.tabs.map((t) =>
-      t.path === path
-        ? { ...t, savedDoc: contents, isDirty: false, hasExternalConflict: false, isDeleted: false }
-        : t,
-    ),
+    tabs: s.tabs.map((t) => {
+      if (t.path !== path) return t;
+      const movedOn = getLiveContent !== undefined && getLiveContent() !== contents;
+      return {
+        ...t,
+        savedDoc: contents,
+        isDirty: movedOn,
+        hasExternalConflict: before?.hasExternalConflict ? false : t.hasExternalConflict,
+        isDeleted: before?.isDeleted ? false : t.isDeleted,
+      };
+    }),
   }));
 }
 

@@ -398,6 +398,70 @@ describe("reconcileExternalChange / reloadFromDisk / dismissConflict", () => {
     expect(tab.isDirty).toBe(false);
   });
 
+  // The previous test (own save completing mid-read) takes the *clean*
+  // branch once live state is re-read, so it never actually exercises the
+  // dirty branch's `contents !== live.savedDoc` comparison — a mutation
+  // reverting just that comparison's `live.savedDoc` back to the stale
+  // `tab.savedDoc` snapshot survives it. This closes that gap: the tab goes
+  // dirty *again* (a further keystroke) before the read resolves, so the
+  // dirty branch runs, and only a correctly-live `savedDoc` ("B", from the
+  // completed save) makes the echo compare equal and stay silent — the
+  // stale snapshot ("S", from before the save) would wrongly differ and
+  // raise a spurious conflict.
+  it("re-reads live savedDoc (not the pre-await snapshot) when the tab goes dirty again after its own save completes mid-read", async () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md", { savedDoc: "S", isDirty: true })],
+      activeTabPath: "/notes.md",
+    });
+    vi.mocked(commands.fsWriteFile).mockResolvedValue(undefined);
+    let resolveRead!: (value: string) => void;
+    vi.mocked(commands.fsReadFile).mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+
+    const pending = reconcileExternalChange("/notes.md");
+    // This tab's own save completes mid-read...
+    await saveTab("/notes.md", "B");
+    // ...and a further keystroke re-dirties it before the read resolves.
+    markDirty("/notes.md");
+    resolveRead("B");
+    await pending;
+
+    const tab = get(tabsState).tabs[0];
+    expect(tab.hasExternalConflict).toBe(false);
+    expect(tab.savedDoc).toBe("B");
+    expect(tab.isDirty).toBe(true);
+  });
+
+  // The `!live` guard exists for a tab closed while its own reconcile read
+  // is still in flight — the type checker enforces the null check, but this
+  // pins the actual runtime behavior: no throw, no resurrection of the
+  // closed tab.
+  it("resolves without throwing or recreating the tab when it's closed while the disk read is still in flight", async () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md", { savedDoc: "original", isDirty: false })],
+      activeTabPath: "/notes.md",
+    });
+    let resolveRead!: (value: string) => void;
+    vi.mocked(commands.fsReadFile).mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+
+    const pending = reconcileExternalChange("/notes.md");
+    // The tab is closed while the read above is still in flight.
+    tabsState.set({ tabs: [], activeTabPath: null });
+    resolveRead("external content");
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(get(tabsState).tabs).toHaveLength(0);
+  });
+
   // Test 1 (frontend half, issue #325) — reconcileExternalChange/reloadFromDisk
   // read through the *tab's own* workspaceId, not a hardcoded "local".
   it("reconcileExternalChange reads through the tab's own workspaceId", async () => {
@@ -851,6 +915,72 @@ describe("saveTab", () => {
     expect(tab.isDeleted).toBe(false);
     expect(tab.isDirty).toBe(false);
     expect(tab.savedDoc).toBe("new contents");
+  });
+
+  // Regression: saveTab used to clear hasExternalConflict/isDeleted
+  // unconditionally after its write resolved, the same read-before/use-after
+  // shape reconcileExternalChange was fixed for — except here the "read" is
+  // the pre-write tab state and the "use" is a blanket overwrite regardless
+  // of what happened during fsWriteFile's own round trip. A flag already
+  // true before the write started is resolved by a successful save (the
+  // existing "keep mine" behavior, asserted above); a flag that turns true
+  // only *during* the write is a genuinely new external event this save
+  // knows nothing about, and must survive it — silently clearing it is what
+  // makes the conflict banner disappear the instant it appears.
+  it("does not clear a hasExternalConflict raised while its own write is still in flight", async () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md", { isDirty: true, hasExternalConflict: false })],
+      activeTabPath: "/notes.md",
+    });
+    let resolveWrite!: () => void;
+    vi.mocked(commands.fsWriteFile).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveWrite = resolve;
+        }),
+    );
+
+    const pending = saveTab("/notes.md", "new contents");
+    // A genuinely new external conflict is raised while this write is still
+    // in flight (e.g. the watcher's own reconcile resolves first).
+    tabsState.update((s) => ({
+      ...s,
+      tabs: s.tabs.map((t) => (t.path === "/notes.md" ? { ...t, hasExternalConflict: true } : t)),
+    }));
+    resolveWrite();
+    await pending;
+
+    const tab = get(tabsState).tabs[0];
+    expect(tab.hasExternalConflict).toBe(true);
+    expect(tab.savedDoc).toBe("new contents");
+    expect(tab.isDirty).toBe(false);
+  });
+
+  it("does not clear an isDeleted raised while its own write is still in flight", async () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md", { isDirty: true, isDeleted: false })],
+      activeTabPath: "/notes.md",
+    });
+    let resolveWrite!: () => void;
+    vi.mocked(commands.fsWriteFile).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveWrite = resolve;
+        }),
+    );
+
+    const pending = saveTab("/notes.md", "new contents");
+    // The file is deleted out from under this write while it's still in
+    // flight (a directory delete cascading, an external process racing it).
+    tabsState.update((s) => ({
+      ...s,
+      tabs: s.tabs.map((t) => (t.path === "/notes.md" ? { ...t, isDeleted: true } : t)),
+    }));
+    resolveWrite();
+    await pending;
+
+    const tab = get(tabsState).tabs[0];
+    expect(tab.isDeleted).toBe(true);
   });
 
   // Test 1 (frontend half, issue #325) — the exact scenario the plan names:

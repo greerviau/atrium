@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { get } from "svelte/store";
+import { tick } from "svelte";
 import { render, cleanup } from "@testing-library/svelte";
 import { EditorView } from "@codemirror/view";
 import EditorPane from "../../src/lib/editor/EditorPane.svelte";
@@ -222,5 +223,49 @@ describe("EditorPane: auto save", () => {
     await vi.advanceTimersByTimeAsync(AUTO_SAVE_DELAY_MS);
 
     expect(fsWriteFile).toHaveBeenCalledTimes(3);
+  });
+
+  // Regression: saveTab used to flip the tab to clean based solely on what
+  // was written at the moment the save started, with no way to notice the
+  // live buffer moving on during fsWriteFile's own round trip. The clean-tab
+  // external-change reconciliation effect (EditorPane.svelte, guarded on
+  // !isDirty) would then silently replace the buffer with the now-stale
+  // savedDoc, erasing whatever was typed during the write — not undoable,
+  // since that replacement never enters undo history. Auto-save is what
+  // turns this from "needs a keystroke landing inside a Cmd+S round trip"
+  // into "fires by itself on a timer, unattended."
+  it("does not erase a keystroke typed while auto-save's own write is still in flight", async () => {
+    seedTab();
+    editorPaneTree.set(singlePaneShowingPath());
+    focusedEditorPaneId.set(PANE_A);
+    autoSaveEnabled.set(true);
+
+    const { container } = render(EditorPane, { filePath: PATH, paneId: PANE_A });
+    const view = findView(container);
+
+    let resolveWrite!: () => void;
+    vi.mocked(commands.fsWriteFile).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveWrite = resolve;
+        }),
+    );
+
+    typeInto(view);
+    await vi.advanceTimersByTimeAsync(AUTO_SAVE_DELAY_MS);
+    // The write is now issued and in flight, blocked on our deferred promise.
+
+    // A further keystroke lands while the write is still pending.
+    typeInto(view);
+    const docWhileWritePending = view.state.doc.toString();
+
+    resolveWrite();
+    await tick();
+    await tick();
+    await tick();
+
+    expect(view.state.doc.toString()).toBe(docWhileWritePending);
+    const tab = get(tabsState).tabs.find((t) => t.path === PATH);
+    expect(tab?.isDirty).toBe(true);
   });
 });

@@ -203,8 +203,19 @@
     };
   }
 
+  // Passes `currentDoc` itself (not just its value) so `saveTab` can compare
+  // the live buffer against what was written from *inside* its own
+  // `tabsState.update` — at the same synchronous moment it decides
+  // `isDirty`, not after a further `await` back here. A check made only
+  // after `saveTab`'s own promise resolves would be a tick too late: the
+  // external-change reconciliation effect's own re-run is already scheduled
+  // off `saveTab`'s `tabsState.update`, one microtask hop ahead of this
+  // function's continuation, and would silently replace the buffer with the
+  // now-stale `savedDoc` — erasing whatever was typed during the write, with
+  // no way to undo it (the replacement doesn't enter undo history) — before
+  // this function ever got a chance to react.
   async function save(): Promise<void> {
-    await saveTab(filePath, currentDoc());
+    await saveTab(filePath, currentDoc(), currentDoc);
   }
 
   function closeMenu(): void {

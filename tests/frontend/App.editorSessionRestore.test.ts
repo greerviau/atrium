@@ -188,6 +188,48 @@ describe("App editor session restore (review of #324)", () => {
     expect(loadEditorSession(PROJECT_NO_RESTORE)).toEqual(originalSession);
   });
 
+  // Regression: gating the persist effect on the *live* restoreTabsOnStartup
+  // value closed the "open a project while off" clobber above, but relocated
+  // it — flipping the store back on re-fires the reactive effect immediately,
+  // persisting whatever the current (restore-skipped) session holds over the
+  // real stored one, before any relaunch. Re-enabling the setting must take
+  // effect at the next project open/switch, never retroactively for a root
+  // already open.
+  it("re-enabling restoreTabsOnStartup mid-session does not itself overwrite the current project's stored session", async () => {
+    const PROJECT_REENABLE = "/projects/reenable-mid-session";
+    const originalSession = {
+      paneTree: {
+        type: "leaf",
+        id: "LY",
+        tabs: [PROJECT_REENABLE + "/y.ts"],
+        activeTabPath: PROJECT_REENABLE + "/y.ts",
+      },
+      focusedPaneId: "LY",
+    };
+    localStorage.setItem("atrium.editorSession." + PROJECT_REENABLE, JSON.stringify(originalSession));
+    setRestoreTabsOnStartup(false);
+
+    render(App);
+    await flush();
+
+    // Opened with the setting off — restore is skipped, matching the
+    // previous test's scenario.
+    await openWorkspacePath(PROJECT_REENABLE);
+    await flush();
+    expect(get(tabsState).tabs).toHaveLength(0);
+
+    // Re-enable the setting without switching projects or relaunching — an
+    // entirely ordinary gesture ("I changed my mind, turn it back on").
+    setRestoreTabsOnStartup(true);
+    await flush();
+
+    // Give the persist effect's real debounce time to land if it (wrongly)
+    // fired off the live toggle.
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    expect(loadEditorSession(PROJECT_REENABLE)).toEqual(originalSession);
+  });
+
   it("a project switch started before a stale restore resolves never applies the stale project's state or corrupts the new project's storage key", async () => {
     localStorage.setItem(
       "atrium.editorSession." + PROJECT_A,

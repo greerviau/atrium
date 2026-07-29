@@ -208,6 +208,21 @@
   // state `resetLocalTabs()` produces mid-switch.
   let restoredForRoot: string | null = null;
 
+  // Which root the persistence-write effect below is currently allowed to
+  // write for — decided *once*, at the same moment `restoredForRoot`
+  // latches, from whatever Restore Tabs on Startup happened to be at that
+  // switch/launch. Deliberately not the setting's own *live* value: an
+  // effect that re-read the setting reactively would immediately re-fire
+  // the instant the user flipped it back on mid-session, persisting
+  // whatever this session happens to hold right now — the very state that
+  // skipped restoring in the first place — over the real stored session,
+  // relocating the exact overwrite the setting-off gate exists to prevent
+  // from "opening a project while off" to "turning the setting back on".
+  // Latching this once means re-enabling the setting takes effect at the
+  // next project open/switch (when a fresh restore-or-decline actually
+  // happens), never retroactively for whatever is already open.
+  let persistenceEnabledForRoot: string | null = null;
+
   // Bumped every time the project-switch effect below actually fires,
   // capturing its value locally so a stale `restoreEditorSession(root)` call
   // can tell it's been superseded by a later switch before it applies its
@@ -769,21 +784,16 @@
     if (root === previousWorkspaceRoot) return;
     previousWorkspaceRoot = root;
     restoredForRoot = null;
+    persistenceEnabledForRoot = null;
     switchToken += 1;
     const token = switchToken;
     resetLocalTabs();
     terminalPaneTree = null;
     focusedPaneId = null;
     if (root) {
-      // The persist effect below independently gates on this same setting's
-      // live value, so skipping the restore here doesn't just start this
-      // root from a blank slate — it also means nothing gets written back
-      // over the real persisted session while the setting is off. Without
-      // that second gate, a session merely a few tabs' worth of "current
-      // state" (e.g. just a surviving standalone tab, with the project's own
-      // previously-open tabs never loaded because restore was skipped) would
-      // overwrite — irrecoverably — whatever real session was already on
-      // disk for this root, the first time the persist effect fired.
+      // Captured once, here, rather than read live by the persist effect —
+      // see `persistenceEnabledForRoot`'s own comment for why that
+      // distinction is load-bearing rather than cosmetic.
       const restoreOnStartup = get(restoreTabsOnStartup);
       void (restoreOnStartup ? restoreEditorSession(root) : Promise.resolve(null)).then((restored) => {
         // A later switch started (and possibly already finished) while this
@@ -818,39 +828,52 @@
         editorPaneTree.set(mergeTrees(standaloneSubtree, restored?.paneTree ?? null));
         if (restored?.focusedPaneId) focusedEditorPaneId.set(restored.focusedPaneId);
         restoredForRoot = root;
+        persistenceEnabledForRoot = restoreOnStartup ? root : null;
       });
     } else {
       restoredForRoot = null;
+      persistenceEnabledForRoot = null;
     }
   });
 
   // Persists the editor session (pane tree + focused pane) for the current
   // root whenever it changes — but only once `restoreEditorSession` above
   // has actually finished restoring this same root, per the guard comment
-  // on `restoredForRoot`, and only while Restore Tabs on Startup is
-  // currently on. That second gate is load-bearing, not just symmetric with
-  // the restore gate above: without it, opening (or switching back into) a
-  // root while the setting is off would still persist whatever partial
-  // state this session currently holds — at minimum an empty tree, or a
-  // surviving standalone tab's own pane — silently overwriting a real,
+  // on `restoredForRoot`, and only for a root that reached that point with
+  // Restore Tabs on Startup already on, per `persistenceEnabledForRoot`.
+  // That second gate is load-bearing, not just symmetric with the restore
+  // gate above: without it, opening (or switching back into) a root while
+  // the setting is off would still persist whatever partial state this
+  // session currently holds — at minimum an empty tree, or a surviving
+  // standalone tab's own pane — silently overwriting a real,
   // previously-persisted session for that root the moment this effect next
   // fires, with no way back short of the setting having been left on the
-  // whole time. Reading `$restoreTabsOnStartup` here (not just inside the
-  // effect above) also means toggling the setting back on mid-session
-  // immediately resumes persisting the session as it currently stands,
-  // without needing a project switch to re-trigger it. Filters standalone
-  // paths out of what gets persisted (issue #325) — a standalone tab's
-  // identity is never tied to any project's own session. `untrack` on the
-  // `$tabsState` read is required — without it, this effect re-fires on
-  // every keystroke (`markDirty` rebuilds `tabsState.tabs` on every
-  // `docChanged`), continually resetting `saveEditorSession`'s ~400ms
-  // debounce.
+  // whole time.
+  //
+  // Deliberately checks `persistenceEnabledForRoot` (latched once, at the
+  // switch) rather than reading `$restoreTabsOnStartup` live: an earlier
+  // version read the setting reactively here, on the theory that it would
+  // let re-enabling the setting resume persisting immediately — but a live
+  // read makes the effect itself re-fire the instant the setting flips back
+  // on, persisting whatever this session happens to hold *right now* (the
+  // very state that skipped restoring) over the real stored session. That
+  // relocates the exact overwrite the setting-off gate exists to prevent
+  // from "opening a project while off" to "toggling the setting back on" —
+  // an entirely ordinary gesture whose whole intent is to get the old
+  // layout back. Latching the decision once means re-enabling the setting
+  // takes effect at the next project open/switch, never retroactively.
+  //
+  // Filters standalone paths out of what gets persisted (issue #325) — a
+  // standalone tab's identity is never tied to any project's own session.
+  // `untrack` on the `$tabsState` read is required — without it, this
+  // effect re-fires on every keystroke (`markDirty` rebuilds
+  // `tabsState.tabs` on every `docChanged`), continually resetting
+  // `saveEditorSession`'s ~400ms debounce.
   $effect(() => {
     const root = $workspace.root;
     const tree = $editorPaneTree;
     const focused = $focusedEditorPaneId;
-    const restoreOnStartup = $restoreTabsOnStartup;
-    if (root && restoredForRoot === root && restoreOnStartup) {
+    if (root && restoredForRoot === root && persistenceEnabledForRoot === root) {
       const localPaths = new Set(
         untrack(() => $tabsState.tabs.filter((t) => t.workspaceId !== standaloneWorkspaceId()).map((t) => t.path)),
       );
