@@ -775,11 +775,15 @@
     terminalPaneTree = null;
     focusedPaneId = null;
     if (root) {
-      // Gates only the *restore* (apply-on-open) step, not the *persist*
-      // (write-on-change) step below — that effect keeps running
-      // unconditionally regardless of this setting, so toggling it back on
-      // immediately picks up the most recent session rather than starting
-      // from whatever was last persisted while it happened to be off.
+      // The persist effect below independently gates on this same setting's
+      // live value, so skipping the restore here doesn't just start this
+      // root from a blank slate — it also means nothing gets written back
+      // over the real persisted session while the setting is off. Without
+      // that second gate, a session merely a few tabs' worth of "current
+      // state" (e.g. just a surviving standalone tab, with the project's own
+      // previously-open tabs never loaded because restore was skipped) would
+      // overwrite — irrecoverably — whatever real session was already on
+      // disk for this root, the first time the persist effect fired.
       const restoreOnStartup = get(restoreTabsOnStartup);
       void (restoreOnStartup ? restoreEditorSession(root) : Promise.resolve(null)).then((restored) => {
         // A later switch started (and possibly already finished) while this
@@ -823,17 +827,30 @@
   // Persists the editor session (pane tree + focused pane) for the current
   // root whenever it changes — but only once `restoreEditorSession` above
   // has actually finished restoring this same root, per the guard comment
-  // on `restoredForRoot`. Filters standalone paths out of what gets
-  // persisted (issue #325) — a standalone tab's identity is never tied to
-  // any project's own session. `untrack` on the `$tabsState` read is
-  // required — without it, this effect re-fires on every keystroke
-  // (`markDirty` rebuilds `tabsState.tabs` on every `docChanged`),
-  // continually resetting `saveEditorSession`'s ~400ms debounce.
+  // on `restoredForRoot`, and only while Restore Tabs on Startup is
+  // currently on. That second gate is load-bearing, not just symmetric with
+  // the restore gate above: without it, opening (or switching back into) a
+  // root while the setting is off would still persist whatever partial
+  // state this session currently holds — at minimum an empty tree, or a
+  // surviving standalone tab's own pane — silently overwriting a real,
+  // previously-persisted session for that root the moment this effect next
+  // fires, with no way back short of the setting having been left on the
+  // whole time. Reading `$restoreTabsOnStartup` here (not just inside the
+  // effect above) also means toggling the setting back on mid-session
+  // immediately resumes persisting the session as it currently stands,
+  // without needing a project switch to re-trigger it. Filters standalone
+  // paths out of what gets persisted (issue #325) — a standalone tab's
+  // identity is never tied to any project's own session. `untrack` on the
+  // `$tabsState` read is required — without it, this effect re-fires on
+  // every keystroke (`markDirty` rebuilds `tabsState.tabs` on every
+  // `docChanged`), continually resetting `saveEditorSession`'s ~400ms
+  // debounce.
   $effect(() => {
     const root = $workspace.root;
     const tree = $editorPaneTree;
     const focused = $focusedEditorPaneId;
-    if (root && restoredForRoot === root) {
+    const restoreOnStartup = $restoreTabsOnStartup;
+    if (root && restoredForRoot === root && restoreOnStartup) {
       const localPaths = new Set(
         untrack(() => $tabsState.tabs.filter((t) => t.workspaceId !== standaloneWorkspaceId()).map((t) => t.path)),
       );

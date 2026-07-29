@@ -140,24 +140,22 @@ describe("App editor session restore (review of #324)", () => {
     });
   });
 
-  it("does not restore a persisted session when restoreTabsOnStartup is off, but the no-persisted-session merge path (standalone-tab preservation) still runs", async () => {
+  it("does not restore a persisted session when restoreTabsOnStartup is off, but the no-persisted-session merge path (standalone-tab preservation) still runs, without overwriting the real persisted session on disk", async () => {
     // A project of its own, distinct from PROJECT_A/PROJECT_B used by the
     // other cases in this file — this test's own persist-effect writes are
     // real-timer debounced (~400ms) and must never land on a storage key a
     // sibling test also reads, however long after this test returns.
     const PROJECT_NO_RESTORE = "/projects/no-restore";
-    localStorage.setItem(
-      "atrium.editorSession." + PROJECT_NO_RESTORE,
-      JSON.stringify({
-        paneTree: {
-          type: "leaf",
-          id: "LX",
-          tabs: [PROJECT_NO_RESTORE + "/x.ts"],
-          activeTabPath: PROJECT_NO_RESTORE + "/x.ts",
-        },
-        focusedPaneId: "LX",
-      }),
-    );
+    const originalSession = {
+      paneTree: {
+        type: "leaf",
+        id: "LX",
+        tabs: [PROJECT_NO_RESTORE + "/x.ts"],
+        activeTabPath: PROJECT_NO_RESTORE + "/x.ts",
+      },
+      focusedPaneId: "LX",
+    };
+    localStorage.setItem("atrium.editorSession." + PROJECT_NO_RESTORE, JSON.stringify(originalSession));
     setRestoreTabsOnStartup(false);
 
     render(App);
@@ -167,7 +165,10 @@ describe("App editor session restore (review of #324)", () => {
     // switch into a project even when restore-on-startup is off — this is
     // the same "no persisted session" merge path every brand-new workspace
     // already exercises, just reached via the setting instead of an empty
-    // storage key.
+    // storage key. It is also exactly the shape that used to trip the
+    // persist effect (which used to gate only on `restoredForRoot`, not on
+    // the setting) into writing this near-empty, standalone-only tree over
+    // the project's real persisted session the moment it next fired.
     await openFile("/tmp/standalone.md", undefined, "standalone");
     await flush();
 
@@ -179,9 +180,12 @@ describe("App editor session restore (review of #324)", () => {
     expect(get(tabsState).tabs.map((t) => t.path)).toEqual(["/tmp/standalone.md"]);
     expect(get(workspace).root).toBe(PROJECT_NO_RESTORE);
 
-    // Wait out the persist-effect's real debounce so this test's own write
-    // never lands after the test (and this file's other checks) has moved on.
+    // Wait out the persist-effect's real debounce: if it fired (it must
+    // not, while the setting is off), this is enough time for it to have
+    // landed and corrupted the storage key checked below.
     await new Promise((resolve) => setTimeout(resolve, 450));
+
+    expect(loadEditorSession(PROJECT_NO_RESTORE)).toEqual(originalSession);
   });
 
   it("a project switch started before a stale restore resolves never applies the stale project's state or corrupts the new project's storage key", async () => {

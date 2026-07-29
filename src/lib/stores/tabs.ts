@@ -313,6 +313,21 @@ export async function saveTab(path: string, contents: string): Promise<void> {
  * toast instead of an unhandled rejection (or, for a dirty tab, instead of
  * the conflict banner — a "Reload" action would fail against either error
  * anyway), leaving the tab showing its last-known content.
+ *
+ * Every decision made *after* the `await fsReadFile` re-reads this tab's live
+ * state rather than trusting the snapshot taken before it — `tab.isDirty`/
+ * `tab.savedDoc` can both change while that read is in flight (a keystroke
+ * landing mid-read, or this tab's own save completing mid-read), and
+ * branching on the stale values reproduces exactly the two failure modes
+ * this function exists to prevent: a real external change lands while the
+ * tab is still clean by the stale snapshot, silently overwrites `savedDoc`
+ * with no conflict ever raised (and no later reconcile can raise one either,
+ * since the comparison baseline is now the external content); or this tab's
+ * own write completes mid-read, making the stale `savedDoc` comparison wrong
+ * and raising a spurious conflict on the app's own write. Only the read
+ * itself is issued against the pre-`await` snapshot (`tab.workspaceId`,
+ * which cannot change once a tab exists) — everything decided from the
+ * result comes from a fresh read of `tabsState`.
  */
 export async function reconcileExternalChange(path: string): Promise<void> {
   const state = get(tabsState);
@@ -340,8 +355,13 @@ export async function reconcileExternalChange(path: string): Promise<void> {
     throw err;
   }
 
-  if (tab.isDirty) {
-    if (contents !== tab.savedDoc) {
+  const live = get(tabsState).tabs.find((t) => t.path === path);
+  if (!live) {
+    return;
+  }
+
+  if (live.isDirty) {
+    if (contents !== live.savedDoc) {
       tabsState.update((s) => ({
         ...s,
         tabs: s.tabs.map((t) => (t.path === path ? { ...t, hasExternalConflict: true } : t)),

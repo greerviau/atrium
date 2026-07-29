@@ -329,6 +329,75 @@ describe("reconcileExternalChange / reloadFromDisk / dismissConflict", () => {
     expect(tab.isDirty).toBe(true);
   });
 
+  // Regression: reconcileExternalChange must re-read live tabsState after
+  // the disk read, not branch on the snapshot taken before it — that
+  // snapshot can go stale while the read is in flight. Failure A: a real
+  // external change lands while the tab was clean by the stale snapshot;
+  // branching on that stale value silently adopts the external content into
+  // savedDoc with no conflict ever raised, an unattended keystroke away from
+  // auto-save overwriting it. The fix re-reads tabsState after the await, so
+  // the keystroke that landed mid-read is seen and the dirty branch (not the
+  // clean branch) correctly runs, still raising the conflict since the disk
+  // content differs from the tab's own savedDoc.
+  it("re-reads live state after the disk read, so a keystroke landing mid-read does not silently lose an external change", async () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md", { savedDoc: "original", isDirty: false })],
+      activeTabPath: "/notes.md",
+    });
+    let resolveRead!: (value: string) => void;
+    vi.mocked(commands.fsReadFile).mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+
+    const pending = reconcileExternalChange("/notes.md");
+    // A keystroke lands while the disk read above is still in flight.
+    markDirty("/notes.md");
+    resolveRead("external content");
+    await pending;
+
+    const tab = get(tabsState).tabs[0];
+    expect(tab.isDirty).toBe(true);
+    expect(tab.hasExternalConflict).toBe(true);
+    expect(tab.savedDoc).toBe("original");
+  });
+
+  // Failure B: this tab's own write (manual or auto-save) completes while
+  // the read triggered by the watcher's echo of that same write is still in
+  // flight. Branching on the stale (dirty, old-savedDoc) snapshot compares
+  // the fresh disk read against the wrong baseline and raises a spurious
+  // conflict on the app's own write — a narrowed recurrence of the defect
+  // this function was written to eliminate. The fix re-reads tabsState after
+  // the await, sees the tab is now clean (the save already completed), and
+  // correctly takes the clean branch instead.
+  it("re-reads live state after the disk read, so its own save completing mid-read is not mistaken for a conflict", async () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md", { savedDoc: "S", isDirty: true })],
+      activeTabPath: "/notes.md",
+    });
+    vi.mocked(commands.fsWriteFile).mockResolvedValue(undefined);
+    let resolveRead!: (value: string) => void;
+    vi.mocked(commands.fsReadFile).mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+
+    const pending = reconcileExternalChange("/notes.md");
+    // This tab's own save completes while the read above is still in flight.
+    await saveTab("/notes.md", "B");
+    resolveRead("B");
+    await pending;
+
+    const tab = get(tabsState).tabs[0];
+    expect(tab.hasExternalConflict).toBe(false);
+    expect(tab.savedDoc).toBe("B");
+    expect(tab.isDirty).toBe(false);
+  });
+
   // Test 1 (frontend half, issue #325) — reconcileExternalChange/reloadFromDisk
   // read through the *tab's own* workspaceId, not a hardcoded "local".
   it("reconcileExternalChange reads through the tab's own workspaceId", async () => {
