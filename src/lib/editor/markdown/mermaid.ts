@@ -88,6 +88,59 @@ export async function loadMermaid(): Promise<typeof import("mermaid")> {
 }
 
 /**
+ * Most recently rendered SVG markup, keyed by diagram source *and* the theme
+ * variables it was rendered with.
+ *
+ * `MermaidWidget.eq()` lets CodeMirror reuse a widget's DOM across an
+ * *incremental* update, but not across a rebuild of the whole content — which
+ * is what a scroll landing outside the drawn range triggers — since no old
+ * widget survives to compare against. `toDOM` runs again and, rendering
+ * asynchronously, returns an empty container for a frame or more; that moves
+ * the height map by the diagram's full height and shifts everything below it,
+ * which reads as the pane scrolling backward (issue #311). Replaying a cached
+ * render makes the re-created widget synchronous, so its height never moves.
+ *
+ * The theme is part of the key, not just the source, because
+ * `atriumMermaidThemeVariables()` is deliberately read fresh on every
+ * `loadMermaid()` so diagrams re-render on-palette after a theme switch (see
+ * its docstring). Keying on source alone would replay a stale-palette SVG and
+ * quietly undo that.
+ *
+ * Bounded: a diagram being edited yields a distinct entry per keystroke, which
+ * would otherwise retain every intermediate version for the process lifetime.
+ */
+const MAX_CACHED_DIAGRAMS = 64;
+const renderedDiagrams = new Map<string, string>();
+
+function diagramCacheKey(source: string): string {
+  // NUL separates the two parts: it cannot appear in JSON output and is
+  // not valid in diagram source, so no source can spoof a theme boundary.
+  return `${JSON.stringify(atriumMermaidThemeVariables())}\0${source}`;
+}
+
+/** The cached render for `source` under the current theme, or `undefined`. */
+export function cachedMermaidRender(source: string): string | undefined {
+  return renderedDiagrams.get(diagramCacheKey(source));
+}
+
+/** Empties the cache. Exists so tests start from a known state, since this is module-level and would otherwise leak between them. */
+export function clearMermaidRenderCache(): void {
+  renderedDiagrams.clear();
+}
+
+/** Records `svg` as `source`'s render under the current theme, evicting the least recently used entry past the cap. */
+export function cacheMermaidRender(source: string, svg: string): void {
+  const key = diagramCacheKey(source);
+  // Re-inserting moves the key to the end, making Map iteration order an LRU.
+  renderedDiagrams.delete(key);
+  renderedDiagrams.set(key, svg);
+  for (const oldest of renderedDiagrams.keys()) {
+    if (renderedDiagrams.size <= MAX_CACHED_DIAGRAMS) break;
+    renderedDiagrams.delete(oldest);
+  }
+}
+
+/**
  * Extracts a `FencedCode` node's Mermaid diagram source, or `null` if the
  * node isn't tagged ` ```mermaid `. The node's `from`/`to` unambiguously
  * bracket the opening and closing fence lines (or, for an unterminated

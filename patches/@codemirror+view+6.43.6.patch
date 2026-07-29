@@ -1,0 +1,148 @@
+diff --git a/node_modules/@codemirror/view/dist/index.cjs b/node_modules/@codemirror/view/dist/index.cjs
+index 0b15b00..14bd51f 100644
+--- a/node_modules/@codemirror/view/dist/index.cjs
++++ b/node_modules/@codemirror/view/dist/index.cjs
+@@ -2981,6 +2981,34 @@ class DocView {
+     // Used by update and the constructor do perform the actual DOM
+     // update
+     updateInner(changes, composition) {
++        // PATCH (atrium, issue #311): the content height pinned further down
++        // ("Lock the height during redrawing") only protects the scroll
++        // position if the browser actually lays out while it is in effect.
++        // WebKit otherwise batches the pin together with the DOM mutations and
++        // lays out only once the pin has been released, clamping the
++        // scroller's offset against the momentarily-unpinned height. When the
++        // replaced content is everything currently on screen — a viewport
++        // sitting inside one large block wrapper, e.g. a very long fenced code
++        // block rendered as `.cm-code-block-box` — the offset is lost outright
++        // and the pane snaps to the top of the document.
++        //
++        // Reading a layout-dependent property forces that layout. The reads
++        // are spread across the redraw because that is the configuration
++        // verified to hold the position on a real mouse wheel in WKWebView; a
++        // single read, whether placed after the pin or after `sync`, does not
++        // hold it. Consecutive reads with no mutation between them do not each
++        // cost a layout, so this is roughly three or four real computations.
++        // Reported upstream; remove once fixed there.
++        const __flush = () => {
++            try {
++                const s = this.view.scrollDOM;
++                void s.scrollTop;
++                void s.scrollHeight;
++                void (this.tile && this.tile.dom ? this.tile.dom.childElementCount : 0);
++            }
++            catch (e) { }
++        };
++        __flush();
+         this.view.viewState.mustMeasureContent = true;
+         let { observer } = this.view;
+         observer.ignore(() => {
+@@ -2992,28 +3020,34 @@ class DocView {
+                 this.tile = builder.run(changes, composition);
+                 destroyDropped(oldTile, builder.cache.reused);
+             }
++            __flush();
+             // Lock the height during redrawing, since Chrome sometimes
+             // messes with the scroll position during DOM mutation (though
+             // no relayout is triggered and I cannot imagine how it can
+             // recompute the scroll position without a layout)
+             this.tile.dom.style.height = this.view.viewState.contentHeight / this.view.scaleY + "px";
+             this.tile.dom.style.flexBasis = this.minWidth ? this.minWidth + "px" : "";
++            __flush();
+             // Chrome will sometimes, when DOM mutations occur directly
+             // around the selection, get confused and report a different
+             // selection from the one it displays (issue #218). This tries
+             // to detect that situation.
+             let track = browser.chrome || browser.ios ? { node: observer.selectionRange.focusNode, written: false } : undefined;
+             this.tile.sync(track);
++            __flush();
+             if (track && (track.written || observer.selectionRange.focusNode != track.node || !this.tile.dom.contains(track.node)))
+                 this.forceSelection = true;
+             this.tile.dom.style.height = "";
++            __flush();
+         });
++        __flush();
+         let gaps = [];
+         if (this.view.viewport.from || this.view.viewport.to < this.view.state.doc.length)
+             for (let child of this.tile.children)
+                 if (child.isWidget() && child.widget instanceof BlockGapWidget)
+                     gaps.push(child.dom);
+         observer.updateGaps(gaps);
++        __flush();
+     }
+     updateEditContextFormatting(update) {
+         this.editContextFormatting = this.editContextFormatting.map(update.changes);
+diff --git a/node_modules/@codemirror/view/dist/index.js b/node_modules/@codemirror/view/dist/index.js
+index 3ca4e26..63abbc3 100644
+--- a/node_modules/@codemirror/view/dist/index.js
++++ b/node_modules/@codemirror/view/dist/index.js
+@@ -2977,6 +2977,34 @@ class DocView {
+     // Used by update and the constructor do perform the actual DOM
+     // update
+     updateInner(changes, composition) {
++        // PATCH (atrium, issue #311): the content height pinned further down
++        // ("Lock the height during redrawing") only protects the scroll
++        // position if the browser actually lays out while it is in effect.
++        // WebKit otherwise batches the pin together with the DOM mutations and
++        // lays out only once the pin has been released, clamping the
++        // scroller's offset against the momentarily-unpinned height. When the
++        // replaced content is everything currently on screen — a viewport
++        // sitting inside one large block wrapper, e.g. a very long fenced code
++        // block rendered as `.cm-code-block-box` — the offset is lost outright
++        // and the pane snaps to the top of the document.
++        //
++        // Reading a layout-dependent property forces that layout. The reads
++        // are spread across the redraw because that is the configuration
++        // verified to hold the position on a real mouse wheel in WKWebView; a
++        // single read, whether placed after the pin or after `sync`, does not
++        // hold it. Consecutive reads with no mutation between them do not each
++        // cost a layout, so this is roughly three or four real computations.
++        // Reported upstream; remove once fixed there.
++        const __flush = () => {
++            try {
++                const s = this.view.scrollDOM;
++                void s.scrollTop;
++                void s.scrollHeight;
++                void (this.tile && this.tile.dom ? this.tile.dom.childElementCount : 0);
++            }
++            catch (e) { }
++        };
++        __flush();
+         this.view.viewState.mustMeasureContent = true;
+         let { observer } = this.view;
+         observer.ignore(() => {
+@@ -2988,28 +3016,34 @@ class DocView {
+                 this.tile = builder.run(changes, composition);
+                 destroyDropped(oldTile, builder.cache.reused);
+             }
++            __flush();
+             // Lock the height during redrawing, since Chrome sometimes
+             // messes with the scroll position during DOM mutation (though
+             // no relayout is triggered and I cannot imagine how it can
+             // recompute the scroll position without a layout)
+             this.tile.dom.style.height = this.view.viewState.contentHeight / this.view.scaleY + "px";
+             this.tile.dom.style.flexBasis = this.minWidth ? this.minWidth + "px" : "";
++            __flush();
+             // Chrome will sometimes, when DOM mutations occur directly
+             // around the selection, get confused and report a different
+             // selection from the one it displays (issue #218). This tries
+             // to detect that situation.
+             let track = browser.chrome || browser.ios ? { node: observer.selectionRange.focusNode, written: false } : undefined;
+             this.tile.sync(track);
++            __flush();
+             if (track && (track.written || observer.selectionRange.focusNode != track.node || !this.tile.dom.contains(track.node)))
+                 this.forceSelection = true;
+             this.tile.dom.style.height = "";
++            __flush();
+         });
++        __flush();
+         let gaps = [];
+         if (this.view.viewport.from || this.view.viewport.to < this.view.state.doc.length)
+             for (let child of this.tile.children)
+                 if (child.isWidget() && child.widget instanceof BlockGapWidget)
+                     gaps.push(child.dom);
+         observer.updateGaps(gaps);
++        __flush();
+     }
+     updateEditContextFormatting(update) {
+         this.editContextFormatting = this.editContextFormatting.map(update.changes);
