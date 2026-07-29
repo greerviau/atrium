@@ -35,7 +35,7 @@
         "name": "Markdown Document",
         "description": "Markdown Document",
         "role": "Editor",
-        "rank": "Default"
+        "rank": "Alternate"
       },
       {
         "ext": [
@@ -54,7 +54,7 @@
         "name": "Source Code",
         "description": "Source Code",
         "role": "Editor",
-        "rank": "Default"
+        "rank": "Alternate"
       },
       {
         "ext": ["html", "htm", "json", "xml", "txt", "svg"],
