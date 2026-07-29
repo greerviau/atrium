@@ -208,15 +208,20 @@ describe("SettingsDialog", () => {
 
       const appearance = screen.getByRole("treeitem", { name: "Appearance" });
       expect(appearance.getAttribute("aria-expanded")).toBe("false");
-      expect(appearance.getAttribute("aria-selected")).toBe("false");
+      // `mounted` (not `aria-selected`) is what tracks which category's
+      // content the pane actually shows — `aria-selected` here doubles as
+      // "currently holds the roving-tabindex focus", which the caret click
+      // legitimately moves (see MUST-FIX 2's `onFocusRow` call) without
+      // that meaning the category was selected/activated.
+      expect(appearance.classList.contains("mounted")).toBe(false);
       expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
 
       await expandCategory("Appearance");
 
       expect(appearance.getAttribute("aria-expanded")).toBe("true");
       // The caret must never select the category — General's content stays
-      // mounted, and Appearance is not marked selected.
-      expect(appearance.getAttribute("aria-selected")).toBe("false");
+      // mounted regardless of which row the click moved keyboard focus to.
+      expect(appearance.classList.contains("mounted")).toBe(false);
       expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
       expect(screen.queryByRole("heading", { name: "Theme" })).toBeNull();
 
@@ -224,7 +229,7 @@ describe("SettingsDialog", () => {
       await flush();
 
       expect(appearance.getAttribute("aria-expanded")).toBe("false");
-      expect(appearance.getAttribute("aria-selected")).toBe("false");
+      expect(appearance.classList.contains("mounted")).toBe(false);
     });
 
     it("gives the caret its own accessible name reflecting the category and its current expansion state", async () => {
@@ -240,6 +245,62 @@ describe("SettingsDialog", () => {
 
       expect(screen.getByRole("button", { name: "Collapse Editor" })).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Expand Editor" })).toBeNull();
+    });
+
+    // Regression: onTreeKeydown used to read `data-row-id` directly off the
+    // keydown event's own target. The caret button carries none, so a key
+    // pressed while it holds focus (reachable via a real click in some
+    // engines, or programmatically via assistive tech regardless) was
+    // silently dropped — arrow-key expand/collapse went dead from that
+    // point on, undercutting the whole reason the caret is kept out of the
+    // Tab sequence.
+    it("keeps arrow-key navigation working when the caret itself holds focus", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const caret = screen.getByRole("button", { name: "Expand General" });
+      await fireEvent.click(caret);
+      await flush();
+      caret.focus();
+
+      await fireEvent.keyDown(caret, { key: "ArrowDown" });
+      await flush();
+
+      const zoomRow = screen.getByRole("treeitem", { name: "Zoom" });
+      expect(zoomRow.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(zoomRow);
+    });
+
+    // Regression: toggleCategory used to compute off `isExpanded`'s
+    // search-forced value rather than the category's own stored one, so
+    // clicking a caret while a search forced every category open wrote the
+    // wrong collapsed/expanded value — invisible in the moment (every
+    // category already reads expanded during a search) and only surfacing
+    // once the query cleared.
+    it("toggling a caret during an active search flips the category's real stored state, not the search-forced display", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      // Appearance has never been expanded — its stored state is false.
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "a" } });
+      await tick();
+
+      // Forced open by the search, so the caret already reads "Collapse"
+      // even though nothing has actually been stored yet.
+      expect(screen.getByRole("button", { name: "Collapse Appearance" })).toBeTruthy();
+
+      await fireEvent.click(screen.getByRole("button", { name: "Collapse Appearance" }));
+      await flush();
+
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "" } });
+      await tick();
+
+      // The click toggled the real stored value (false -> true) rather
+      // than writing the forced display value (which would have left it
+      // collapsed).
+      expect(screen.getByRole("treeitem", { name: "Appearance" }).getAttribute("aria-expanded")).toBe("true");
     });
 
     it("renders subcategory labels visibly smaller than master-category labels", async () => {
@@ -366,24 +427,46 @@ describe("SettingsDialog", () => {
       expect(document.activeElement).toBe(general);
     });
 
+    it("Left on an already-collapsed category row is a harmless no-op", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const appearance = screen.getByRole("treeitem", { name: "Appearance" });
+      expect(appearance.getAttribute("aria-expanded")).toBe("false");
+
+      await fireEvent.keyDown(appearance, { key: "ArrowLeft" });
+      await flush();
+
+      expect(appearance.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByRole("treeitem", { name: "Theme" })).toBeNull();
+    });
+
+    // Right must exercise the expand path and Left must exercise the
+    // collapse path against an *actually expanded* row — pressing Left
+    // first, while still collapsed, would assert a value that was already
+    // true and never touch the collapse branch at all (regression: this
+    // test used to do exactly that, and the whole suite stayed green with
+    // the collapse assignment deleted).
     it("Right expands a collapsed category to reveal its section row, Left collapses it again, neither changing the mounted category", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
 
       const appearance = screen.getByRole("treeitem", { name: "Appearance" });
-      await fireEvent.keyDown(appearance, { key: "ArrowLeft" });
-      await flush();
-
-      expect(appearance.getAttribute("aria-expanded")).toBe("false");
-      expect(screen.queryByRole("treeitem", { name: "Theme" })).toBeNull();
-      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
 
       await fireEvent.keyDown(appearance, { key: "ArrowRight" });
       await flush();
 
       expect(appearance.getAttribute("aria-expanded")).toBe("true");
       expect(screen.getByRole("treeitem", { name: "Theme" })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
+
+      await fireEvent.keyDown(appearance, { key: "ArrowLeft" });
+      await flush();
+
+      expect(appearance.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByRole("treeitem", { name: "Theme" })).toBeNull();
       expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
     });
 

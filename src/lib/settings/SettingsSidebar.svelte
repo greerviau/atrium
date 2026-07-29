@@ -118,7 +118,12 @@
   }
 
   function toggleCategory(categoryId: SettingsCategoryId): void {
-    expandedCategories[categoryId] = !isExpanded(categoryId);
+    // Toggles the category's own *stored* state, not `isExpanded`'s
+    // search-forced effective value — while actively searching, every
+    // category reads as expanded regardless of what's actually stored, so
+    // toggling off of that read would silently write a wrong
+    // collapsed/expanded value that only surfaces once the query clears.
+    expandedCategories[categoryId] = !(expandedCategories[categoryId] ?? false);
   }
 
   // Arrow/Home/End/Enter/Space handling over the flattened row list, matching
@@ -197,7 +202,12 @@
   }
 
   function onTreeKeydown(event: KeyboardEvent): void {
-    const rowId = (event.target as HTMLElement | null)?.dataset.rowId;
+    // Resolved by containment, not read directly off the event target's own
+    // `dataset` — the caret button nested inside a category row carries no
+    // `data-row-id` of its own, so a key pressed while it holds focus (e.g.
+    // after a mouse click that focused it) would otherwise be silently
+    // dropped, leaving arrow-key expand/collapse dead from that point on.
+    const rowId = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-row-id]")?.dataset.rowId;
     if (rowId === undefined) return;
     handleRowKeydown(event, rowId);
   }
@@ -245,7 +255,14 @@
         tree. Keyboard users toggle expansion via ArrowRight/ArrowLeft on
         the focused row (already implemented below) rather than tabbing
         into this button — mouse/touch users get a real, generously-sized
-        target instead of the 12px glyph alone.
+        target instead of the 12px glyph alone. This still leans on the row
+        keeping its own arrow-key handling reachable even when *this*
+        button is what actually holds focus (a real click can focus it,
+        engine-dependent, and it's reachable programmatically regardless):
+        the click handler calls `onFocusRow` to keep the roving tabindex in
+        sync, and `onTreeKeydown` below resolves the acting row via
+        `closest("[data-row-id]")` rather than reading the event target's
+        own dataset directly, since this button carries none of its own.
       -->
       <button
         type="button"
@@ -256,6 +273,7 @@
         tabindex="-1"
         onclick={(event) => {
           event.stopPropagation();
+          onFocusRow(rowId);
           toggleCategory(category.id);
         }}
       >
