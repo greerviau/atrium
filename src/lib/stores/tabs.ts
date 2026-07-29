@@ -281,18 +281,38 @@ export async function saveTab(path: string, contents: string): Promise<void> {
 
 /**
  * Reacts to an `fs:changed` event for `path` (App.svelte forwards these from
- * the global listener). A clean tab silently reloads; a dirty tab shows a
- * conflict banner instead of overwriting unsaved edits (section 6.2).
+ * the global listener). A clean tab silently reloads; a dirty tab reads disk
+ * and only raises the conflict banner (instead of overwriting unsaved
+ * edits, section 6.2) when the disk contents actually differ from what this
+ * tab believes is saved.
+ *
+ * The dirty branch used to flag a conflict unconditionally, without reading
+ * disk at all. That was harmless when the only way to reach a clean-then-
+ * dirty-again cycle was manual typing between manual saves, but the file
+ * watcher has no self-write suppression: every in-app write (including
+ * auto-save) echoes back as its own `fs:changed` event, and comparing
+ * against event provenance can't distinguish "this is our own write coming
+ * back" from "something else changed this file" — only the actual disk
+ * content can. Reading first and comparing against `savedDoc` (what this
+ * tab's own last write set it to) makes an echo of our own write a no-op,
+ * while a disk content that genuinely diverges from `savedDoc` still raises
+ * the banner, even if it arrives coalesced with our own echo inside the
+ * same watcher debounce window. This never *clears* an already-raised
+ * conflict on its own — it only sets it or returns — so a later echo can't
+ * dismiss a banner the user hasn't acted on yet.
  *
  * A `NOT_FOUND` read failure is treated as a deletion rather than left as an
  * unhandled rejection: this is a defensive fallback for the timing race
  * where a `Modify` event's read loses to an external delete landing
  * microseconds later, since a genuine `Remove`-kind event is routed to
- * `markPathDeleted` directly by the `fs:changed` handler.
+ * `markPathDeleted` directly by the `fs:changed` handler. Now reachable from
+ * a dirty tab too — a dirty tab whose file disappears is correctly flagged
+ * `isDeleted` rather than only ever showing a conflict banner.
  *
- * A `FILE_TOO_LARGE` read failure (the file grew past the read guard after
- * it was already open) surfaces as a toast instead of an unhandled
- * rejection, leaving the tab showing its last-known content.
+ * A `FILE_TOO_LARGE` or `EXTERNAL_FILE_CHANGED` read failure surfaces as a
+ * toast instead of an unhandled rejection (or, for a dirty tab, instead of
+ * the conflict banner — a "Reload" action would fail against either error
+ * anyway), leaving the tab showing its last-known content.
  */
 export async function reconcileExternalChange(path: string): Promise<void> {
   const state = get(tabsState);
@@ -300,13 +320,7 @@ export async function reconcileExternalChange(path: string): Promise<void> {
   if (!tab) {
     return;
   }
-  if (tab.isDirty) {
-    tabsState.update((s) => ({
-      ...s,
-      tabs: s.tabs.map((t) => (t.path === path ? { ...t, hasExternalConflict: true } : t)),
-    }));
-    return;
-  }
+
   let contents: string;
   try {
     contents = await fsReadFile(tab.workspaceId, path);
@@ -325,6 +339,17 @@ export async function reconcileExternalChange(path: string): Promise<void> {
     }
     throw err;
   }
+
+  if (tab.isDirty) {
+    if (contents !== tab.savedDoc) {
+      tabsState.update((s) => ({
+        ...s,
+        tabs: s.tabs.map((t) => (t.path === path ? { ...t, hasExternalConflict: true } : t)),
+      }));
+    }
+    return;
+  }
+
   tabsState.update((s) => ({
     ...s,
     tabs: s.tabs.map((t) => (t.path === path ? { ...t, savedDoc: contents } : t)),

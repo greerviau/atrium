@@ -290,19 +290,43 @@ describe("reconcileExternalChange / reloadFromDisk / dismissConflict", () => {
     expect(tab.hasExternalConflict).toBe(false);
   });
 
-  it("reconcileExternalChange on a dirty tab sets hasExternalConflict and leaves savedDoc/isDirty untouched", async () => {
+  // Precondition load-bearing to this test: `isDirty: true` must be seeded.
+  // On a clean tab the read-and-update path runs instead and
+  // `hasExternalConflict` stays false regardless of the fix under test — the
+  // assertions below are only meaningful for a dirty tab.
+  it("reconcileExternalChange on a dirty tab reads disk and sets hasExternalConflict only when the content differs from savedDoc, leaving savedDoc/isDirty untouched", async () => {
     tabsState.set({
       tabs: [codeTab("/notes.md", { savedDoc: "original", isDirty: true })],
       activeTabPath: "/notes.md",
     });
+    vi.mocked(commands.fsReadFile).mockResolvedValue("changed elsewhere");
 
     await reconcileExternalChange("/notes.md");
 
     const tab = get(tabsState).tabs[0];
+    expect(commands.fsReadFile).toHaveBeenCalledWith(tab.workspaceId, "/notes.md");
     expect(tab.hasExternalConflict).toBe(true);
     expect(tab.savedDoc).toBe("original");
     expect(tab.isDirty).toBe(true);
-    expect(commands.fsReadFile).not.toHaveBeenCalled();
+  });
+
+  // MF1 regression (self-write echo): a dirty tab's disk read that comes
+  // back identical to savedDoc is our own write (manual or auto-save)
+  // echoing through the file watcher, not a genuine external change, and
+  // must not raise the conflict banner.
+  it("reconcileExternalChange on a dirty tab does not set hasExternalConflict when disk content matches savedDoc (self-write echo)", async () => {
+    tabsState.set({
+      tabs: [codeTab("/notes.md", { savedDoc: "original", isDirty: true })],
+      activeTabPath: "/notes.md",
+    });
+    vi.mocked(commands.fsReadFile).mockResolvedValue("original");
+
+    await reconcileExternalChange("/notes.md");
+
+    const tab = get(tabsState).tabs[0];
+    expect(tab.hasExternalConflict).toBe(false);
+    expect(tab.savedDoc).toBe("original");
+    expect(tab.isDirty).toBe(true);
   });
 
   // Test 1 (frontend half, issue #325) — reconcileExternalChange/reloadFromDisk
