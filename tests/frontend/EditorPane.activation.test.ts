@@ -12,8 +12,8 @@ const PANE_ID = "pane-1";
 
 function seedTabs(activeTabPath: string): void {
   const tabs: Tab[] = [
-    { path: ACTIVE_PATH, mode: "markdown", savedDoc: "active\n", isDirty: false, hasExternalConflict: false, isDeleted: false, viewMode: "rendered" },
-    { path: BACKGROUND_PATH, mode: "markdown", savedDoc: "background\n", isDirty: false, hasExternalConflict: false, isDeleted: false, viewMode: "rendered" },
+    { path: ACTIVE_PATH, mode: "markdown", savedDoc: "active\n", isDirty: false, hasExternalConflict: false, isExternal: false, isDeleted: false, viewMode: "rendered" },
+    { path: BACKGROUND_PATH, mode: "markdown", savedDoc: "background\n", isDirty: false, hasExternalConflict: false, isExternal: false, isDeleted: false, viewMode: "rendered" },
   ];
   tabsState.set({ tabs, activeTabPath });
   focusedEditorPaneId.set(PANE_ID);

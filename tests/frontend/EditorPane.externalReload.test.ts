@@ -31,6 +31,7 @@ function seedTab(overrides: Partial<Tab> = {}): void {
     savedDoc: V1,
     isDirty: false,
     hasExternalConflict: false,
+    isExternal: false,
     isDeleted: false,
     viewMode: "source",
     ...overrides,

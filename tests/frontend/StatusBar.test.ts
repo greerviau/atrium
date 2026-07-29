@@ -41,6 +41,7 @@ const ACTIVE_TAB: Tab = {
   savedDoc: "",
   isDirty: false,
   hasExternalConflict: false,
+  isExternal: false,
   isDeleted: false,
 };
 

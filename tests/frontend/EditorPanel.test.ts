@@ -23,6 +23,7 @@ function tab(path: string, patch: Partial<Tab> = {}): Tab {
     savedDoc: "",
     isDirty: false,
     hasExternalConflict: false,
+    isExternal: false,
     isDeleted: false,
     ...patch,
   };

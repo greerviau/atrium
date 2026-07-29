@@ -35,6 +35,7 @@ function seedMarkdownTab(content: string): void {
     savedDoc: content,
     isDirty: false,
     hasExternalConflict: false,
+    isExternal: false,
     isDeleted: false,
     viewMode: "rendered",
   };

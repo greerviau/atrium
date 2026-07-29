@@ -22,6 +22,7 @@
     renameOpenTabs,
     tabRenameSignal,
     resetTabs,
+    openFileReportingErrors,
   } from "./lib/stores/tabs";
   import { closePrompt } from "./lib/stores/closePrompt";
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
@@ -31,9 +32,15 @@
   import { onFsChanged, onDockOpenPath, onCloseRequested, onDragDropEvent } from "./lib/ipc/events";
   import { insertPathsAtScreenPoint } from "./lib/terminal/terminalDropTargets";
   import { resolveExplorerDropTargetDir } from "./lib/explorer/explorerDropTargets";
+  import { resolveEditorDropTarget } from "./lib/editor/editorDropTargets";
   import { importPathsInto } from "./lib/explorer/importExternalPaths";
   import { dragOverTargetDir, draggingPath } from "./lib/explorer/explorerDrag";
-  import { workspaceTakePendingOpen, appConfirmClose } from "./lib/ipc/commands";
+  import {
+    workspaceTakePendingOpen,
+    appConfirmClose,
+    fsExternalPathsAreDirs,
+    fsGrantExternalFile,
+  } from "./lib/ipc/commands";
   import { initMenuBar } from "./lib/shell/MenuBar";
   import {
     loadTerminalLayout,
@@ -786,6 +793,39 @@
     if (get(dragOverTargetDir) !== next) dragOverTargetDir.set(next);
   }
 
+  /**
+   * Routes an OS drop that landed on the editor area (section 6/7.8 of the
+   * drag-a-file-into-the-editor plan): a dropped directory imports into the
+   * workspace root exactly like the explorer's own empty-space drop; each
+   * dropped file opens as its own tab, granting external-file access first
+   * (swallowing its own failure — `openFileReportingErrors` below surfaces
+   * its own, already-tested error via the standard toast, so a separate
+   * toast here would double-report) if the workspace has one open.
+   */
+  async function handleEditorDrop(paneId: string | null, paths: string[]): Promise<void> {
+    if (paneId) {
+      $focusedEditorPaneId = paneId;
+      lastFocusedSurface = "editor";
+    }
+    const areDirs = await fsExternalPathsAreDirs(paths);
+    const dirPaths = paths.filter((_, i) => areDirs[i]);
+    const filePaths = paths.filter((_, i) => !areDirs[i]);
+    const root = $workspace.root;
+    if (dirPaths.length > 0 && root) {
+      void importPathsInto(root, dirPaths);
+    }
+    for (const path of filePaths) {
+      if (root) {
+        try {
+          await fsGrantExternalFile(root, path);
+        } catch {
+          // Swallowed deliberately — see the doc comment above.
+        }
+      }
+      openFileReportingErrors(path);
+    }
+  }
+
   onMount(() => {
     // The first-availability `$effect` above clamps terminalHeight AND
     // terminalWidth against the container every time `mainEl` becomes
@@ -833,6 +873,11 @@
       const dir = resolveExplorerDropTargetDir(logical.x, logical.y);
       if (dir) {
         void importPathsInto(dir, event.paths);
+        return;
+      }
+      const editorTarget = resolveEditorDropTarget(logical.x, logical.y);
+      if (editorTarget) {
+        void handleEditorDrop(editorTarget.paneId, event.paths);
         return;
       }
       insertPathsAtScreenPoint(event.paths, logical.x, logical.y);

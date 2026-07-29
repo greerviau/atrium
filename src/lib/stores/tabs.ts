@@ -36,6 +36,15 @@ export interface Tab {
    * tab was previously closed.
    */
   viewMode?: "rendered" | "source";
+  /**
+   * True for a file opened from outside the workspace root via drag-drop —
+   * purely a display hint (a badge/icon and a full-path tooltip on the tab),
+   * never consulted for any permission decision. The real authorization is
+   * enforced entirely server-side by the grant map (`external_grants.rs`),
+   * independent of anything this flag says — a UI bug here can misrender a
+   * tab, never bypass anything.
+   */
+  isExternal: boolean;
 }
 
 export interface TabsState {
@@ -131,7 +140,8 @@ export function requestSaveReportingErrors(path: string): void {
  */
 export async function openFile(path: string, selection?: PendingSelection): Promise<void> {
   const root = get(workspace).root;
-  if (root) {
+  const isExternal = !isPathUnderOrEqual(path, root ?? "");
+  if (root && !isExternal) {
     // Best-effort, never blocks the actual open — see `recentFiles.ts`.
     recordFileOpened(root, path);
   }
@@ -158,6 +168,7 @@ export async function openFile(path: string, selection?: PendingSelection): Prom
     hasExternalConflict: false,
     isDeleted: false,
     viewMode: mode === "markdown" ? get(markdownDefaultView) : undefined,
+    isExternal,
   };
   tabsState.update((s) => ({
     tabs: [...s.tabs, tab],
@@ -290,6 +301,10 @@ export async function reconcileExternalChange(path: string): Promise<void> {
       return;
     }
     if (isAppError(err) && err.code === "FILE_TOO_LARGE") {
+      showErrorToast(describeError(err));
+      return;
+    }
+    if (isAppError(err) && err.code === "EXTERNAL_FILE_CHANGED") {
       showErrorToast(describeError(err));
       return;
     }

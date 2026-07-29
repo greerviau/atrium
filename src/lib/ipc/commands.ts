@@ -122,6 +122,21 @@ export function fsResolveCandidates(
   return invoke("fs_resolve_candidates", { workspaceId, candidates });
 }
 
+/** Classifies each of `paths` as a directory (`true`) or not (`false`), following symlinks. */
+export function fsExternalPathsAreDirs(paths: string[]): Promise<boolean[]> {
+  return invoke("fs_external_paths_are_dirs", { paths });
+}
+
+/**
+ * Authorizes direct read/write access to `path` (outside `workspaceId`'s
+ * root) at its real, current location — the only way an external-file grant
+ * is ever created. Gated server-side on a real, recent OS drop having landed
+ * on this exact path; rejects otherwise.
+ */
+export function fsGrantExternalFile(workspaceId: string, path: string): Promise<void> {
+  return invoke("fs_grant_external_file", { workspaceId, path });
+}
+
 export interface SearchOptions {
   caseSensitive: boolean;
   regex: boolean;

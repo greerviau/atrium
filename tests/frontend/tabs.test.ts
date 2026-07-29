@@ -43,6 +43,7 @@ function markdownTab(path: string, overrides: Partial<Tab> = {}): Tab {
     savedDoc: "",
     isDirty: false,
     hasExternalConflict: false,
+    isExternal: false,
     isDeleted: false,
     viewMode: "rendered",
     ...overrides,
@@ -56,6 +57,7 @@ function codeTab(path: string, overrides: Partial<Tab> = {}): Tab {
     savedDoc: "",
     isDirty: false,
     hasExternalConflict: false,
+    isExternal: false,
     isDeleted: false,
     ...overrides,
   };
@@ -169,6 +171,39 @@ describe("openFile", () => {
     await openFile("/proj/existing.md");
 
     expect(getRecentFiles("/proj")).toEqual(["/proj/existing.md"]);
+
+    workspace.set({ id: "local", root: null });
+  });
+
+  it("derives isExternal: false for a path inside the workspace root", async () => {
+    workspace.set({ id: "local", root: "/proj" });
+
+    await openFile("/proj/notes.md");
+
+    const tab = get(tabsState).tabs.find((t) => t.path === "/proj/notes.md");
+    expect(tab?.isExternal).toBe(false);
+
+    workspace.set({ id: "local", root: null });
+  });
+
+  it("derives isExternal: true for a path outside the workspace root", async () => {
+    workspace.set({ id: "local", root: "/proj" });
+
+    await openFile("/home/alice/outside.md");
+
+    const tab = get(tabsState).tabs.find((t) => t.path === "/home/alice/outside.md");
+    expect(tab?.isExternal).toBe(true);
+
+    workspace.set({ id: "local", root: null });
+  });
+
+  it("skips recording recency for an outside-workspace (external) open", async () => {
+    localStorage.clear();
+    workspace.set({ id: "local", root: "/proj" });
+
+    await openFile("/home/alice/outside.md");
+
+    expect(getRecentFiles("/proj")).toEqual([]);
 
     workspace.set({ id: "local", root: null });
   });
@@ -556,6 +591,24 @@ describe("reconcileExternalChange's NOT_FOUND and FILE_TOO_LARGE catches", () =>
 
     await expect(reconcileExternalChange("/notes.md")).rejects.toBe(error);
     expect(get(tabsState).tabs).toHaveLength(1);
+  });
+
+  it("shows an error toast instead of throwing when fsReadFile rejects with EXTERNAL_FILE_CHANGED", async () => {
+    tabsState.set({
+      tabs: [codeTab("/home/alice/outside.md", { savedDoc: "last-known contents", isExternal: true })],
+      activeTabPath: "/home/alice/outside.md",
+    });
+    vi.mocked(commands.fsReadFile).mockRejectedValue({
+      code: "EXTERNAL_FILE_CHANGED",
+      message: "'/home/alice/outside.md' has changed since it was opened — close and reopen it to continue",
+    });
+
+    await expect(reconcileExternalChange("/home/alice/outside.md")).resolves.toBeUndefined();
+
+    expect(get(errorToast)).toBe(
+      "'/home/alice/outside.md' has changed since it was opened — close and reopen it to continue",
+    );
+    expect(get(tabsState).tabs[0].savedDoc).toBe("last-known contents");
   });
 });
 

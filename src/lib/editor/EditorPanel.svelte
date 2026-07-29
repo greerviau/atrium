@@ -53,7 +53,11 @@
           role="tab"
           tabindex="0"
           aria-selected={path === tree.activeTabPath}
+          title={tab?.isExternal ? path : undefined}
         >
+          {#if tab?.isExternal}
+            <span class="tab-external-badge" aria-label="Opened from outside the workspace">⌁</span>
+          {/if}
           <span class="tab-name">
             {basename(path)}{tab?.isDirty ? " •" : ""}
           </span>
@@ -163,6 +167,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .tab-external-badge {
+    opacity: 0.6;
+    font-size: 0.85em;
   }
 
   .tab-view-mode,
