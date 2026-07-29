@@ -94,7 +94,7 @@ const PANE_B = "pane-b";
 const PANE_C = "pane-c";
 
 function seedTab(savedDoc = "original\n"): void {
-  const tab: Tab = { path: PATH, mode: "code", savedDoc, isDirty: false, hasExternalConflict: false, isDeleted: false };
+  const tab: Tab = { path: PATH, mode: "code", savedDoc, isDirty: false, hasExternalConflict: false, isExternal: false, isDeleted: false };
   tabsState.set({ tabs: [tab], activeTabPath: PATH });
 }
 

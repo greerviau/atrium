@@ -331,9 +331,32 @@ fn main() {
             let close_handle = handle.clone();
             if let Some(window) = app.get_webview_window("main") {
                 window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = close_handle.emit("app:close-requested", ());
+                    match event {
+                        tauri::WindowEvent::CloseRequested { api, .. } => {
+                            api.prevent_close();
+                            let _ = close_handle.emit("app:close-requested", ());
+                        }
+                        // Records the most recent real, native OS drop's path
+                        // set and timestamp, observed here on the Rust side
+                        // rather than only in the webview — see
+                        // `commands::fs::require_recent_drop`, which gates
+                        // `fs_grant_external_file` on this, and §4.9 of the
+                        // drag-a-file-into-the-editor plan for why a grant
+                        // must be authorized by a backend-observed drop
+                        // rather than trusting the frontend's own event.
+                        tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop {
+                            paths, ..
+                        }) => {
+                            if let Some(state) = close_handle.try_state::<AppState>() {
+                                let path_strings = paths
+                                    .iter()
+                                    .map(|p| p.to_string_lossy().to_string())
+                                    .collect();
+                                *state.recent_drop.lock().unwrap() =
+                                    Some((path_strings, std::time::Instant::now()));
+                            }
+                        }
+                        _ => {}
                     }
                 });
             }
@@ -359,6 +382,8 @@ fn main() {
             commands::fs::fs_delete,
             commands::fs::fs_import_external_paths,
             commands::fs::fs_resolve_candidates,
+            commands::fs::fs_external_paths_are_dirs,
+            commands::fs::fs_grant_external_file,
             commands::search::search_workspace,
             commands::search::find_files,
             commands::pty::pty_spawn,

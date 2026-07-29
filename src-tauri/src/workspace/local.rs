@@ -1,6 +1,7 @@
+use super::external_grants::ExternalGrants;
 use super::{
-    is_default_ignored, DirEntry, FileMatch, FileSearchResults, FsChangeEvent, SearchMatch,
-    SearchOptions, SearchResults, Workspace,
+    is_default_ignored, DirEntry, FileMatch, FileSearchResults, FsChangeEvent, FsChangeKind,
+    SearchMatch, SearchOptions, SearchResults, Workspace,
 };
 use crate::error::AppError;
 use crate::fs_watch;
@@ -10,10 +11,12 @@ use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::sinks::UTF8;
 use grep_searcher::{BinaryDetection, SearcherBuilder, SinkError};
 use ignore::WalkState;
-use notify_debouncer_full::{Debouncer, FileIdMap};
+use notify::event::{ModifyKind, RenameMode};
+use notify::{EventKind, RecursiveMode, Watcher};
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher as FuzzyMatcher, Utf32Str};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::ffi::OsString;
 use std::future::Future;
 use std::io;
@@ -460,6 +463,28 @@ pub struct LocalWorkspace {
     /// filename search can legitimately be in flight close together, and
     /// they must not cancel each other.
     find_files_generation: Arc<AtomicU64>,
+    /// The explicit per-file allowlist of externally-dropped files (§4 of
+    /// the drag-a-file-into-the-editor plan) — see `external_grants.rs` for
+    /// the full security model. `Arc`-wrapped (unlike every other field
+    /// here) solely so the external watcher's debounce callback, which runs
+    /// on its own thread for as long as the watcher lives, can hold its own
+    /// clone rather than borrowing `self`.
+    external_grants: Arc<ExternalGrants>,
+    /// A clone of the sender `watch()` was last called with, retained so a
+    /// grant created *after* the workspace-level watcher already started
+    /// still has something to emit external-file change events through
+    /// (MF5a) — the workspace-level `watcher` field above never stores the
+    /// sender itself.
+    event_tx: Mutex<Option<UnboundedSender<FsChangeEvent>>>,
+    /// A second, independently-managed, non-recursive watcher covering just
+    /// the parent directories of currently-granted files (§5.2/MF5): a
+    /// single-file watch would go silent the instant a save's rename(2)
+    /// unlinks the watched inode, so this watches each granted file's
+    /// *parent* and filters by canonical path instead.
+    external_watcher: Mutex<Option<Debouncer<notify::RecommendedWatcher, FileIdMap>>>,
+    /// Parent directories already registered with `external_watcher`, so a
+    /// parent shared by two granted files is only watched once.
+    watched_parents: Mutex<HashSet<PathBuf>>,
 }
 
 impl LocalWorkspace {
@@ -470,6 +495,10 @@ impl LocalWorkspace {
             watcher: Mutex::new(None),
             search_generation: Arc::new(AtomicU64::new(0)),
             find_files_generation: Arc::new(AtomicU64::new(0)),
+            external_grants: Arc::new(ExternalGrants::new()),
+            event_tx: Mutex::new(None),
+            external_watcher: Mutex::new(None),
+            watched_parents: Mutex::new(HashSet::new()),
         }
     }
 
@@ -629,6 +658,111 @@ impl LocalWorkspace {
     fn resolve_entry_within_root(&self, path: &str) -> Result<PathBuf, AppError> {
         self.resolve_within_root_impl(path, false)
     }
+
+    /// Read authorization: an explicit external grant first, falling back to
+    /// the unmodified containment check for everything else (§4.2). The fast,
+    /// common path for every ordinary in-workspace read never touches
+    /// `ExternalGrants` beyond one `HashMap::get` miss.
+    async fn resolve_read_target(&self, path: &str) -> Result<PathBuf, AppError> {
+        if let Some(granted) = self.external_grants.resolve_granted(path).await? {
+            return Ok(granted);
+        }
+        self.resolve_within_root(path)
+    }
+
+    /// Write authorization: identical shape to `resolve_read_target`, except
+    /// the grant side additionally recreates a genuinely-deleted granted file
+    /// (§4.2, §4.5).
+    async fn resolve_write_target(&self, path: &str) -> Result<PathBuf, AppError> {
+        if let Some(granted) = self.external_grants.resolve_granted_for_write(path).await? {
+            return Ok(granted);
+        }
+        self.resolve_within_root(path)
+    }
+
+    /// Lazily starts (or reuses) the non-recursive external watcher and adds
+    /// `parent` to its watch set if it isn't already watched (§5.2, MF5).
+    /// Best-effort, mirroring `watch()`'s own posture: if the workspace-level
+    /// watcher was never started (so there's no `event_tx` to forward
+    /// through yet), or the watch registration itself fails, the grant that
+    /// triggered this still succeeds — it only means this one external file
+    /// won't receive live change notifications until the workspace reopens.
+    fn watch_external_parent(&self, parent: PathBuf) {
+        if self.watched_parents.lock().unwrap().contains(&parent) {
+            return;
+        }
+        let Some(tx) = self.event_tx.lock().unwrap().clone() else {
+            return;
+        };
+
+        let mut guard = self.external_watcher.lock().unwrap();
+        if guard.is_none() {
+            let grants = Arc::clone(&self.external_grants);
+            let workspace_id = self.workspace_id.clone();
+            let send = move |path: &str, kind: FsChangeKind| {
+                let _ = tx.send(FsChangeEvent {
+                    workspace_id: workspace_id.clone(),
+                    path: path.to_string(),
+                    kind,
+                    from_path: None,
+                });
+            };
+            match new_debouncer(
+                Duration::from_millis(150),
+                None,
+                move |result: DebounceEventResult| {
+                    let Ok(events) = result else { return };
+                    for event in events {
+                        // No gitignore filtering and no rename-pairing
+                        // complexity beyond this one `Both` case: unlike
+                        // `fs_watch::watch`'s recursive tree, this watcher
+                        // only ever tracks a handful of individually-known
+                        // files, each looked up by its own canonical path.
+                        if event.event.kind == EventKind::Modify(ModifyKind::Name(RenameMode::Both))
+                        {
+                            if let [from, to] = event.event.paths.as_slice() {
+                                if let Some(key) = grants.key_for_canonical_path(to) {
+                                    send(&key, FsChangeKind::Modify);
+                                }
+                                if let Some(key) = grants.key_for_canonical_path(from) {
+                                    send(&key, FsChangeKind::Remove);
+                                }
+                            }
+                            continue;
+                        }
+                        let kind = match event.event.kind {
+                            EventKind::Remove(_)
+                            | EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
+                                FsChangeKind::Remove
+                            }
+                            _ => FsChangeKind::Modify,
+                        };
+                        for path in &event.event.paths {
+                            if let Some(key) = grants.key_for_canonical_path(path) {
+                                send(&key, kind.clone());
+                            }
+                        }
+                    }
+                },
+            ) {
+                Ok(debouncer) => *guard = Some(debouncer),
+                Err(err) => {
+                    eprintln!("atrium: failed to start external file watcher: {err}");
+                    return;
+                }
+            }
+        }
+
+        if let Some(debouncer) = guard.as_mut() {
+            if debouncer
+                .watcher()
+                .watch(&parent, RecursiveMode::NonRecursive)
+                .is_ok()
+            {
+                self.watched_parents.lock().unwrap().insert(parent);
+            }
+        }
+    }
 }
 
 fn escapes_workspace_root(path: &str) -> AppError {
@@ -655,7 +789,7 @@ fn is_on_track_to_root(current: &Path, real_root: &Path) -> bool {
 /// `NOT_FOUND` code it can act on (`markPathDeleted`), rather than the
 /// generic `IO_ERROR` every other I/O failure (permissions, disk full)
 /// serializes as.
-fn map_io_err(err: io::Error, path: &str) -> AppError {
+pub(crate) fn map_io_err(err: io::Error, path: &str) -> AppError {
     if err.kind() == io::ErrorKind::NotFound {
         AppError::NotFound(path.to_string())
     } else {
@@ -890,7 +1024,7 @@ impl Workspace for LocalWorkspace {
     /// `MAX_READABLE_FILE_SIZE_BYTES` with `AppError::FileTooLarge`, checked
     /// via a cheap `stat` before the read rather than reading-then-discarding.
     async fn read_file(&self, path: &str) -> Result<String, AppError> {
-        let file = self.resolve_within_root(path)?;
+        let file = self.resolve_read_target(path).await?;
         let metadata = tokio::fs::metadata(&file)
             .await
             .map_err(|e| map_io_err(e, path))?;
@@ -918,12 +1052,13 @@ impl Workspace for LocalWorkspace {
     /// flow, where a dirty tab is kept open and a later save recreates the
     /// file.
     async fn write_file(&self, path: &str, contents: &str) -> Result<(), AppError> {
-        let file = self.resolve_within_root(path)?;
+        let file = self.resolve_write_target(path).await?;
         let contents = contents.as_bytes().to_vec();
         tokio::task::spawn_blocking(move || atomic_write(&file, &contents))
             .await
             .map_err(|err| AppError::Other(format!("save task panicked: {err}")))?
             .map_err(|e| map_io_err(e, path))?;
+        self.external_grants.refresh_if_granted(path).await; // MF1
         Ok(())
     }
 
@@ -1182,6 +1317,7 @@ impl Workspace for LocalWorkspace {
     }
 
     fn watch(&self, tx: UnboundedSender<FsChangeEvent>) {
+        *self.event_tx.lock().unwrap() = Some(tx.clone()); // MF5a
         let mut guard = self.watcher.lock().unwrap();
         if guard.is_some() {
             return;
@@ -1201,6 +1337,23 @@ impl Workspace for LocalWorkspace {
                 );
             }
         }
+    }
+
+    async fn grant_external_file(&self, path: &str) -> Result<(), AppError> {
+        if self.resolve_within_root(path).is_ok() {
+            return Ok(()); // already in-workspace (or already correctly rejected below); nothing to grant
+        }
+        self.external_grants.grant(path).await?;
+        if let Ok(canonical) = tokio::fs::canonicalize(path).await {
+            if let Some(parent) = canonical.parent() {
+                self.watch_external_parent(parent.to_path_buf());
+            }
+        }
+        Ok(())
+    }
+
+    async fn resolve_external_asset(&self, candidate: &str) -> Option<PathBuf> {
+        self.external_grants.resolve_asset(candidate).await
     }
 }
 
@@ -2616,5 +2769,174 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(err, AppError::InvalidPath(_)));
+    }
+
+    #[tokio::test]
+    async fn grant_external_file_on_an_in_workspace_path_is_a_no_op() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.create_file("in_workspace.txt").await.unwrap();
+
+        ws.grant_external_file("in_workspace.txt").await.unwrap();
+
+        // No entry was created: an in-workspace path was never granted, so
+        // it must still resolve purely through containment, never through
+        // the grant map (§4.7).
+        assert!(ws
+            .external_grants
+            .resolve_granted("in_workspace.txt")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn read_file_on_an_ungranted_out_of_root_path_still_rejects_unchanged() {
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "top secret").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+
+        let err = ws.read_file(secret.to_str().unwrap()).await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidPath(_)));
+        assert!(err.to_string().contains("escapes the workspace root"));
+    }
+
+    #[tokio::test]
+    async fn read_file_on_a_granted_path_still_enforces_the_size_limit() {
+        let outside = tempfile::tempdir().unwrap();
+        let huge = outside.path().join("huge.txt");
+        {
+            let file = std::fs::File::create(&huge).unwrap();
+            file.set_len(MAX_READABLE_FILE_SIZE_BYTES + 1).unwrap();
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.grant_external_file(huge.to_str().unwrap())
+            .await
+            .unwrap();
+
+        let err = ws.read_file(huge.to_str().unwrap()).await.unwrap_err();
+        assert!(matches!(err, AppError::FileTooLarge { .. }));
+    }
+
+    #[tokio::test]
+    async fn read_file_on_a_granted_path_still_rejects_non_utf8() {
+        let outside = tempfile::tempdir().unwrap();
+        let binary = outside.path().join("binary.dat");
+        std::fs::write(&binary, [0xff, 0xfe, 0x00, 0xff]).unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        ws.grant_external_file(binary.to_str().unwrap())
+            .await
+            .unwrap();
+
+        let err = ws.read_file(binary.to_str().unwrap()).await.unwrap_err();
+        assert!(matches!(err, AppError::NotUtf8(_)));
+    }
+
+    #[tokio::test]
+    async fn write_file_on_an_ungranted_out_of_root_path_still_rejects_unchanged() {
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, "original").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+
+        let err = ws
+            .write_file(secret.to_str().unwrap(), "overwritten")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::InvalidPath(_)));
+        assert_eq!(std::fs::read_to_string(&secret).unwrap(), "original");
+    }
+
+    #[tokio::test]
+    async fn granted_file_round_trips_through_read_and_write_via_the_workspace_trait() {
+        let outside = tempfile::tempdir().unwrap();
+        let file = outside.path().join("notes.txt");
+        std::fs::write(&file, "original").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        let key = file.to_str().unwrap();
+        ws.grant_external_file(key).await.unwrap();
+
+        assert_eq!(ws.read_file(key).await.unwrap(), "original");
+        ws.write_file(key, "updated").await.unwrap();
+        assert_eq!(ws.read_file(key).await.unwrap(), "updated");
+    }
+
+    // MF5 — the external watcher survives a rename-based save and follows
+    // the right file.
+    #[tokio::test]
+    async fn external_watcher_reports_modify_after_a_rename_onto_target_and_remove_after_deletion()
+    {
+        let outside = tempfile::tempdir().unwrap();
+        let file = outside.path().join("notes.txt");
+        std::fs::write(&file, "original").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        let (tx, mut rx) = unbounded_channel();
+        ws.watch(tx);
+
+        let key = file.to_str().unwrap().to_string();
+        ws.grant_external_file(&key).await.unwrap();
+
+        // Let the watcher startup settle (mirrors fs_watch.rs's own tests'
+        // STARTUP_SETTLE_MS convention).
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        while tokio::time::timeout(Duration::from_millis(10), rx.recv())
+            .await
+            .is_ok()
+        {}
+
+        // Mirror atomic_write's own mechanism: write a temp file in the same
+        // directory, then rename it onto the target.
+        let tmp = outside.path().join(".tmp-save");
+        std::fs::write(&tmp, "updated").unwrap();
+        std::fs::rename(&tmp, &file).unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let mut saw_modify = false;
+        while tokio::time::Instant::now() < deadline {
+            if let Ok(Some(event)) =
+                tokio::time::timeout(Duration::from_millis(100), rx.recv()).await
+            {
+                if event.path == key && matches!(event.kind, FsChangeKind::Modify) {
+                    saw_modify = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            saw_modify,
+            "expected a Modify event for the granted key after a rename-onto-target save"
+        );
+
+        std::fs::remove_file(&file).unwrap();
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        let mut saw_remove = false;
+        while tokio::time::Instant::now() < deadline {
+            if let Ok(Some(event)) =
+                tokio::time::timeout(Duration::from_millis(100), rx.recv()).await
+            {
+                if event.path == key && matches!(event.kind, FsChangeKind::Remove) {
+                    saw_remove = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            saw_remove,
+            "expected a Remove event for the granted key after deletion"
+        );
     }
 }

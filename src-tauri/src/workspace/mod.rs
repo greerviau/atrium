@@ -1,3 +1,4 @@
+pub mod external_grants;
 pub mod local;
 
 use crate::error::AppError;
@@ -192,4 +193,20 @@ pub trait Workspace: Send + Sync {
     /// stays open and fully usable, it just does not receive live
     /// external-change notifications until reopened.
     fn watch(&self, tx: UnboundedSender<FsChangeEvent>);
+    /// Explicit, single-file authorization for a path outside this workspace's
+    /// root. A no-op success if `path` already resolves inside the root via
+    /// `resolve_within_root` (nothing to grant) — note this also means a path
+    /// that escapes the root only *lexically inside* the workspace tree (a PR
+    /// #288-style symlink escape spelled as an in-workspace path) is likewise
+    /// treated as "nothing to grant" and simply left to `resolve_within_root`'s
+    /// own existing rejection on its next real use, not silently authorized —
+    /// `grant_external_file` never runs `grant()` for a path this call
+    /// considers `Ok`. See `external_grants.rs` for the security model.
+    async fn grant_external_file(&self, path: &str) -> Result<(), AppError>;
+    /// Resolves `candidate` (already an absolute path, from the
+    /// `atriumasset://` handler) against the read-only, image-extension-only
+    /// asset-subtree grant described in `external_grants.rs`'s `resolve_asset`
+    /// doc comment — `None` if it isn't authorized by any currently-granted
+    /// file's own directory.
+    async fn resolve_external_asset(&self, candidate: &str) -> Option<std::path::PathBuf>;
 }

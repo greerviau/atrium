@@ -28,6 +28,7 @@ function seedTab(): Tab {
     savedDoc: "const x = 1;\n",
     isDirty: false,
     hasExternalConflict: false,
+    isExternal: false,
     isDeleted: false,
   };
   tabsState.set({ tabs: [tab], activeTabPath: PATH });

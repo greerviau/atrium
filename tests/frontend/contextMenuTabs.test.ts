@@ -21,6 +21,7 @@ function codeTab(path: string, overrides: Partial<Tab> = {}): Tab {
     savedDoc: "",
     isDirty: false,
     hasExternalConflict: false,
+    isExternal: false,
     isDeleted: false,
     ...overrides,
   };

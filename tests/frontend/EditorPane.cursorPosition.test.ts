@@ -15,8 +15,8 @@ const PANE_ID = "pane-1";
 
 function seedTabs(activeTabPath: string): void {
   const tabs: Tab[] = [
-    { path: ACTIVE_PATH, mode: "markdown", savedDoc: DOC, isDirty: false, hasExternalConflict: false, isDeleted: false, viewMode: "source" },
-    { path: BACKGROUND_PATH, mode: "markdown", savedDoc: DOC, isDirty: false, hasExternalConflict: false, isDeleted: false, viewMode: "source" },
+    { path: ACTIVE_PATH, mode: "markdown", savedDoc: DOC, isDirty: false, hasExternalConflict: false, isExternal: false, isDeleted: false, viewMode: "source" },
+    { path: BACKGROUND_PATH, mode: "markdown", savedDoc: DOC, isDirty: false, hasExternalConflict: false, isExternal: false, isDeleted: false, viewMode: "source" },
   ];
   tabsState.set({ tabs, activeTabPath });
   focusedEditorPaneId.set(PANE_ID);
@@ -91,6 +91,7 @@ describe("EditorPane: cursor position tracking", () => {
           savedDoc: DOC,
           isDirty: false,
           hasExternalConflict: false,
+          isExternal: false,
           isDeleted: false,
           viewMode: "source",
         },

@@ -279,6 +279,27 @@ describe("restoreEditorSession", () => {
     expect(result?.paneTree).toEqual(leaf("L1", ["/proj/a.txt"], "/proj/a.txt"));
   });
 
+  it("silently drops a persisted external tab whose read fails with INVALID_PATH, keeping the ordinary paths (which are required for this assertion to mean anything — a session containing only the failing path would restore nothing either way, vacuously)", async () => {
+    localStorage.setItem(
+      "atrium.editorSession./proj",
+      JSON.stringify({
+        paneTree: leaf("L1", ["/proj/a.txt", "/home/alice/outside.md"], "/proj/a.txt"),
+        focusedPaneId: "L1",
+      }),
+    );
+    vi.mocked(commands.fsReadFile).mockImplementation(async (_ws, path: string) => {
+      if (path === "/home/alice/outside.md") {
+        throw { code: "INVALID_PATH", message: "path '/home/alice/outside.md' escapes the workspace root" };
+      }
+      return "kept contents";
+    });
+
+    const result = await restoreEditorSession("/proj");
+
+    expect(result?.tabs.map((t) => t.path)).toEqual(["/proj/a.txt"]);
+    expect(result?.paneTree).toEqual(leaf("L1", ["/proj/a.txt"], "/proj/a.txt"));
+  });
+
   it("returns null and logs instead of throwing on an unexpected non-AppError failure", async () => {
     localStorage.setItem(
       "atrium.editorSession./proj",

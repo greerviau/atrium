@@ -22,6 +22,7 @@ function dirtyTab(path: string): Tab {
     savedDoc: "",
     isDirty: true,
     hasExternalConflict: false,
+    isExternal: false,
     isDeleted: false,
   };
 }

@@ -28,6 +28,8 @@ pub enum AppError {
         format_bytes(*limit)
     )]
     FileTooLarge { path: String, size: u64, limit: u64 },
+    #[error("'{0}' has changed since it was opened — close and reopen it to continue")]
+    ExternalFileChanged(String),
 }
 
 /// Formats a byte count as human-readable mebibytes (e.g. `12.3 MiB`) for
@@ -49,6 +51,7 @@ impl AppError {
             AppError::InvalidRegex(_) => "INVALID_REGEX",
             AppError::Other(_) => "OTHER",
             AppError::FileTooLarge { .. } => "FILE_TOO_LARGE",
+            AppError::ExternalFileChanged(_) => "EXTERNAL_FILE_CHANGED",
         }
     }
 }

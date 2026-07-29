@@ -74,6 +74,7 @@
     <div
       class="pane-leaf"
       class:active={leaf.id === activePaneId}
+      data-pane-id={leaf.id}
       style={`top: ${r.top}%; left: ${r.left}%; width: ${r.width}%; height: ${r.height}%`}
       onfocusin={() => onFocus(leaf.id)}
     >

@@ -27,6 +27,7 @@ function seedTab(path: string, mode: "code" | "markdown", viewMode: "rendered" |
     savedDoc: "line one\nline two\n",
     isDirty: false,
     hasExternalConflict: false,
+    isExternal: false,
     isDeleted: false,
     viewMode,
   };

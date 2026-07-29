@@ -31,6 +31,7 @@ function seedTab(): Tab {
     savedDoc: "original\n",
     isDirty: false,
     hasExternalConflict: false,
+    isExternal: false,
     isDeleted: false,
   };
   tabsState.set({ tabs: [tab], activeTabPath: PATH });

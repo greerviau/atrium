@@ -55,6 +55,10 @@ vi.mock("../../src/lib/explorer/explorerDropTargets", () => ({
   resolveExplorerDropTargetDir: vi.fn().mockReturnValue(null),
 }));
 
+vi.mock("../../src/lib/editor/editorDropTargets", () => ({
+  resolveEditorDropTarget: vi.fn().mockReturnValue(null),
+}));
+
 vi.mock("../../src/lib/explorer/importExternalPaths", () => ({
   importPathsInto: vi.fn(),
 }));

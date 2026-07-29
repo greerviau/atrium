@@ -164,6 +164,7 @@ export function reconcileRestoredSession(
       savedDoc: readable.get(path) as string,
       isDirty: false,
       hasExternalConflict: false,
+      isExternal: false,
       isDeleted: false,
       viewMode: mode === "markdown" ? get(markdownDefaultView) : undefined,
     };
@@ -181,12 +182,24 @@ export function reconcileRestoredSession(
 /**
  * Computes the restored editor session for `root`: loads it, re-reads every
  * distinct referenced path fresh off disk, and drops any path whose read
- * fails with `NOT_FOUND` (the file was deleted while the app was closed)
- * silently — reused below via `reconcileRestoredSession`/`pruneMissingTabs`
- * rather than duplicated. Returns `null` if nothing was persisted for `root`
- * (a brand-new project) or an unexpected failure occurs (logged rather than
+ * fails with `NOT_FOUND` (the file was deleted while the app was closed) or
+ * `INVALID_PATH` (a persisted external tab — its grant is in-memory-only and
+ * never survives a relaunch, so it falls straight through to the unmodified
+ * `escapes_workspace_root` rejection on a fresh workspace instance) silently
+ * — reused below via `reconcileRestoredSession`/`pruneMissingTabs` rather
+ * than duplicated. Returns `null` if nothing was persisted for `root` (a
+ * brand-new project) or an unexpected failure occurs (logged rather than
  * left as an unhandled rejection or a broken project open — restore is a
  * best-effort convenience, never a blocker).
+ *
+ * Tolerating `INVALID_PATH` is safe at this one call site specifically:
+ * this is the only place `fsReadFile` is ever called against a brand-new
+ * `LocalWorkspace` instance whose grant map is still empty, so
+ * `capture_identity`'s own `"is not a regular file"` `InvalidPath` (the
+ * only other source of that code) cannot yet be reachable through it. It is
+ * *not* true that `read_file` only ever produces `INVALID_PATH` for the
+ * escapes-the-workspace-root reason in general — widening a tolerance check
+ * elsewhere in the app on that assumption would be wrong.
  *
  * Deliberately does *not* apply the result to `tabsState`/`editorPaneTree`/
  * `focusedEditorPaneId` itself: the caller (`App.svelte`) owns applying it,
@@ -207,7 +220,7 @@ export async function restoreEditorSession(root: string): Promise<RestoredEditor
         try {
           readable.set(path, await fsReadFile(localWorkspaceId(), path));
         } catch (err) {
-          if (!isAppError(err) || err.code !== "NOT_FOUND") throw err;
+          if (!isAppError(err) || (err.code !== "NOT_FOUND" && err.code !== "INVALID_PATH")) throw err;
         }
       }),
     );
