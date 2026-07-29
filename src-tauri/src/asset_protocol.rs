@@ -87,7 +87,10 @@ pub async fn resolve_atriumasset_request(
 
     let resolved = match workspace.resolve_within_root(&requested) {
         Ok(path) => path,
-        Err(_) => return empty_response(403),
+        Err(_) => match workspace.resolve_external_asset(&requested).await {
+            Some(path) => path,
+            None => return empty_response(403),
+        },
     };
 
     match tokio::fs::read(&resolved).await {

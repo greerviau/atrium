@@ -1,7 +1,8 @@
 use crate::pty_manager::PtyManager;
 use crate::workspace::Workspace;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tauri::AppHandle;
 
 /// The app's single piece of shared mutable state: which workspaces are
@@ -22,6 +23,14 @@ pub struct AppState {
     /// before the frontend had mounted its event listeners. Consumed once
     /// via `workspace_take_pending_open`; see `macos_dock.rs`.
     pub pending_open: Mutex<Option<String>>,
+    /// The path set and timestamp of the most recent real, native OS
+    /// drag-drop `Drop` event observed on the main window, written only by
+    /// `main.rs`'s `WindowEvent::DragDrop` handler. `fs_grant_external_file`
+    /// (`commands/fs.rs`) checks this before ever authorizing a grant — see
+    /// the drag-a-file-into-the-editor plan's §4.9 for why a grant must be
+    /// gated on a real, backend-observed drop rather than trusting the
+    /// frontend's own event alone.
+    pub recent_drop: Mutex<Option<(HashSet<String>, Instant)>>,
 }
 
 impl AppState {
@@ -31,6 +40,7 @@ impl AppState {
             pty: PtyManager::new(),
             app_handle,
             pending_open: Mutex::new(None),
+            recent_drop: Mutex::new(None),
         }
     }
 }
