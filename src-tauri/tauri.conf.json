@@ -35,7 +35,47 @@
         "name": "Markdown Document",
         "description": "Markdown Document",
         "role": "Editor",
-        "rank": "Default"
+        "rank": "Alternate"
+      },
+      {
+        "ext": [
+          "js", "jsx", "mjs", "ts", "tsx", "py", "rs", "go", "yaml", "yml", "css", "sh", "bash", "zsh",
+          "svelte", "h", "c", "hh", "hpp", "hxx", "h++", "cc", "cpp", "cxx", "c++", "m", "mm", "cs",
+          "csx", "less", "php", "ps1", "psd1", "psm1", "pyi", "gemspec", "rb", "erb", "scss", "sass",
+          "sql", "vue", "ascx", "csproj", "dtd", "plist", "wxi", "wxl", "wxs", "xaml", "eyaml", "eyml",
+          "clj", "cljs", "cljx", "clojure", "coffee", "csv", "cmake", "dart", "diff", "gradle",
+          "groovy", "mk", "lua", "ipynb", "lock", "log", "vb", "r", "rst", "tex", "cls", "fs", "fsi",
+          "fsx", "fsscript", "toml", "swift", "jav", "java", "ctp", "dot", "edn", "handlebars", "hbs",
+          "ml", "mli", "pl", "pl6", "pm", "pm6", "pod", "pp", "properties", "psgi", "rt", "t", "asp",
+          "aspx", "cshtml", "jshtm", "jsp", "phtml", "shtml", "bat", "cmd", "config", "ini", "cfg",
+          "cjs", "ex", "exs", "rkt", "scm", "astro", "mdx", "tf", "tfvars",
+          "graphql", "gql", "prisma", "zig", "jsonc"
+        ],
+        "name": "Source Code",
+        "description": "Source Code",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": ["html", "htm", "json", "xml", "txt", "svg"],
+        "name": "Data & Markup Document",
+        "description": "Data & Markup Document",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": [],
+        "name": "Text Document",
+        "description": "Text Document",
+        "role": "Editor",
+        "rank": "Alternate",
+        "contentTypes": [
+          "public.text",
+          "public.plain-text",
+          "public.utf8-plain-text",
+          "public.source-code",
+          "public.script"
+        ]
       }
     ],
     "icon": [
