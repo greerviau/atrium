@@ -526,6 +526,47 @@ describe("minimapExtension", () => {
     expect(document.body.style.webkitUserSelect).toBe("");
   });
 
+  it("split editor: a stale drag on one minimap instance doesn't leave a second instance's restore stuck", () => {
+    // Two independent editor panes, each with its own OverlayView, both
+    // listening on the same window-level mouseup/mousemove. Reproduces the
+    // exact scenario "restore the prior value" broke: pane A's drag starts
+    // (setting the shared body cursor/user-select) but its mouseup never
+    // arrives — release outside the window, no self-heal move first — so
+    // it's still latched when pane B starts and completes its own,
+    // entirely unrelated drag.
+    const containerA = mount(true);
+    const overlayA = containerA.querySelector(".cm-minimap-overlay-container") as HTMLElement;
+
+    const containerB = document.createElement("div");
+    document.body.appendChild(containerB);
+    const viewB = new EditorView({
+      state: EditorState.create({ doc: "b\n", extensions: minimapExtension(true) }),
+      parent: containerB,
+    });
+    const overlayB = containerB.querySelector(".cm-minimap-overlay-container") as HTMLElement;
+
+    try {
+      overlayA.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+      expect(document.body.style.cursor).toBe("default");
+
+      overlayB.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+      // The one mouseup in this whole sequence: dispatched once on window,
+      // received by both instances' listeners (pane A's fires first, pane
+      // B's second, matching creation order) — this is what a real release
+      // during pane B's drag looks like from either instance's perspective.
+      window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+
+      // Pane B's own drag ending must leave body clean, regardless of
+      // pane A's drag never having ended on its own.
+      expect(document.body.style.cursor).toBe("");
+      expect(document.body.style.userSelect).toBe("");
+      expect(document.body.style.webkitUserSelect).toBe("");
+    } finally {
+      viewB.destroy();
+      containerB.remove();
+    }
+  });
+
   it("calls view.focus() on restore only when the view was focused going into the drag", () => {
     const container = mount(true);
     const content = container.querySelector(".cm-content") as HTMLElement;
