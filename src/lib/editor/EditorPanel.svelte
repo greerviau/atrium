@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { tick } from "svelte";
+  import { flip } from "svelte/animate";
   import type { EditorLeafPane, SplitDirection } from "./editorPaneTree";
   import {
     tabsState,
@@ -11,6 +13,7 @@
   import EditorPane from "./EditorPane.svelte";
   import EditorSplitMenu from "./EditorSplitMenu.svelte";
   import { tooltip } from "../ui/tooltip";
+  import { beginTabDrag, draggingTabKey } from "./tabDrag";
 
   /**
    * One leaf's full top bar (tab strip + controls) and its stack of
@@ -27,33 +30,106 @@
     onSplit,
     onSetActiveTab,
     onCloseTab,
+    onReorderTab,
   }: {
     tree: EditorLeafPane;
     onSplit: (direction: SplitDirection) => void;
     onSetActiveTab: (path: string) => void;
     // The tab's × button — a deliberate close of this leaf's own view of the path.
     onCloseTab: (path: string) => void;
+    onReorderTab: (path: string, toIndex: number) => void;
   } = $props();
+
+  let tabListEl: HTMLDivElement | undefined = $state();
+
+  /**
+   * The pane stack's own iteration order — deliberately NOT `tree.tabs` (the
+   * tab strip's own, user-reorderable order). Both arrays hold the same
+   * membership (`tree.tabs` is always a subset of `tabsState.tabs`'s open
+   * paths), but this each-block must not share the strip's iteration order:
+   * `.editor-pane-slot` is `position: absolute; inset: 0`, so its DOM order
+   * has zero visual meaning — but a Svelte keyed `{#each}` reorder is still a
+   * physical DOM detach-and-reinsert even when the reused node's own
+   * *identity* survives, and that would silently drop the one visible slot's
+   * live CodeMirror `scrollTop` and blur its focus on every drag commit.
+   * `tabsState.tabs`'s own order is never touched by `moveTabInLeaf`, so
+   * keying off it here means this each-block simply never reorders in
+   * response to a tab-strip drag at all.
+   */
+  let stablePaneOrder = $derived($tabsState.tabs.map((t) => t.path).filter((path) => tree.tabs.includes(path)));
 
   function basename(path: string): string {
     return path.split("/").pop() ?? path;
+  }
+
+  function onTabPointerDown(event: PointerEvent, path: string): void {
+    const target = event.target as HTMLElement;
+    if (target.closest(".tab-close, .tab-view-mode")) return; // let those buttons' own onclick handle it
+    if (event.button !== 0) return;
+    if (!tabListEl) return;
+    beginTabDrag(
+      event.currentTarget as HTMLElement,
+      event,
+      `${tree.id}:${path}`,
+      path,
+      () =>
+        Array.from(tabListEl!.querySelectorAll<HTMLElement>(".tab")).map((el) => ({
+          path: el.dataset.tabPath!,
+          rect: el.getBoundingClientRect(),
+        })),
+      (draggedPath, toIndex) => onReorderTab(draggedPath, toIndex),
+    );
+  }
+
+  async function onTabKeyDown(event: KeyboardEvent, path: string): Promise<void> {
+    if (event.key === "Enter") {
+      onSetActiveTab(path);
+      return;
+    }
+    if (!event.metaKey || !event.shiftKey) return;
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    // Captured before the `await` below, not read after it: per the DOM spec,
+    // `event.currentTarget` is reset to `null` once the event's synchronous
+    // dispatch finishes, which happens before `tick()` resolves.
+    const tabEl = event.currentTarget as HTMLElement;
+    const currentIndex = tree.tabs.indexOf(path);
+    const toIndex = event.key === "ArrowLeft" ? currentIndex - 1 : currentIndex + 1;
+    onReorderTab(path, toIndex);
+    // Moving a tab RIGHT physically relocates the *focused* node itself in
+    // Svelte's keyed reconciliation (moving LEFT happens to relocate a
+    // neighbour instead, which is why this was easy to miss by hand-testing
+    // only one direction) — either way the move blurs focus to <body> unless
+    // it's explicitly restored. `tabEl` itself is still the correct element
+    // to refocus after the move: Svelte's keyed `{#each}` preserves this
+    // node's own identity across a reorder, it's only DOM *focus* that
+    // doesn't survive the relocation. `tick()` waits for the reorder to
+    // actually flush to the DOM before refocusing — calling `.focus()`
+    // before that would act on the element's pre-move state and could be a
+    // no-op depending on timing.
+    await tick();
+    tabEl.focus();
   }
 </script>
 
 <div class="editor-panel">
   <div class="tab-strip">
-    <div class="tab-list">
+    <div class="tab-list" role="tablist" bind:this={tabListEl}>
       {#each tree.tabs as path (path)}
         {@const tab = $tabsState.tabs.find((t) => t.path === path)}
         <div
           class="tab"
           class:active={path === tree.activeTabPath}
+          class:dragging={$draggingTabKey === `${tree.id}:${path}`}
+          data-tab-path={path}
+          onpointerdown={(e) => onTabPointerDown(e, path)}
           onclick={() => onSetActiveTab(path)}
-          onkeydown={(e) => e.key === "Enter" && onSetActiveTab(path)}
+          onkeydown={(e) => onTabKeyDown(e, path)}
           role="tab"
           tabindex="0"
           aria-selected={path === tree.activeTabPath}
           title={tab?.isExternal ? path : undefined}
+          animate:flip={{ duration: $draggingTabKey === `${tree.id}:${path}` ? 0 : 150 }}
         >
           {#if tab?.isExternal}
             <span class="tab-external-badge" aria-label="Opened from outside the workspace">⌁</span>
@@ -92,7 +168,7 @@
     </div>
   </div>
   <div class="editor-panes">
-    {#each tree.tabs as path (path)}
+    {#each stablePaneOrder as path (path)}
       {@const tab = $tabsState.tabs.find((t) => t.path === path)}
       <div class="editor-pane-slot" class:hidden={path !== tree.activeTabPath}>
         {#if tab?.hasExternalConflict}
@@ -135,6 +211,10 @@
     flex: 1;
     min-width: 0;
     overflow-x: auto;
+    scrollbar-width: none; /* Firefox; inert on Atrium's WKWebView, harmless elsewhere */
+  }
+  .tab-list::-webkit-scrollbar {
+    display: none; /* removes the bar entirely — unlike width/height: 0, this reserves no track space */
   }
 
   .tab-strip-controls {
@@ -156,10 +236,21 @@
     color: inherit;
     cursor: pointer;
     white-space: nowrap;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-user-drag: none;
+    touch-action: none; /* pointer events drive the gesture, not the browser's own touch-scroll — a decision, harmless on macOS today */
   }
 
   .tab.active {
     background: var(--atrium-bg-active);
+  }
+
+  .tab.dragging {
+    opacity: 0.6;
+    cursor: grabbing;
+    z-index: 1;
+    position: relative;
   }
 
   .tab-name {
