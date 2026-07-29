@@ -1,8 +1,8 @@
 diff --git a/node_modules/@replit/codemirror-minimap/dist/index.cjs b/node_modules/@replit/codemirror-minimap/dist/index.cjs
-index 3f0c98a..7e18405 100644
+index 3f0c98a..0755eda 100644
 --- a/node_modules/@replit/codemirror-minimap/dist/index.cjs
 +++ b/node_modules/@replit/codemirror-minimap/dist/index.cjs
-@@ -95,10 +95,17 @@ const Theme$1 = view.EditorView.theme({
+@@ -95,10 +95,14 @@ const Theme$1 = view.EditorView.theme({
      },
  });
  const SCALE = Scale.PixelMultiplier * Scale.SizeRatio;
@@ -14,13 +14,10 @@ index 3f0c98a..7e18405 100644
 +        this._wasEditable = false;
 +        this._wasFocused = false;
 +        this._editableToggled = false;
-+        this._prevCursor = "";
-+        this._prevUserSelect = "";
-+        this._prevWebkitUserSelect = "";
          if (view.state.facet(Config).enabled) {
              this.create(view);
          }
-@@ -108,9 +115,24 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+@@ -108,9 +112,24 @@ const OverlayView = view.ViewPlugin.fromClass(class {
          this.dom = crelt__default["default"]("div", { class: "cm-minimap-overlay" });
          this.container.appendChild(this.dom);
          // Attach event listeners for overlay
@@ -48,7 +45,7 @@ index 3f0c98a..7e18405 100644
          // Attach the overlay elements to the minimap
          const inner = view.dom.querySelector(".cm-minimap-inner");
          if (inner) {
-@@ -123,12 +145,82 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+@@ -123,12 +142,91 @@ const OverlayView = view.ViewPlugin.fromClass(class {
      }
      remove() {
          if (this.container) {
@@ -81,9 +78,18 @@ index 3f0c98a..7e18405 100644
 +        if (this.container) {
 +            this.container.classList.remove("cm-minimap-overlay-active");
 +        }
-+        document.body.style.cursor = this._prevCursor;
-+        document.body.style.userSelect = this._prevUserSelect;
-+        document.body.style.webkitUserSelect = this._prevWebkitUserSelect;
++        // Unconditional, not "restore whatever was there before": this
++        // guard is shared global state across every minimap instance (one
++        // per editor pane in a split view), and "restore what I captured"
++        // is unpaired the moment one instance's drag ends without its own
++        // matching capture ever landing (e.g. a stale latched drag on
++        // another pane) — the wrong "previous" value gets written back and
++        // then perpetuated by every drag after it, with body stuck at
++        // cursor:default/user-select:none until a reload. Blanking is the
++        // only pairing that's correct no matter how many instances exist.
++        document.body.style.cursor = "";
++        document.body.style.userSelect = "";
++        document.body.style.webkitUserSelect = "";
 +        this._restoreEditability();
 +    }
 +    // WebKit's effectiveUserSelect deliberately ignores an inherited
@@ -134,7 +140,7 @@ index 3f0c98a..7e18405 100644
      update(update) {
          const prev = update.startState.facet(Config).enabled;
          const now = update.state.facet(Config).enabled;
-@@ -192,41 +284,88 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+@@ -192,41 +290,85 @@ const OverlayView = view.ViewPlugin.fromClass(class {
          if (!this.container) {
              return;
          }
@@ -200,9 +206,6 @@ index 3f0c98a..7e18405 100644
 +        this._dragStartY = event.clientY;
 +        this._isDragging = true;
 +        this.container.classList.add("cm-minimap-overlay-active");
-+        this._prevCursor = document.body.style.cursor;
-+        this._prevUserSelect = document.body.style.userSelect;
-+        this._prevWebkitUserSelect = document.body.style.webkitUserSelect;
 +        document.body.style.cursor = "default";
 +        document.body.style.userSelect = "none";
 +        document.body.style.webkitUserSelect = "none";
@@ -248,10 +251,10 @@ index 3f0c98a..7e18405 100644
          event.stopPropagation();
          // Without an existing position, we're just beginning to drag.
 diff --git a/node_modules/@replit/codemirror-minimap/dist/index.js b/node_modules/@replit/codemirror-minimap/dist/index.js
-index c7c9a04..1fc9fa6 100644
+index c7c9a04..98b98ac 100644
 --- a/node_modules/@replit/codemirror-minimap/dist/index.js
 +++ b/node_modules/@replit/codemirror-minimap/dist/index.js
-@@ -87,10 +87,17 @@ const Theme$1 = /*@__PURE__*/EditorView.theme({
+@@ -87,10 +87,14 @@ const Theme$1 = /*@__PURE__*/EditorView.theme({
      },
  });
  const SCALE = Scale.PixelMultiplier * Scale.SizeRatio;
@@ -263,13 +266,10 @@ index c7c9a04..1fc9fa6 100644
 +        this._wasEditable = false;
 +        this._wasFocused = false;
 +        this._editableToggled = false;
-+        this._prevCursor = "";
-+        this._prevUserSelect = "";
-+        this._prevWebkitUserSelect = "";
          if (view.state.facet(Config).enabled) {
              this.create(view);
          }
-@@ -100,9 +107,24 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+@@ -100,9 +104,24 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
          this.dom = crelt("div", { class: "cm-minimap-overlay" });
          this.container.appendChild(this.dom);
          // Attach event listeners for overlay
@@ -297,7 +297,7 @@ index c7c9a04..1fc9fa6 100644
          // Attach the overlay elements to the minimap
          const inner = view.dom.querySelector(".cm-minimap-inner");
          if (inner) {
-@@ -115,12 +137,82 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+@@ -115,12 +134,91 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
      }
      remove() {
          if (this.container) {
@@ -330,9 +330,18 @@ index c7c9a04..1fc9fa6 100644
 +        if (this.container) {
 +            this.container.classList.remove("cm-minimap-overlay-active");
 +        }
-+        document.body.style.cursor = this._prevCursor;
-+        document.body.style.userSelect = this._prevUserSelect;
-+        document.body.style.webkitUserSelect = this._prevWebkitUserSelect;
++        // Unconditional, not "restore whatever was there before": this
++        // guard is shared global state across every minimap instance (one
++        // per editor pane in a split view), and "restore what I captured"
++        // is unpaired the moment one instance's drag ends without its own
++        // matching capture ever landing (e.g. a stale latched drag on
++        // another pane) — the wrong "previous" value gets written back and
++        // then perpetuated by every drag after it, with body stuck at
++        // cursor:default/user-select:none until a reload. Blanking is the
++        // only pairing that's correct no matter how many instances exist.
++        document.body.style.cursor = "";
++        document.body.style.userSelect = "";
++        document.body.style.webkitUserSelect = "";
 +        this._restoreEditability();
 +    }
 +    // WebKit's effectiveUserSelect deliberately ignores an inherited
@@ -383,7 +392,7 @@ index c7c9a04..1fc9fa6 100644
      update(update) {
          const prev = update.startState.facet(Config).enabled;
          const now = update.state.facet(Config).enabled;
-@@ -184,41 +276,88 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+@@ -184,41 +282,85 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
          if (!this.container) {
              return;
          }
@@ -449,9 +458,6 @@ index c7c9a04..1fc9fa6 100644
 +        this._dragStartY = event.clientY;
 +        this._isDragging = true;
 +        this.container.classList.add("cm-minimap-overlay-active");
-+        this._prevCursor = document.body.style.cursor;
-+        this._prevUserSelect = document.body.style.userSelect;
-+        this._prevWebkitUserSelect = document.body.style.webkitUserSelect;
 +        document.body.style.cursor = "default";
 +        document.body.style.userSelect = "none";
 +        document.body.style.webkitUserSelect = "none";

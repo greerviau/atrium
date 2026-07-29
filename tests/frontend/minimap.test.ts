@@ -344,7 +344,7 @@ describe("minimapExtension", () => {
     expect(overlayContainer.classList.contains("cm-minimap-overlay-active")).toBe(false);
   });
 
-  it("recovers from a mousedown arriving while a drag is still latched, restoring contentEditable", () => {
+  it("recovers from a mousedown arriving while a drag is still latched, restoring contentEditable too", () => {
     const container = mount(true);
     const content = container.querySelector(".cm-content") as HTMLElement;
     const overlayContainer = container.querySelector(".cm-minimap-overlay-container") as HTMLElement;
@@ -357,13 +357,64 @@ describe("minimapExtension", () => {
     expect(content.getAttribute("contenteditable")).toBe("false");
 
     // A fresh mousedown arrives while that stale drag is still latched.
-    // Without the re-entrancy guard in onMouseDown, this would re-capture
-    // "was editable" from the already-false DOM, and the mouseup below
-    // would then skip the restore permanently.
     overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
     window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
 
     expect(content.getAttribute("contenteditable")).toBe("true");
+  });
+
+  // The case above passes even with the re-entrancy guard deleted, because
+  // once contentEditable clearing is deferred to onMouseMove (see the
+  // "defers clearing" case), nothing in onMouseDown touches _wasEditable
+  // any more — so it can't be re-captured from a stale, already-false DOM
+  // the way it could before. What the guard actually still protects is the
+  // *indicator's on-screen position*: computeTop() is gated on
+  // `!this._isDragging`, and without the guard resetting `_isDragging` to
+  // false first, a re-entrant click-to-jump's computeTop() call silently
+  // no-ops, leaving the indicator drawn at the stale, first drag's position
+  // even though the scroll position itself did jump to the new one.
+  it("recovers from a mousedown arriving while a drag is still latched, re-anchoring the indicator to the new position", () => {
+    const container = mount(true);
+    const g = fakeGeometry(container);
+
+    // First drag: click near the top. Its mouseup is never delivered.
+    g.overlayContainer.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, clientY: 50 }),
+    );
+    const topAfterFirstJump = g.indicator.style.top;
+
+    // A fresh mousedown arrives, clicking near the bottom instead, while
+    // the stale first drag is still latched.
+    g.overlayContainer.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, clientY: 450 }),
+    );
+    const topAfterSecondJump = g.indicator.style.top;
+
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+
+    expect(topAfterSecondJump).not.toBe(topAfterFirstJump);
+  });
+
+  it("clears and restores contentEditable independently across two separate, fully-completed drags", () => {
+    const container = mount(true);
+    const content = container.querySelector(".cm-content") as HTMLElement;
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container") as HTMLElement;
+
+    // Deleting the _editableToggled reset in _restoreEditability() would
+    // leave every drag after the first silently unable to clear
+    // contentEditable again — this exercises drag 2, not just drag 1.
+    for (let i = 0; i < 2; i++) {
+      overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+      expect(content.getAttribute("contenteditable"), `drag ${i + 1}: mousedown alone must not blur`).toBe("true");
+
+      moveFrom(content);
+      expect(content.getAttribute("contenteditable"), `drag ${i + 1}: should clear once outside the minimap`).toBe(
+        "false",
+      );
+
+      window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+      expect(content.getAttribute("contenteditable"), `drag ${i + 1}: should restore on mouseup`).toBe("true");
+    }
   });
 
   it("restores contentEditable immediately on a keydown mid-drag, without ending the drag", () => {
@@ -447,7 +498,18 @@ describe("minimapExtension", () => {
     expect(content.getAttribute("contenteditable")).toBe("false");
   });
 
-  it("restores pre-existing body cursor/user-select instead of blanking them", () => {
+  it("unconditionally blanks body cursor/user-select on drag end, regardless of any pre-existing value", () => {
+    // "Restore whatever was there before" sounds more correct than blanking
+    // — it isn't, once there can be more than one minimap instance (one per
+    // pane in a split editor) sharing this single global resource. Each
+    // instance would capture/restore independently; if any one instance's
+    // drag ends without its own matching capture ever landing (e.g. a
+    // stale, still-latched drag on another pane — see the two re-entrancy
+    // cases above for how a drag can go stale), the wrong "previous" value
+    // gets written back and then perpetuated by every drag after it,
+    // leaving body stuck at cursor:default/user-select:none with no
+    // recovery short of a reload. Blanking is the only pairing that's
+    // correct no matter how many instances exist.
     document.body.style.cursor = "grabbing";
     document.body.style.userSelect = "text";
     document.body.style.webkitUserSelect = "text";
@@ -459,9 +521,9 @@ describe("minimapExtension", () => {
     expect(document.body.style.cursor).toBe("default");
 
     window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
-    expect(document.body.style.cursor).toBe("grabbing");
-    expect(document.body.style.userSelect).toBe("text");
-    expect(document.body.style.webkitUserSelect).toBe("text");
+    expect(document.body.style.cursor).toBe("");
+    expect(document.body.style.userSelect).toBe("");
+    expect(document.body.style.webkitUserSelect).toBe("");
   });
 
   it("calls view.focus() on restore only when the view was focused going into the drag", () => {
