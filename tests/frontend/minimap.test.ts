@@ -567,6 +567,93 @@ describe("minimapExtension", () => {
     }
   });
 
+  it("split editor: dragging one pane's minimap into a DIFFERENT pane's content clears THAT pane's contentEditable too", () => {
+    // This is #320 itself, reproduced in a split editor: the fix only
+    // neutralized the DRAGGING view's own contentEditable, so dragging
+    // pane A's minimap rightward into pane B's text left pane B's
+    // `.cm-content` fully editable the whole time — WebKit's exemption
+    // still applied there, so the original selection/cursor bug happened
+    // in full, in pane B, even though the fix worked perfectly for pane A.
+    // A minimap drag is a single global mouse gesture; the pointer can end
+    // up over ANY pane's content, not just the one whose minimap started
+    // the drag.
+    const containerA = mount(true);
+    const overlayA = containerA.querySelector(".cm-minimap-overlay-container") as HTMLElement;
+    const contentA = containerA.querySelector(".cm-content") as HTMLElement;
+
+    const containerB = document.createElement("div");
+    document.body.appendChild(containerB);
+    const viewB = new EditorView({
+      state: EditorState.create({ doc: "b\n", extensions: minimapExtension(true) }),
+      parent: containerB,
+    });
+    const contentB = containerB.querySelector(".cm-content") as HTMLElement;
+
+    try {
+      expect(contentB.getAttribute("contenteditable")).toBe("true");
+
+      // Drag starts on pane A's minimap; the pointer crosses into pane B's
+      // content, not pane A's own.
+      overlayA.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+      moveFrom(contentB);
+
+      // Pane B's content — not the one whose minimap is being dragged —
+      // must be neutralized too.
+      expect(contentB.getAttribute("contenteditable")).toBe("false");
+      // Pane A's own content is suppressed as well: the pointer could end
+      // up back over it later in the same drag, and there's no cheap way
+      // to know in advance which panes it will and won't cross.
+      expect(contentA.getAttribute("contenteditable")).toBe("false");
+
+      window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+      expect(contentB.getAttribute("contenteditable")).toBe("true");
+      expect(contentA.getAttribute("contenteditable")).toBe("true");
+    } finally {
+      viewB.destroy();
+      containerB.remove();
+    }
+  });
+
+  it("does not blank body cursor/user-select on an unrelated mouseup with no drag ever active", () => {
+    // _endDrag()'s `if (!this._isDragging) return` guard is what stops
+    // this: onMouseUp/the blur listener are registered globally by every
+    // open pane's OverlayView and fire on every mouseup/blur in the whole
+    // app, drag or not. Without the guard, an ordinary click anywhere
+    // would unconditionally wipe out any cursor/user-select some other
+    // feature had legitimately set.
+    document.body.style.cursor = "some-other-feature-set-this";
+    mount(true);
+
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+
+    expect(document.body.style.cursor).toBe("some-other-feature-set-this");
+  });
+
+  it("keeps contentEditable restored after a keydown, even across a further mousemove outside the minimap in the same drag", () => {
+    // Restoring on keydown isn't enough on its own: mousemove keeps firing
+    // as the drag continues, and without cancelling suppression for the
+    // rest of this drag, the very next outside-the-minimap mousemove
+    // (which fires far more often than keydowns in real usage) would
+    // immediately re-clear contentEditable again — silently defeating the
+    // escape hatch for every keystroke after the first, even though the
+    // restore itself looks correct in isolation right after the keydown.
+    const container = mount(true);
+    const content = container.querySelector(".cm-content") as HTMLElement;
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container") as HTMLElement;
+
+    overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    moveFrom(content);
+    expect(content.getAttribute("contenteditable")).toBe("false");
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "a" }));
+    expect(content.getAttribute("contenteditable")).toBe("true");
+
+    moveFrom(content, { clientY: 60 });
+    expect(content.getAttribute("contenteditable")).toBe("true");
+
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+  });
+
   it("calls view.focus() on restore only when the view was focused going into the drag", () => {
     const container = mount(true);
     const content = container.querySelector(".cm-content") as HTMLElement;
