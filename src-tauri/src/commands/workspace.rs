@@ -2,8 +2,11 @@ use crate::error::AppError;
 use crate::recents::{self, RecentProject};
 use crate::state::AppState;
 use crate::workspace::local::LocalWorkspace;
+use crate::workspace::standalone::STANDALONE_WORKSPACE_ID;
 use crate::workspace::Workspace;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::mpsc;
@@ -22,12 +25,40 @@ pub async fn workspace_open_folder_dialog(
     Ok(folder.map(|f| f.to_string()))
 }
 
+/// Whether `id` is a reserved workspace id that `workspace_set_root` must
+/// never be allowed to overwrite — today, only `StandaloneWorkspace`'s own
+/// id. Split out as a pure predicate (no `AppState`/`AppHandle` involved) so
+/// it's directly testable, the same convention `recently_dropped` and
+/// `extend_pending` already establish in this codebase.
+fn is_reserved_workspace_id(id: &str) -> bool {
+    id == STANDALONE_WORKSPACE_ID
+}
+
+/// Inserts `workspace` under `workspace_id`, leaving every other entry —
+/// in particular a separately-keyed `"standalone"` entry — untouched. Pure
+/// over the bare registry (no `AppState`/`AppHandle`) so a test can pre-seed
+/// a fake `"standalone"` entry and assert it survives a `"local"` insert by
+/// identity (`Arc::ptr_eq`), without constructing a full `AppState`.
+fn register_workspace(
+    workspaces: &Mutex<HashMap<String, Arc<dyn Workspace>>>,
+    workspace_id: String,
+    workspace: Arc<dyn Workspace>,
+) {
+    workspaces.lock().unwrap().insert(workspace_id, workspace);
+}
+
 #[tauri::command]
 pub async fn workspace_set_root(
     state: State<'_, AppState>,
     workspace_id: String,
     path: String,
 ) -> Result<(), AppError> {
+    if is_reserved_workspace_id(&workspace_id) {
+        return Err(AppError::InvalidPath(format!(
+            "'{workspace_id}' is a reserved workspace id and cannot be reassigned"
+        )));
+    }
+
     let workspace = LocalWorkspace::new(workspace_id.clone(), PathBuf::from(&path));
 
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -40,11 +71,7 @@ pub async fn workspace_set_root(
         }
     });
 
-    state
-        .workspaces
-        .lock()
-        .unwrap()
-        .insert(workspace_id, std::sync::Arc::new(workspace));
+    register_workspace(&state.workspaces, workspace_id, Arc::new(workspace));
 
     // Every "open a folder" action (in-app button, `File` menu, Dock menu)
     // funnels through this command, so recording the recent-project entry
@@ -83,11 +110,57 @@ pub fn workspace_remove_recent(app: AppHandle, path: String) -> Result<(), AppEr
     recents::remove_recent(&app, &path)
 }
 
-/// Consumes the path from a Dock-menu pick received before the frontend had
-/// mounted its event listeners (the cold-launch case in plan section 4.3).
-/// Called once by the frontend on startup; returns `None` on every other
-/// platform and on every subsequent call.
+/// Drains every path from a Dock-menu pick (or OS "Open With Atrium")
+/// received before the frontend had mounted its event listeners (the
+/// cold-launch case in plan section 4.3). Called once by the frontend on
+/// startup; returns an empty `Vec` on every other platform and on every
+/// subsequent call.
 #[tauri::command]
-pub fn workspace_take_pending_open(state: State<'_, AppState>) -> Option<String> {
-    state.pending_open.lock().unwrap().take()
+pub fn workspace_take_pending_open(state: State<'_, AppState>) -> Vec<String> {
+    std::mem::take(&mut *state.pending_open.lock().unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::standalone::StandaloneWorkspace;
+
+    // Test 11 — `is_reserved_workspace_id` rejects "standalone" and accepts
+    // every other id, including "local".
+    #[test]
+    fn is_reserved_workspace_id_rejects_only_the_standalone_id() {
+        assert!(is_reserved_workspace_id("standalone"));
+        assert!(!is_reserved_workspace_id("local"));
+        assert!(!is_reserved_workspace_id(""));
+        assert!(!is_reserved_workspace_id("Standalone"));
+        assert!(!is_reserved_workspace_id("standalone2"));
+    }
+
+    // Test 1 (Rust half) / test 2(a) — `register_workspace`, called for
+    // "local", does not disturb a separately-keyed "standalone" entry:
+    // asserted by identity (`Arc::ptr_eq`), not just presence, so a bug that
+    // replaced the standalone `Arc` with an equivalent-looking new instance
+    // (silently dropping its watcher/grants) would still fail this.
+    #[test]
+    fn register_workspace_for_local_does_not_disturb_a_separately_keyed_standalone_entry() {
+        let workspaces: Mutex<HashMap<String, Arc<dyn Workspace>>> = Mutex::new(HashMap::new());
+        let standalone: Arc<dyn Workspace> = Arc::new(StandaloneWorkspace::new());
+        register_workspace(
+            &workspaces,
+            STANDALONE_WORKSPACE_ID.to_string(),
+            Arc::clone(&standalone),
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let local: Arc<dyn Workspace> = Arc::new(LocalWorkspace::new(
+            "local".to_string(),
+            dir.path().to_path_buf(),
+        ));
+        register_workspace(&workspaces, "local".to_string(), local);
+
+        let guard = workspaces.lock().unwrap();
+        let still_standalone = guard.get(STANDALONE_WORKSPACE_ID).unwrap();
+        assert!(Arc::ptr_eq(still_standalone, &standalone));
+        assert!(guard.contains_key("local"));
+    }
 }

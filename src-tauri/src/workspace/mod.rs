@@ -1,5 +1,6 @@
 pub mod external_grants;
 pub mod local;
+pub mod standalone;
 
 use crate::error::AppError;
 use async_trait::async_trait;
@@ -126,10 +127,12 @@ pub fn is_default_ignored(name: &str) -> bool {
 }
 
 /// Everything a pane needs from "a place files live," independent of whether
-/// that place is `LocalWorkspace` (the only implementation in the MVP) or a
-/// future `RemoteWorkspace` (phase 3). Every `fs_*` command in `commands/fs.rs`
-/// is written against this trait, not against `std::fs` directly, so adding a
-/// remote implementation later only grows this module — it never touches
+/// that place is `LocalWorkspace` (a project's directory root),
+/// `StandaloneWorkspace` (no root at all — a file opened directly from the
+/// OS with no project open, issue #325), or a future `RemoteWorkspace`
+/// (phase 3). Every `fs_*` command in `commands/fs.rs` is written against
+/// this trait, not against `std::fs` directly, so adding a remote
+/// implementation later only grows this module — it never touches
 /// `commands/fs.rs` or the frontend.
 ///
 /// Whatever mechanism an implementation uses to resolve a `path` argument

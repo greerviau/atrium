@@ -7,46 +7,67 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::State;
 
-/// How long a real, backend-observed drop's path set stays valid for
-/// `fs_grant_external_file` to authorize a grant against (§4.9 of the
-/// drag-a-file-into-the-editor plan) — generous enough for the sequential
-/// per-file grant loop the frontend's drop handler runs (§6.2) to complete,
-/// tightened from an initial, far more permissive window specifically to
-/// shrink the exposure window described in `require_recent_drop`'s own doc
-/// comment.
+/// How long a real, backend-observed drop's (or OS-open's) path set stays
+/// valid for `fs_grant_external_file` to authorize a grant against (§4.9 of
+/// the drag-a-file-into-the-editor plan) — generous enough for the
+/// sequential per-file grant loop the frontend's drop handler runs (§6.2) to
+/// complete, tightened from an initial, far more permissive window
+/// specifically to shrink the exposure window described in
+/// `recently_opened_externally`'s own doc comment.
 const RECENT_DROP_WINDOW: Duration = Duration::from_secs(10);
 
-/// Gates `fs_grant_external_file` on a real, backend-observed OS drop having
-/// just happened for this exact `path` — the fix for a gap where an earlier
-/// draft of this design let any renderer-side caller (a compromised
-/// dependency, an XSS) invoke the grant command directly with an arbitrary
-/// path, with nothing enforcing that a human actually dragged that file in.
-/// `AppState.recent_drop` is written only by `main.rs`'s own
-/// `WindowEvent::DragDrop` handler, on the Rust side, which no renderer-side
-/// bug alone can fabricate.
+/// Gates `fs_grant_external_file` on a real, backend-observed drop or
+/// OS-open request having just happened for this exact `path` — the fix for
+/// a gap where an earlier draft of this design let any renderer-side caller
+/// (a compromised dependency, an XSS) invoke the grant command directly with
+/// an arbitrary path, with nothing enforcing that a human actually dragged
+/// that file in or the OS was actually asked to open it. `AppState.recent_drop`
+/// is written only by `main.rs`'s own `WindowEvent::DragDrop` handler, and
+/// `AppState.recent_os_open` only by `macos_dock::open_paths`, both on the
+/// Rust side, which no renderer-side bug alone can fabricate.
 ///
 /// Deliberately not single-use/consumed-on-check: the most recent real
-/// drop's path set stays valid for the whole window, and re-checking the
-/// same already-legitimately-dropped path more than once is harmless — the
-/// human did drop that exact file. Stated plainly because it's a real,
-/// load-bearing scoping gap rather than an implementation detail:
-/// `WindowEvent::DragDrop` fires for *any* drop landing anywhere on the
-/// window, not just the editor panel — the backend has no way to hit-test
-/// the DOM the way the frontend's own drop-target resolvers do. So this
-/// enforces "a file was recently dropped onto this window," not "onto the
-/// editor panel specifically"; the 10-second window is the concrete
-/// mitigation available for that gap without hit-testing the DOM from Rust.
-fn require_recent_drop(state: &AppState, path: &str) -> Result<(), AppError> {
-    if recently_dropped(&state.recent_drop, path) {
+/// event's path set stays valid for the whole window, and re-checking the
+/// same already-legitimately-authorized path more than once is harmless —
+/// the human did drop, or the OS was genuinely asked to open, that exact
+/// file. Stated plainly because it's a real, load-bearing scoping gap rather
+/// than an implementation detail: `WindowEvent::DragDrop` fires for *any*
+/// drop landing anywhere on the window, not just the editor panel — the
+/// backend has no way to hit-test the DOM the way the frontend's own
+/// drop-target resolvers do. So this enforces "a file was recently dropped
+/// onto this window," not "onto the editor panel specifically"; the
+/// 10-second window is the concrete mitigation available for that gap
+/// without hit-testing the DOM from Rust.
+///
+/// `path` is authorized if it was part of a recent, backend-observed event
+/// from EITHER trusted origin. The two origins are NOT equally strong —
+/// `recent_drop` requires a physical drag gesture on this window;
+/// `recent_os_open` requires only that some local process ask the OS to
+/// open `path` with Atrium (no human gesture at all), and this app's own
+/// PTY commands already let a compromised renderer induce that state
+/// directly. Accepted: a compromised renderer already has arbitrary local
+/// execution via the PTY, so nothing new becomes reachable. If the PTY
+/// commands are ever scoped down, `recent_os_open` becomes the weakest
+/// remaining link in this gate — revisit then.
+fn recently_opened_externally(
+    recent_drop: &Mutex<Option<(HashSet<String>, Instant)>>,
+    recent_os_open: &Mutex<Option<(HashSet<String>, Instant)>>,
+    path: &str,
+) -> bool {
+    recently_dropped(recent_drop, path) || recently_dropped(recent_os_open, path)
+}
+
+fn require_recent_external_open(state: &AppState, path: &str) -> Result<(), AppError> {
+    if recently_opened_externally(&state.recent_drop, &state.recent_os_open, path) {
         Ok(())
     } else {
         Err(AppError::InvalidPath(format!(
-            "'{path}' was not part of a recent drop onto this window"
+            "'{path}' was not part of a recent drop or OS open request onto this window"
         )))
     }
 }
 
-/// The pure check behind `require_recent_drop`, split out so it's testable
+/// The pure check behind `require_recent_external_open`, split out so it's testable
 /// without constructing a full `AppState` (which needs a real
 /// `tauri::AppHandle` — see `commands::shell`'s `is_pr_url`/`is_web_url` for
 /// the same "extract the pure logic, test that" convention this codebase
@@ -204,16 +225,16 @@ pub async fn fs_external_paths_are_dirs(paths: Vec<String>) -> Vec<bool> {
 }
 
 /// The only command that ever creates an external-file grant (§4.3) — gated
-/// on `require_recent_drop` so a compromised renderer calling this directly
-/// with an arbitrary path, with no real drop having happened, is refused
-/// before it ever reaches `grant_external_file`.
+/// on `require_recent_external_open` so a compromised renderer calling this
+/// directly with an arbitrary path, with no real drop or OS-open request
+/// having happened, is refused before it ever reaches `grant_external_file`.
 #[tauri::command]
 pub async fn fs_grant_external_file(
     state: State<'_, AppState>,
     workspace_id: String,
     path: String,
 ) -> Result<(), AppError> {
-    require_recent_drop(&state, &path)?;
+    require_recent_external_open(&state, &path)?;
     workspace(&state, &workspace_id)?
         .grant_external_file(&path)
         .await
@@ -251,7 +272,7 @@ mod tests {
         assert_eq!(result, vec![false, true, true, false, false, false]);
     }
 
-    // MF4 — require_recent_drop's pure core, `recently_dropped`.
+    // MF4 — recently_opened_externally's shared pure core, `recently_dropped`.
     #[test]
     fn recently_dropped_is_false_when_nothing_was_ever_dropped() {
         let recent_drop: Mutex<Option<(HashSet<String>, Instant)>> = Mutex::new(None);
@@ -281,5 +302,58 @@ mod tests {
             Instant::now(),
         )));
         assert!(recently_dropped(&recent_drop, "/a/b.txt"));
+    }
+
+    // `recently_opened_externally` — accepted from each trust origin alone,
+    // rejected from neither, rejected once expired.
+    #[test]
+    fn recently_opened_externally_accepts_a_path_from_recent_drop_alone() {
+        let recent_drop = Mutex::new(Some((
+            HashSet::from(["/a/b.txt".to_string()]),
+            Instant::now(),
+        )));
+        let recent_os_open: Mutex<Option<(HashSet<String>, Instant)>> = Mutex::new(None);
+        assert!(recently_opened_externally(
+            &recent_drop,
+            &recent_os_open,
+            "/a/b.txt"
+        ));
+    }
+
+    #[test]
+    fn recently_opened_externally_accepts_a_path_from_recent_os_open_alone() {
+        let recent_drop: Mutex<Option<(HashSet<String>, Instant)>> = Mutex::new(None);
+        let recent_os_open = Mutex::new(Some((
+            HashSet::from(["/a/b.txt".to_string()]),
+            Instant::now(),
+        )));
+        assert!(recently_opened_externally(
+            &recent_drop,
+            &recent_os_open,
+            "/a/b.txt"
+        ));
+    }
+
+    #[test]
+    fn recently_opened_externally_rejects_a_path_from_neither_origin() {
+        let recent_drop: Mutex<Option<(HashSet<String>, Instant)>> = Mutex::new(None);
+        let recent_os_open: Mutex<Option<(HashSet<String>, Instant)>> = Mutex::new(None);
+        assert!(!recently_opened_externally(
+            &recent_drop,
+            &recent_os_open,
+            "/a/b.txt"
+        ));
+    }
+
+    #[test]
+    fn recently_opened_externally_rejects_a_path_once_both_origins_have_expired() {
+        let stale_at = Instant::now() - (RECENT_DROP_WINDOW + Duration::from_secs(1));
+        let recent_drop = Mutex::new(Some((HashSet::from(["/a/b.txt".to_string()]), stale_at)));
+        let recent_os_open = Mutex::new(Some((HashSet::from(["/a/b.txt".to_string()]), stale_at)));
+        assert!(!recently_opened_externally(
+            &recent_drop,
+            &recent_os_open,
+            "/a/b.txt"
+        ));
     }
 }

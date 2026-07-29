@@ -160,7 +160,7 @@ impl ExternalGrants {
     /// unconditionally on every call, which is required, not a gap: it's
     /// what makes "re-drag the file to refresh an expired grant" work at
     /// all, §4.9, and `grant()` is only ever reachable through
-    /// `require_recent_drop`'s 10-second real-drop gate, so re-granting is
+    /// `require_recent_external_open`'s 10-second real-drop-or-OS-open gate, so re-granting is
     /// no easier for an attacker than the original grant was.)
     pub async fn refresh_if_granted(&self, path: &str) {
         // Cheap bail-out for the overwhelmingly common case (an ordinary
