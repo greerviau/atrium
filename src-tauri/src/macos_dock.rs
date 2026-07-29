@@ -18,7 +18,9 @@ use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{NSApplication, NSDocumentController, NSMenu, NSMenuItem};
 use objc2_foundation::{MainThreadMarker, NSString, NSURL};
-use std::sync::OnceLock;
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
 /// Emitted on the webview whenever a Dock menu pick (or `RunEvent::Opened`)
@@ -127,18 +129,36 @@ fn emit_open_path(path: String) {
     }
 }
 
-/// Routes a path from `RunEvent::Opened` (`main.rs`) back to the frontend:
-/// stashes it (for the cold-launch case, consumed via
-/// `workspace_take_pending_open`) and emits it live (for the case where
-/// that event reaches an already-running app, e.g. a pick from the
-/// system-level "Open Recent" list rather than our own Dock menu).
-pub fn open_path(path: String) {
+/// Appends `paths` to the pending-open queue rather than replacing it.
+/// Split out as a pure function over the field, mirroring `commands/fs.rs`'s
+/// `recently_dropped` convention, so the accumulate-not-overwrite behavior
+/// is directly testable without a live `AppHandle`.
+fn extend_pending(pending: &Mutex<Vec<String>>, paths: &[String]) {
+    pending.lock().unwrap().extend_from_slice(paths);
+}
+
+/// Routes paths from `RunEvent::Opened` (`main.rs`) back to the frontend:
+/// stashes them (for the cold-launch case, drained via
+/// `workspace_take_pending_open`), records them as a second, weaker trust
+/// origin for `fs_grant_external_file` (`recent_os_open` — see
+/// `commands/fs.rs`'s `recently_opened_externally` for why it's not equal in
+/// strength to a real drag-drop), and emits each one live (for the case
+/// where this event reaches an already-running app, e.g. a pick from the
+/// system-level "Open Recent" list rather than our own Dock menu, or a real
+/// "Open With Atrium").
+pub fn open_paths(paths: Vec<String>) {
     if let Some(app) = APP_HANDLE.get() {
         if let Some(state) = app.try_state::<crate::state::AppState>() {
-            *state.pending_open.lock().unwrap() = Some(path.clone());
+            extend_pending(&state.pending_open, &paths);
+            *state.recent_os_open.lock().unwrap() = Some((
+                paths.iter().cloned().collect::<HashSet<_>>(),
+                Instant::now(),
+            ));
         }
     }
-    emit_open_path(path);
+    for path in paths {
+        emit_open_path(path);
+    }
 }
 
 /// Registers `path` with `NSDocumentController` so it shows up in the

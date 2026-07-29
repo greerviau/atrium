@@ -23,6 +23,7 @@ async function waitForIdle(): Promise<void> {
 function seedTab(path: string, mode: "code" | "markdown", viewMode: "rendered" | "source" = "rendered"): Tab {
   const tab: Tab = {
     path,
+    workspaceId: "local",
     mode,
     savedDoc: "line one\nline two\n",
     isDirty: false,

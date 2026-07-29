@@ -21,8 +21,8 @@
     markPathDeleted,
     renameOpenTabs,
     tabRenameSignal,
-    resetTabs,
     openFileReportingErrors,
+    type Tab,
   } from "./lib/stores/tabs";
   import { closePrompt } from "./lib/stores/closePrompt";
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
@@ -40,6 +40,8 @@
     appConfirmClose,
     fsExternalPathsAreDirs,
     fsGrantExternalFile,
+    localWorkspaceId,
+    standaloneWorkspaceId,
   } from "./lib/ipc/commands";
   import { initMenuBar } from "./lib/shell/MenuBar";
   import {
@@ -202,7 +204,7 @@
   // reset effect just cleared the previous project's state on its way out" —
   // without this guard, a naive write-on-every-change effect would overwrite
   // the new root's not-yet-loaded persisted session with the transient empty
-  // state `resetTabs()` produces mid-switch.
+  // state `resetLocalTabs()` produces mid-switch.
   let restoredForRoot: string | null = null;
 
   // Bumped every time the project-switch effect below actually fires,
@@ -678,17 +680,89 @@
     $terminalPosition === "left" ? ["terminal", "resizer", "editor"] : ["editor", "resizer", "terminal"],
   );
 
-  // A genuine project switch tears down every tab, editor pane, and
+  /** Clears every *local* open tab and the active-tab pointer, leaving any standalone tab (issue #325) untouched — used when switching projects. */
+  function resetLocalTabs(): void {
+    tabsState.update((s) => {
+      const kept = s.tabs.filter((t) => t.workspaceId === standaloneWorkspaceId());
+      const activeTabPath = kept.some((t) => t.path === s.activeTabPath) ? s.activeTabPath : (kept[0]?.path ?? null);
+      return { tabs: kept, activeTabPath };
+    });
+  }
+
+  /**
+   * Dedup + re-home a path present on both sides: the same file open
+   * standalone, whose directory is then opened as a project containing it.
+   * The live standalone tab (possibly dirty) wins over whatever
+   * `restoreEditorSession` freshly re-read from disk, and re-homes to
+   * ordinary local identity — its old grant on `StandaloneWorkspace` is left
+   * in place, unused, harmless. A standalone tab outside `newRoot` (the
+   * common case) passes through unchanged.
+   */
+  function mergeTabsAndReHome(standaloneTabs: Tab[], restoredTabs: Tab[], newRoot: string): Tab[] {
+    const restoredByPath = new Map(restoredTabs.map((t) => [t.path, t]));
+    const reHomed = standaloneTabs.map((t) => {
+      if (!isPathUnderOrEqual(t.path, newRoot)) return t;
+      restoredByPath.delete(t.path);
+      return { ...t, workspaceId: localWorkspaceId(), isExternal: false };
+    });
+    return [...reHomed, ...restoredByPath.values()];
+  }
+
+  /**
+   * Merges a surviving standalone pane subtree into a freshly restored (or
+   * brand-new) local pane tree as a new row-split leaf, checking BOTH sides
+   * for an existing row split so opposite-direction splits never nest on the
+   * same axis.
+   */
+  function mergeTrees(standalone: EditorPaneNode | null, localTree: EditorPaneNode | null): EditorPaneNode | null {
+    if (!standalone) return localTree;
+    if (!localTree) return standalone;
+
+    const localIsRow = localTree.type === "split" && localTree.direction === "row";
+    const standaloneIsRow = standalone.type === "split" && standalone.direction === "row";
+    const shrink = 0.25;
+
+    if (localIsRow && standaloneIsRow) {
+      return {
+        ...localTree,
+        children: [...localTree.children, ...standalone.children],
+        sizes: [...localTree.sizes.map((s) => s * (1 - shrink)), ...standalone.sizes.map((s) => s * shrink)],
+      };
+    }
+    if (localIsRow) {
+      return {
+        ...localTree,
+        children: [...localTree.children, standalone],
+        sizes: [...localTree.sizes.map((s) => s * (1 - shrink)), shrink],
+      };
+    }
+    if (standaloneIsRow) {
+      return {
+        ...standalone,
+        children: [localTree, ...standalone.children],
+        sizes: [1 - shrink, ...standalone.sizes.map((s) => s * shrink)],
+      };
+    }
+    return {
+      type: "split",
+      id: `split-${localTree.id}-${standalone.id}`,
+      direction: "row",
+      children: [localTree, standalone],
+      sizes: [1 - shrink, shrink],
+    };
+  }
+
+  // A genuine project switch tears down every *local* tab, editor pane, and
   // terminal session left over from the previous project — none of it
-  // belongs to the new root. Clearing `tabsState.tabs` is enough to reset
-  // the editor pane tree too, via the prune effect above
-  // (`pruneMissingTabs` collapses it to `null` once `openPaths` is empty,
-  // the same path already exercised by closing tabs one at a time).
-  // `terminalPaneTree`/`focusedPaneId` are local `$state`, not stores, so
-  // they can't be reset from `workspace.ts` and are nulled directly here
-  // instead; unmounting every `TerminalPane` runs each one's existing
-  // `onDestroy` (`ptyKill`), the same per-session cleanup a manual tab
-  // close already relies on.
+  // belongs to the new root. A standalone tab (issue #325) is never torn
+  // down by a project switch: `resetLocalTabs` leaves it in `tabsState`, and
+  // the prune effect above (which only removes a leaf whose tabs are no
+  // longer in `tabsState`) leaves its own leaf in `editorPaneTree` alone for
+  // the same reason. `terminalPaneTree`/`focusedPaneId` are local `$state`,
+  // not stores, so they can't be reset from `workspace.ts` and are nulled
+  // directly here instead; unmounting every `TerminalPane` runs each one's
+  // existing `onDestroy` (`ptyKill`), the same per-session cleanup a manual
+  // tab close already relies on.
   $effect(() => {
     const root = $workspace.root;
     if (root === previousWorkspaceRoot) return;
@@ -696,7 +770,7 @@
     restoredForRoot = null;
     switchToken += 1;
     const token = switchToken;
-    resetTabs();
+    resetLocalTabs();
     terminalPaneTree = null;
     focusedPaneId = null;
     if (root) {
@@ -709,11 +783,29 @@
         // then let the persistence-write effect below persist this stale
         // result under the *current* root's storage key.
         if (token !== switchToken) return;
-        if (restored) {
-          tabsState.set({ tabs: restored.tabs, activeTabPath: restored.activeTabPath });
-          editorPaneTree.set(restored.paneTree);
-          focusedEditorPaneId.set(restored.focusedPaneId);
-        }
+        const restoredTabs = restored?.tabs ?? [];
+
+        // Captured from inside the update below, BEFORE re-homing changes
+        // any tab's workspaceId — computing this from post-update state
+        // would exclude every re-homed path and prune it out of the very
+        // subtree this merge exists to preserve.
+        let survivingStandalonePaths: Set<string> = new Set();
+
+        tabsState.update((s) => {
+          const currentStandalone = s.tabs.filter((t) => t.workspaceId === standaloneWorkspaceId());
+          survivingStandalonePaths = new Set(currentStandalone.map((t) => t.path));
+          const merged = mergeTabsAndReHome(currentStandalone, restoredTabs, root);
+          const activeTabPath = restored?.activeTabPath ?? s.activeTabPath ?? merged[0]?.path ?? null;
+          return { tabs: merged, activeTabPath };
+        });
+
+        // Moves outside the `if (restored)` guard the old code had: the
+        // flagship scenario (a standalone tab surviving into a brand-new
+        // project with no persisted session at all, `restored === null`)
+        // still needs its own standalone subtree installed.
+        const standaloneSubtree = $editorPaneTree ? pruneMissingTabs($editorPaneTree, survivingStandalonePaths) : null;
+        editorPaneTree.set(mergeTrees(standaloneSubtree, restored?.paneTree ?? null));
+        if (restored?.focusedPaneId) focusedEditorPaneId.set(restored.focusedPaneId);
         restoredForRoot = root;
       });
     } else {
@@ -724,13 +816,22 @@
   // Persists the editor session (pane tree + focused pane) for the current
   // root whenever it changes — but only once `restoreEditorSession` above
   // has actually finished restoring this same root, per the guard comment
-  // on `restoredForRoot`.
+  // on `restoredForRoot`. Filters standalone paths out of what gets
+  // persisted (issue #325) — a standalone tab's identity is never tied to
+  // any project's own session. `untrack` on the `$tabsState` read is
+  // required — without it, this effect re-fires on every keystroke
+  // (`markDirty` rebuilds `tabsState.tabs` on every `docChanged`),
+  // continually resetting `saveEditorSession`'s ~400ms debounce.
   $effect(() => {
     const root = $workspace.root;
     const tree = $editorPaneTree;
     const focused = $focusedEditorPaneId;
     if (root && restoredForRoot === root) {
-      saveEditorSession(root, { paneTree: tree, focusedPaneId: focused });
+      const localPaths = new Set(
+        untrack(() => $tabsState.tabs.filter((t) => t.workspaceId !== standaloneWorkspaceId()).map((t) => t.path)),
+      );
+      const persistedTree = tree ? pruneMissingTabs(tree, localPaths) : null;
+      saveEditorSession(root, { paneTree: persistedTree, focusedPaneId: focused });
     }
   });
 
@@ -832,6 +933,42 @@
     }
   }
 
+  // Serializes handling of paths arriving from the OS (Dock-menu picks,
+  // `RunEvent::Opened` cold-launch/already-running opens, a real "Open With
+  // Atrium") so a burst of them (a multi-file "Open With Atrium") is handled
+  // one at a time in arrival order — a deterministic-ordering nicety, not a
+  // data-loss guard: standalone mode never mutates `$workspace.root`, so
+  // there is no session-restore race to serialize against here.
+  let osOpenChain: Promise<void> = Promise.resolve();
+  function handleOsOpenPath(path: string): void {
+    osOpenChain = osOpenChain.then(() => doHandleOsOpenPath(path));
+  }
+
+  /**
+   * Classifies `path` (Finding 2: a real file can now flow through the same
+   * `RunEvent::Opened`/Dock-menu path a folder always used to) and routes it
+   * accordingly: a directory opens as the workspace root, exactly as before;
+   * a file grants itself external access and opens standalone or as an
+   * ordinary local tab, depending on whether a project is currently open.
+   */
+  async function doHandleOsOpenPath(path: string): Promise<void> {
+    const [isDir] = await fsExternalPathsAreDirs([path]);
+    if (isDir) {
+      await openWorkspacePath(path);
+      return;
+    }
+
+    const root = get(workspace).root;
+    const targetWorkspaceId = root ? localWorkspaceId() : standaloneWorkspaceId();
+    try {
+      await fsGrantExternalFile(targetWorkspaceId, path);
+    } catch {
+      // Swallowed deliberately — openFileReportingErrors below surfaces its
+      // own, already-tested error via the standard toast.
+    }
+    openFileReportingErrors(path, undefined, targetWorkspaceId);
+  }
+
   onMount(() => {
     // The first-availability `$effect` above clamps terminalHeight AND
     // terminalWidth against the container every time `mainEl` becomes
@@ -863,7 +1000,7 @@
       }
       void refreshDirectoryContaining(event.path);
     });
-    void onDockOpenPath((path) => void openWorkspacePath(path));
+    void onDockOpenPath((path) => handleOsOpenPath(path));
     void onDragDropEvent((event) => {
       if (event.type === "leave") {
         setDragOverTargetDir(null);
@@ -905,8 +1042,8 @@
       }
       closePrompt.set({ kind: "window", paths: dirty.map((t) => t.path) });
     });
-    void workspaceTakePendingOpen().then((path) => {
-      if (path) void openWorkspacePath(path);
+    void workspaceTakePendingOpen().then((paths) => {
+      for (const path of paths) handleOsOpenPath(path);
     });
     return () => {
       window.removeEventListener("resize", handleWindowResize);
@@ -918,16 +1055,23 @@
 <KeyboardShortcutsDialog />
 <ErrorToast />
 <ExplorerDragPreview />
+<!--
+  UnsavedChangesDialog is hoisted out here, unconditionally — it used to sit
+  inside the root-gated {:else} below, so with no project open (issue #325)
+  `onCloseRequested` would set the close prompt and nothing would render it,
+  silently preventing the window from closing. Safety-critical, not
+  incidental restructuring.
+-->
+<UnsavedChangesDialog />
 <div class="window">
   <TitleBar />
-  {#if !$workspace.root}
+  {#if !$workspace.root && $tabsState.tabs.length === 0}
     <WelcomeScreen />
   {:else}
     <SearchOverlay />
-    <UnsavedChangesDialog />
     <div class="app-shell">
     <main class="app" bind:this={appEl}>
-      {#if $explorerVisible}
+      {#if $explorerVisible && $workspace.root}
         <div class="explorer" style={`width: ${explorerWidth}px`}>
           <FileTree />
         </div>
@@ -992,7 +1136,9 @@
                   </div>
                 {:else}
                   <div class="terminal-empty">
-                    <button class="new-tab" onclick={newTerminalTab}>+ New Terminal</button>
+                    <!-- Disabled with no workspace root (issue #325): newTerminalTab already
+                         no-ops without one, since a standalone-only session has nothing to cd into. -->
+                    <button class="new-tab" onclick={newTerminalTab} disabled={!$workspace.root}>+ New Terminal</button>
                   </div>
                 {/if}
               </div>
@@ -1115,6 +1261,10 @@
   }
   .terminal-empty .new-tab:hover {
     opacity: 1;
+  }
+  .terminal-empty .new-tab:disabled {
+    cursor: default;
+    opacity: 0.35;
   }
   .terminal-area {
     flex-shrink: 0;

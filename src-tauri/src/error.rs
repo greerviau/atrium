@@ -30,6 +30,8 @@ pub enum AppError {
     FileTooLarge { path: String, size: u64, limit: u64 },
     #[error("'{0}' has changed since it was opened — close and reopen it to continue")]
     ExternalFileChanged(String),
+    #[error("{0} — this is a standalone workspace with no root; only explicitly granted files are reachable")]
+    NoWorkspaceRoot(String),
 }
 
 /// Formats a byte count as human-readable mebibytes (e.g. `12.3 MiB`) for
@@ -52,6 +54,7 @@ impl AppError {
             AppError::Other(_) => "OTHER",
             AppError::FileTooLarge { .. } => "FILE_TOO_LARGE",
             AppError::ExternalFileChanged(_) => "EXTERNAL_FILE_CHANGED",
+            AppError::NoWorkspaceRoot(_) => "NO_WORKSPACE_ROOT",
         }
     }
 }

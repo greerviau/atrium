@@ -32,6 +32,7 @@ vi.mock("../../src/lib/ipc/commands", () => ({
   fsReadFile: vi.fn(),
   fsWriteFile: vi.fn(),
   localWorkspaceId: () => "local",
+  standaloneWorkspaceId: () => "standalone",
   isAppError: (value: unknown): value is { code: string; message: string } =>
     typeof value === "object" && value !== null && "code" in value && "message" in value,
 }));
@@ -39,6 +40,7 @@ vi.mock("../../src/lib/ipc/commands", () => ({
 function markdownTab(path: string, overrides: Partial<Tab> = {}): Tab {
   return {
     path,
+    workspaceId: "local",
     mode: "markdown",
     savedDoc: "",
     isDirty: false,
@@ -53,6 +55,7 @@ function markdownTab(path: string, overrides: Partial<Tab> = {}): Tab {
 function codeTab(path: string, overrides: Partial<Tab> = {}): Tab {
   return {
     path,
+    workspaceId: "local",
     mode: "code",
     savedDoc: "",
     isDirty: false,
@@ -207,6 +210,36 @@ describe("openFile", () => {
 
     workspace.set({ id: "local", root: null });
   });
+
+  // Test 1 (frontend half, issue #325): the workspaceId argument actually
+  // passed to fsReadFile, not merely that a mocked open resolves — a mock
+  // decoupled from the real argument would pass even if `openFile` ignored
+  // its `workspaceId` parameter and always read through "local".
+  it("reads through the given workspaceId, not a hardcoded local", async () => {
+    await openFile("/tmp/standalone-note.md", undefined, "standalone");
+
+    expect(commands.fsReadFile).toHaveBeenCalledWith("standalone", "/tmp/standalone-note.md");
+  });
+
+  it("defaults workspaceId to local when the caller doesn't pass one", async () => {
+    await openFile("/proj/notes.md");
+
+    expect(commands.fsReadFile).toHaveBeenCalledWith("local", "/proj/notes.md");
+  });
+
+  // Regression test for the isExternal bug found while designing issue
+  // #325: `isPathUnderOrEqual(path, root ?? "")` degenerates to a bare
+  // `startsWith("/")` check when `root` is null, so a standalone open (no
+  // workspace root at all) would wrongly compute `isExternal: false`
+  // without the `workspaceId !== localWorkspaceId()` short-circuit.
+  it("derives isExternal: true for a standalone open with no workspace root, not the isPathUnderOrEqual('', ...) degenerate case", async () => {
+    workspace.set({ id: "local", root: null });
+
+    await openFile("/tmp/standalone-note.md", undefined, "standalone");
+
+    const tab = get(tabsState).tabs.find((t) => t.path === "/tmp/standalone-note.md");
+    expect(tab?.isExternal).toBe(true);
+  });
 });
 
 describe("openFileReportingErrors", () => {
@@ -270,6 +303,34 @@ describe("reconcileExternalChange / reloadFromDisk / dismissConflict", () => {
     expect(tab.savedDoc).toBe("original");
     expect(tab.isDirty).toBe(true);
     expect(commands.fsReadFile).not.toHaveBeenCalled();
+  });
+
+  // Test 1 (frontend half, issue #325) — reconcileExternalChange/reloadFromDisk
+  // read through the *tab's own* workspaceId, not a hardcoded "local".
+  it("reconcileExternalChange reads through the tab's own workspaceId", async () => {
+    tabsState.set({
+      tabs: [codeTab("/tmp/standalone.md", { workspaceId: "standalone", savedDoc: "old", isDirty: false })],
+      activeTabPath: "/tmp/standalone.md",
+    });
+    vi.mocked(commands.fsReadFile).mockResolvedValue("new disk contents");
+
+    await reconcileExternalChange("/tmp/standalone.md");
+
+    expect(commands.fsReadFile).toHaveBeenCalledWith("standalone", "/tmp/standalone.md");
+  });
+
+  it("reloadFromDisk reads through the tab's own workspaceId", async () => {
+    tabsState.set({
+      tabs: [
+        codeTab("/tmp/standalone.md", { workspaceId: "standalone", savedDoc: "original", isDirty: true, hasExternalConflict: true }),
+      ],
+      activeTabPath: "/tmp/standalone.md",
+    });
+    vi.mocked(commands.fsReadFile).mockResolvedValue("disk contents");
+
+    await reloadFromDisk("/tmp/standalone.md");
+
+    expect(commands.fsReadFile).toHaveBeenCalledWith("standalone", "/tmp/standalone.md");
   });
 
   it("reloadFromDisk on a conflicted tab clears isDirty and hasExternalConflict and adopts disk contents", async () => {
@@ -697,6 +758,20 @@ describe("saveTab", () => {
     expect(tab.isDeleted).toBe(false);
     expect(tab.isDirty).toBe(false);
     expect(tab.savedDoc).toBe("new contents");
+  });
+
+  // Test 1 (frontend half, issue #325) — the exact scenario the plan names:
+  // "assert the workspaceId argument actually passed to fsWriteFile for the
+  // surviving tab, not merely that a mocked save resolves."
+  it("writes through the tab's own workspaceId, not a hardcoded local", async () => {
+    tabsState.set({
+      tabs: [codeTab("/tmp/standalone.md", { workspaceId: "standalone" })],
+      activeTabPath: "/tmp/standalone.md",
+    });
+
+    await saveTab("/tmp/standalone.md", "new contents");
+
+    expect(commands.fsWriteFile).toHaveBeenCalledWith("standalone", "/tmp/standalone.md", "new contents");
   });
 });
 

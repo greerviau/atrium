@@ -160,6 +160,10 @@ export function reconcileRestoredSession(
     const mode = modeForPath(path);
     return {
       path,
+      // A restored project session only ever contains local tabs by
+      // construction — a standalone tab is never persisted into a project's
+      // own session (see `App.svelte`'s persistence-write effect).
+      workspaceId: localWorkspaceId(),
       mode,
       savedDoc: readable.get(path) as string,
       isDirty: false,

@@ -21,7 +21,7 @@ async function waitForIdle(): Promise<void> {
 
 function seedTab(): Tab {
   const tab: Tab = {
-    path: PATH,
+    path: PATH, workspaceId: "local",
     mode: "code",
     savedDoc: "line one\nline two\n",
     isDirty: false,

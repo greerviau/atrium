@@ -26,7 +26,7 @@ const V1 = "v1\n";
 
 function seedTab(overrides: Partial<Tab> = {}): void {
   const tab: Tab = {
-    path: PATH,
+    path: PATH, workspaceId: "local",
     mode: "markdown",
     savedDoc: V1,
     isDirty: false,

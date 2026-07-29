@@ -30,7 +30,7 @@ const BASIC_TABLE = "| Name  | Role     |\n| ----- | -------- |\n| Alice | Engin
 
 function seedMarkdownTab(content: string): void {
   const tab: Tab = {
-    path: MD_PATH,
+    path: MD_PATH, workspaceId: "local",
     mode: "markdown",
     savedDoc: content,
     isDirty: false,

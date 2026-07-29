@@ -65,29 +65,29 @@
   </svg>
 {/snippet}
 
-{#if $workspace.root}
-  <div class="status-bar">
-    <div class="status-group actions">
-      <button
-        class="status-btn"
-        class:active={$explorerVisible}
-        onclick={toggleExplorerVisible}
-        aria-pressed={$explorerVisible}
-        aria-label={`Toggle Explorer (${SHORTCUT_LABELS.toggleExplorer})`}
-        use:tooltip={{ label: "Toggle Explorer", shortcut: SHORTCUT_LABELS.toggleExplorer }}
-      >
-        {@render explorerIcon()}
-      </button>
-      <button
-        class="status-btn"
-        class:active={$terminalVisible}
-        onclick={toggleTerminalVisible}
-        aria-pressed={$terminalVisible}
-        aria-label={`Toggle Terminal (${SHORTCUT_LABELS.toggleTerminal})`}
-        use:tooltip={{ label: "Toggle Terminal", shortcut: SHORTCUT_LABELS.toggleTerminal }}
-      >
-        {@render terminalIcon()}
-      </button>
+<div class="status-bar">
+  <div class="status-group actions">
+    <button
+      class="status-btn"
+      class:active={$explorerVisible}
+      onclick={toggleExplorerVisible}
+      aria-pressed={$explorerVisible}
+      aria-label={`Toggle Explorer (${SHORTCUT_LABELS.toggleExplorer})`}
+      use:tooltip={{ label: "Toggle Explorer", shortcut: SHORTCUT_LABELS.toggleExplorer }}
+    >
+      {@render explorerIcon()}
+    </button>
+    <button
+      class="status-btn"
+      class:active={$terminalVisible}
+      onclick={toggleTerminalVisible}
+      aria-pressed={$terminalVisible}
+      aria-label={`Toggle Terminal (${SHORTCUT_LABELS.toggleTerminal})`}
+      use:tooltip={{ label: "Toggle Terminal", shortcut: SHORTCUT_LABELS.toggleTerminal }}
+    >
+      {@render terminalIcon()}
+    </button>
+    {#if $workspace.root}
       <button
         class="status-btn"
         onclick={() => openSearch()}
@@ -96,26 +96,26 @@
       >
         {@render searchIcon()}
       </button>
-      <button
-        class="status-btn"
-        onclick={openSettings}
-        aria-label={`Settings (${SHORTCUT_LABELS.settings})`}
-        use:tooltip={{ label: "Settings", shortcut: SHORTCUT_LABELS.settings }}
-      >
-        {@render settingsIcon()}
-      </button>
-    </div>
-    {#if activeTab}
-      <div class="status-group indicators">
-        <span class="status-item">{languageLabel(activeTab.path)}</span>
-        <span class="status-divider">│</span>
-        <span class="status-item mono">{cursorText}</span>
-        <span class="status-divider">│</span>
-        <span class="status-item mono path" title={relativePath(activeTab.path)}>{relativePath(activeTab.path)}</span>
-      </div>
     {/if}
+    <button
+      class="status-btn"
+      onclick={openSettings}
+      aria-label={`Settings (${SHORTCUT_LABELS.settings})`}
+      use:tooltip={{ label: "Settings", shortcut: SHORTCUT_LABELS.settings }}
+    >
+      {@render settingsIcon()}
+    </button>
   </div>
-{/if}
+  {#if activeTab}
+    <div class="status-group indicators">
+      <span class="status-item">{languageLabel(activeTab.path)}</span>
+      <span class="status-divider">│</span>
+      <span class="status-item mono">{cursorText}</span>
+      <span class="status-divider">│</span>
+      <span class="status-item mono path" title={relativePath(activeTab.path)}>{relativePath(activeTab.path)}</span>
+    </div>
+  {/if}
+</div>
 
 <style>
   .status-bar {

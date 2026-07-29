@@ -1,4 +1,5 @@
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
+import { workspace } from "../stores/workspace";
 
 /**
  * Whether the project-wide search overlay is open, and which mode it's in.
@@ -19,7 +20,16 @@ export const searchOverlay = writable<{ open: boolean; mode: SearchMode }>({
   mode: "content",
 });
 
+/**
+ * Opens the overlay — a no-op with no project open. Search only ever
+ * operates over a workspace root, so there is nothing for it to search in
+ * standalone mode (issue #325); `StatusBar`'s search button is already
+ * gated on `$workspace.root`, and `MenuBar.ts`'s two menu events are already
+ * gated the same way, so this is belt-and-suspenders against any other
+ * caller reaching it with no project open.
+ */
 export function openSearch(mode: SearchMode = "content"): void {
+  if (!get(workspace).root) return;
   searchOverlay.set({ open: true, mode });
 }
 

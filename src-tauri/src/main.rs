@@ -18,6 +18,7 @@ mod workspace;
 use state::AppState;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{Emitter, Manager};
+use workspace::Workspace;
 
 /// Builds the native menu bar: `Atrium` (About, Settings…, Quit), `File`
 /// (Open Folder, Save, Close Tab, New Terminal Tab), `Edit` (standard
@@ -334,6 +335,35 @@ fn main() {
             let handle = app.handle().clone();
             app.manage(AppState::new(handle.clone()));
 
+            // `StandaloneWorkspace` (issue #325) is registered once, here,
+            // and never torn down, replaced, or reconstructed by any
+            // project open/close/switch — see its own module doc comment
+            // for why that's the load-bearing precondition a standalone
+            // tab's authorization and live-change watch depend on surviving
+            // a project switch. Wired up exactly like `workspace_set_root`
+            // wires up each `LocalWorkspace` it creates: its own `mpsc`
+            // channel, `watch(tx)` called once, and a spawned task pumping
+            // every received event into `app_handle.emit("fs:changed", ..)`
+            // — without this pump, `watch(tx)` alone only sends into a
+            // receiver nobody reads.
+            {
+                let standalone = workspace::standalone::StandaloneWorkspace::new();
+                let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+                standalone.watch(tx);
+                let app_handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    while let Some(event) = rx.recv().await {
+                        let _ = app_handle.emit("fs:changed", event);
+                    }
+                });
+                if let Some(state) = handle.try_state::<AppState>() {
+                    state.workspaces.lock().unwrap().insert(
+                        workspace::standalone::STANDALONE_WORKSPACE_ID.to_string(),
+                        std::sync::Arc::new(standalone),
+                    );
+                }
+            }
+
             let menu = build_menu(&handle)?;
             app.set_menu(menu)?;
 
@@ -363,7 +393,7 @@ fn main() {
                         // Records the most recent real, native OS drop's path
                         // set and timestamp, observed here on the Rust side
                         // rather than only in the webview — see
-                        // `commands::fs::require_recent_drop`, which gates
+                        // `commands::fs::require_recent_external_open`, which gates
                         // `fs_grant_external_file` on this, and §4.9 of the
                         // drag-a-file-into-the-editor plan for why a grant
                         // must be authorized by a backend-observed drop
@@ -422,17 +452,23 @@ fn main() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
-        // `RunEvent::Opened` fires both when a Dock-menu pick reaches an
-        // already-running app and (per plan section 4.3) during a cold
-        // launch, before the frontend's event listeners exist yet;
-        // `macos_dock::open_path` handles both by stashing the path for
-        // `workspace_take_pending_open` and emitting it live.
+        // `RunEvent::Opened` fires both when a Dock-menu pick (or a real "Open
+        // With Atrium") reaches an already-running app and (per plan section
+        // 4.3) during a cold launch, before the frontend's event listeners
+        // exist yet; `macos_dock::open_paths` handles both by stashing every
+        // path for `workspace_take_pending_open` and emitting each one live.
+        // Every url in this event is batched into one `open_paths` call
+        // (rather than one call per url) so a multi-file "Open With Atrium"
+        // records all of them as a single `recent_os_open` set.
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Opened { ref urls } = event {
-            for url in urls {
-                if let Ok(path) = url.to_file_path() {
-                    macos_dock::open_path(path.to_string_lossy().into_owned());
-                }
+            let paths: Vec<String> = urls
+                .iter()
+                .filter_map(|url| url.to_file_path().ok())
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect();
+            if !paths.is_empty() {
+                macos_dock::open_paths(paths);
             }
         }
 

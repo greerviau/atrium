@@ -101,7 +101,7 @@ describe("EditorPane theming (regression guard against section 2.4 recurring)", 
     tabsState.set({
       tabs: [
         {
-          path: "sample.ts",
+          path: "sample.ts", workspaceId: "local",
           mode: "code",
           savedDoc: "const x = 1;\n",
           isDirty: false,

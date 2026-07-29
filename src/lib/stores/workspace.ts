@@ -1,5 +1,5 @@
 import { get, writable } from "svelte/store";
-import { localWorkspaceId, workspaceOpenFolderDialog, workspaceSetRoot } from "../ipc/commands";
+import { localWorkspaceId, standaloneWorkspaceId, workspaceOpenFolderDialog, workspaceSetRoot } from "../ipc/commands";
 import { loadRecents } from "./recents";
 // `tabs.ts` already imports `workspace` from this module (used inside
 // `openFile`'s body via `get(workspace).root`), so this import closes a
@@ -44,7 +44,11 @@ async function performWorkspaceSwitch(path: string): Promise<void> {
 /** Registers `path` as the workspace root directly, skipping the native picker (recent-projects rows, Dock menu). */
 export async function openWorkspacePath(path: string): Promise<void> {
   if (path === get(workspace).root) return;
-  const dirty = get(tabsState).tabs.filter((t) => t.isDirty);
+  // A dirty standalone tab (issue #325) never blocks a project switch — safe
+  // because `StandaloneWorkspace` is never torn down by one, so a surviving
+  // dirty standalone tab stays authorized and watched, and is merged back in
+  // by `App.svelte`'s restore handler once the switch completes.
+  const dirty = get(tabsState).tabs.filter((t) => t.isDirty && t.workspaceId !== standaloneWorkspaceId());
   if (dirty.length > 0) {
     closePrompt.set({ kind: "workspace", paths: dirty.map((t) => t.path), targetPath: path });
     return;

@@ -59,7 +59,7 @@ const MAX_COLLISION_ATTEMPTS: usize = 999;
 /// already found that even a ~1 MB file is expensive enough to need a
 /// deferred render, so 10 MiB is a hard floor well below the freeze/OOM
 /// range a multi-GB file would otherwise trigger.
-const MAX_READABLE_FILE_SIZE_BYTES: u64 = 10 * 1024 * 1024;
+pub(crate) const MAX_READABLE_FILE_SIZE_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Builds the `grep-regex` matcher for a query: a real regex when
 /// `options.regex` is set, otherwise `fixed_strings` tells `grep-regex` to
@@ -855,7 +855,7 @@ fn is_writable(path: &Path) -> bool {
 /// with `PermissionDenied` up front, rather than being silently clobbered by
 /// a `rename(2)` that only checks the containing directory's permissions,
 /// not the file it's about to replace.
-fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
+pub(crate) fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
     let dir = target.parent().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,

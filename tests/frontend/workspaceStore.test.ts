@@ -8,6 +8,7 @@ import * as commands from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
   localWorkspaceId: () => "local",
+  standaloneWorkspaceId: () => "standalone",
   workspaceSetRoot: vi.fn(),
   workspaceOpenFolderDialog: vi.fn(),
   workspaceGetRecents: vi.fn(),
@@ -15,9 +16,10 @@ vi.mock("../../src/lib/ipc/commands", () => ({
 
 const project = { path: "/projects/demo", name: "demo", lastOpenedAt: 1 };
 
-function dirtyTab(path: string): Tab {
+function dirtyTab(path: string, workspaceId = "local"): Tab {
   return {
     path,
+    workspaceId,
     mode: "code",
     savedDoc: "",
     isDirty: true,
@@ -87,6 +89,26 @@ describe("openWorkspacePath", () => {
       paths: ["/a.md", "/b.md"],
       targetPath: project.path,
     });
+  });
+
+  // Test 9 — the narrowed dirty check's both directions (issue #325): a
+  // dirty local tab still blocks a switch; a dirty standalone tab does not,
+  // since `StandaloneWorkspace` is never torn down by one and stays
+  // authorized/watched across it.
+  it("a dirty local tab still blocks a switch, but a dirty standalone tab does not", async () => {
+    vi.mocked(commands.workspaceSetRoot).mockResolvedValue(undefined);
+    vi.mocked(commands.workspaceGetRecents).mockResolvedValue([project]);
+    workspace.set({ id: "local", root: "/projects/old" });
+    tabsState.set({
+      tabs: [dirtyTab("/standalone.md", "standalone")],
+      activeTabPath: "/standalone.md",
+    });
+
+    await openWorkspacePath(project.path);
+
+    expect(commands.workspaceSetRoot).toHaveBeenCalledWith("local", project.path);
+    expect(get(workspace)).toEqual({ id: "local", root: project.path });
+    expect(get(closePrompt)).toBeNull();
   });
 });
 
