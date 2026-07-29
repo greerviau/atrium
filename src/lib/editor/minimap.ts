@@ -17,6 +17,10 @@ const minimapBaseTheme = EditorView.baseTheme({
   ".cm-minimap-gutter, .cm-minimap-inner": {
     backgroundColor: "var(--atrium-gutter-bg)",
   },
+  ".cm-minimap-overlay-container": {
+    userSelect: "none",
+    WebkitUserSelect: "none",
+  },
 });
 
 function createMinimapDom(): { dom: HTMLElement } {

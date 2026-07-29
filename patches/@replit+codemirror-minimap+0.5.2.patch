@@ -1,5 +1,5 @@
 diff --git a/node_modules/@replit/codemirror-minimap/dist/index.cjs b/node_modules/@replit/codemirror-minimap/dist/index.cjs
-index 3f0c98a..a804dd4 100644
+index 3f0c98a..2b376b3 100644
 --- a/node_modules/@replit/codemirror-minimap/dist/index.cjs
 +++ b/node_modules/@replit/codemirror-minimap/dist/index.cjs
 @@ -108,9 +108,12 @@ const OverlayView = view.ViewPlugin.fromClass(class {
@@ -18,7 +18,7 @@ index 3f0c98a..a804dd4 100644
          // Attach the overlay elements to the minimap
          const inner = view.dom.querySelector(".cm-minimap-inner");
          if (inner) {
-@@ -123,10 +126,13 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+@@ -123,10 +126,15 @@ const OverlayView = view.ViewPlugin.fromClass(class {
      }
      remove() {
          if (this.container) {
@@ -31,11 +31,13 @@ index 3f0c98a..a804dd4 100644
              this.container.remove();
 +            if (this._isDragging) {
 +                document.body.style.cursor = "";
++                document.body.style.userSelect = "";
++                document.body.style.webkitUserSelect = "";
 +            }
          }
      }
      update(update) {
-@@ -192,28 +198,37 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+@@ -192,28 +200,39 @@ const OverlayView = view.ViewPlugin.fromClass(class {
          if (!this.container) {
              return;
          }
@@ -89,19 +91,30 @@ index 3f0c98a..a804dd4 100644
 +        this._isDragging = true;
 +        this.container.classList.add("cm-minimap-overlay-active");
 +        document.body.style.cursor = "default";
++        document.body.style.userSelect = "none";
++        document.body.style.webkitUserSelect = "none";
      }
      onMouseUp(_event) {
          // Stop dragging on mouseup
-@@ -221,6 +236,7 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+@@ -221,9 +240,16 @@ const OverlayView = view.ViewPlugin.fromClass(class {
              this._dragStartY = undefined;
              this._isDragging = false;
              this.container.classList.remove("cm-minimap-overlay-active");
 +            document.body.style.cursor = "";
++            document.body.style.userSelect = "";
++            document.body.style.webkitUserSelect = "";
          }
      }
      onMouseMove(event) {
++        if (this._isDragging && (event.buttons & 1) === 0) {
++            this.onMouseUp(event);
++            return;
++        }
+         if (!this._isDragging || !this.dom) {
+             return;
+         }
 diff --git a/node_modules/@replit/codemirror-minimap/dist/index.js b/node_modules/@replit/codemirror-minimap/dist/index.js
-index c7c9a04..fab95fd 100644
+index c7c9a04..9580e3a 100644
 --- a/node_modules/@replit/codemirror-minimap/dist/index.js
 +++ b/node_modules/@replit/codemirror-minimap/dist/index.js
 @@ -100,9 +100,12 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
@@ -120,7 +133,7 @@ index c7c9a04..fab95fd 100644
          // Attach the overlay elements to the minimap
          const inner = view.dom.querySelector(".cm-minimap-inner");
          if (inner) {
-@@ -115,10 +118,13 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+@@ -115,10 +118,15 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
      }
      remove() {
          if (this.container) {
@@ -133,11 +146,13 @@ index c7c9a04..fab95fd 100644
              this.container.remove();
 +            if (this._isDragging) {
 +                document.body.style.cursor = "";
++                document.body.style.userSelect = "";
++                document.body.style.webkitUserSelect = "";
 +            }
          }
      }
      update(update) {
-@@ -184,28 +190,37 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+@@ -184,28 +192,39 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
          if (!this.container) {
              return;
          }
@@ -191,14 +206,25 @@ index c7c9a04..fab95fd 100644
 +        this._isDragging = true;
 +        this.container.classList.add("cm-minimap-overlay-active");
 +        document.body.style.cursor = "default";
++        document.body.style.userSelect = "none";
++        document.body.style.webkitUserSelect = "none";
      }
      onMouseUp(_event) {
          // Stop dragging on mouseup
-@@ -213,6 +228,7 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+@@ -213,9 +232,16 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
              this._dragStartY = undefined;
              this._isDragging = false;
              this.container.classList.remove("cm-minimap-overlay-active");
 +            document.body.style.cursor = "";
++            document.body.style.userSelect = "";
++            document.body.style.webkitUserSelect = "";
          }
      }
      onMouseMove(event) {
++        if (this._isDragging && (event.buttons & 1) === 0) {
++            this.onMouseUp(event);
++            return;
++        }
+         if (!this._isDragging || !this.dom) {
+             return;
+         }

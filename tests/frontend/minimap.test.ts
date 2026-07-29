@@ -9,6 +9,8 @@ afterEach(() => {
   view?.destroy();
   view = undefined;
   document.body.style.cursor = "";
+  document.body.style.userSelect = "";
+  document.body.style.webkitUserSelect = "";
 });
 
 function mount(enabled: boolean): HTMLElement {
@@ -84,6 +86,14 @@ describe("minimapExtension", () => {
     }
   });
 
+  it("renders the -webkit-user-select guard on the overlay container", () => {
+    mount(true);
+    const css = allStyleText();
+    const containerRules = css.split("\n").filter((line) => line.includes(".cm-minimap-overlay-container"));
+    expect(containerRules.length, `expected at least one .cm-minimap-overlay-container rule, got:\n${css}`).toBeGreaterThan(0);
+    expect(containerRules.some((rule) => rule.includes("-webkit-user-select: none"))).toBe(true);
+  });
+
   it("pins the cursor to default on a container mousedown and clears it on mouseup", () => {
     const container = mount(true);
     const overlayContainer = container.querySelector(".cm-minimap-overlay-container");
@@ -96,6 +106,57 @@ describe("minimapExtension", () => {
     expect(document.body.style.cursor).toBe("");
   });
 
+  it("disables user-select on the body for a container mousedown and restores it on mouseup", () => {
+    const container = mount(true);
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container");
+    expect(overlayContainer).not.toBeNull();
+
+    overlayContainer!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    expect(document.body.style.userSelect).toBe("none");
+    expect(document.body.style.webkitUserSelect).toBe("none");
+
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+    expect(document.body.style.userSelect).toBe("");
+    expect(document.body.style.webkitUserSelect).toBe("");
+  });
+
+  it("clears the body user-select guard when the view is destroyed mid-drag", () => {
+    const container = mount(true);
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container");
+    expect(overlayContainer).not.toBeNull();
+
+    overlayContainer!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    expect(document.body.style.userSelect).toBe("none");
+    expect(document.body.style.webkitUserSelect).toBe("none");
+
+    view?.destroy();
+    view = undefined;
+    expect(document.body.style.userSelect).toBe("");
+    expect(document.body.style.webkitUserSelect).toBe("");
+  });
+
+  it("self-heals a drag left dangling when the primary button was released outside the window", () => {
+    const container = mount(true);
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container");
+    expect(overlayContainer).not.toBeNull();
+
+    overlayContainer!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    expect(overlayContainer!.classList.contains("cm-minimap-overlay-active")).toBe(true);
+    expect(document.body.style.cursor).toBe("default");
+
+    // The mouseup happened outside the window, so no mouseup event was ever
+    // dispatched; the next mousemove back inside the window reports buttons
+    // === 0, which is the only signal this recovery path has to go on.
+    window.dispatchEvent(
+      new MouseEvent("mousemove", { bubbles: true, cancelable: true, buttons: 0, clientY: 50 }),
+    );
+
+    expect(overlayContainer!.classList.contains("cm-minimap-overlay-active")).toBe(false);
+    expect(document.body.style.cursor).toBe("");
+    expect(document.body.style.userSelect).toBe("");
+    expect(document.body.style.webkitUserSelect).toBe("");
+  });
+
   it("prevents default on a mousemove following a mousedown on the container (not just the indicator)", () => {
     const container = mount(true);
     const overlayContainer = container.querySelector(".cm-minimap-overlay-container");
@@ -105,7 +166,13 @@ describe("minimapExtension", () => {
     // inner .cm-minimap-overlay indicator rectangle.
     overlayContainer!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
 
-    const moveEvent = new MouseEvent("mousemove", { bubbles: true, cancelable: true, button: 0, clientY: 50 });
+    const moveEvent = new MouseEvent("mousemove", {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 1,
+      clientY: 50,
+    });
     window.dispatchEvent(moveEvent);
     expect(moveEvent.defaultPrevented).toBe(true);
 
@@ -135,9 +202,12 @@ describe("minimapExtension", () => {
       new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, clientY: 400 }),
     );
     const afterJump = g.read();
+    expect(afterJump).toBeGreaterThan(0);
 
     // Nudge the pointer 2px, as any real click-and-drag does.
-    window.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, clientY: 402 }));
+    window.dispatchEvent(
+      new MouseEvent("mousemove", { bubbles: true, cancelable: true, buttons: 1, clientY: 402 }),
+    );
     const afterNudge = g.read();
 
     window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
