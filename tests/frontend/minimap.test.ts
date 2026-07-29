@@ -14,6 +14,11 @@ afterEach(() => {
   document.body.style.cursor = "";
   document.body.style.userSelect = "";
   document.body.style.webkitUserSelect = "";
+  // Belt-and-suspenders: view?.destroy() above should already have run
+  // _endDrag() and removed this if a test left a drag mid-flight, but a
+  // leaked class here would silently corrupt every dispatchSelectStart()
+  // baseline in whichever test runs next, so reset it unconditionally too.
+  document.body.classList.remove("cm-minimap-dragging-active");
 });
 
 // Attached to document.body (not left detached) because a mousemove
@@ -456,7 +461,15 @@ describe("minimapExtension", () => {
     const contentB = containerB.querySelector(".cm-content") as HTMLElement;
 
     try {
-      expect(contentB.querySelector(".cm-minimap-overlay-container")).toBeNull();
+      // Pinning the premise this test depends on: pane B genuinely has no
+      // minimap of its own. Querying from contentB here would be vacuous —
+      // the overlay container is a DOM SIBLING of .cm-content, never a
+      // descendant of it (see minimapClass's own create(), which inserts
+      // the gutter via view.scrollDOM.insertBefore(..., contentDOM.nextSibling)),
+      // so `contentB.querySelector(...)` is null regardless of whether B
+      // has a minimap at all. Querying from containerB (the pane's own
+      // root) is what actually distinguishes the two cases.
+      expect(containerB.querySelector(".cm-minimap-overlay-container")).toBeNull();
       expect(dispatchSelectStart(contentB)).toBe(false);
 
       // Drag starts on pane A's minimap; the pointer crosses into pane B's
