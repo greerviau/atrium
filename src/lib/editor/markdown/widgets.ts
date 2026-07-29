@@ -5,7 +5,7 @@ import { openExternalLink } from "../../ipc/commands";
 import { showErrorToast, describeError } from "../../stores/errorToast";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import path from "../../util/path";
-import { loadMermaid } from "./mermaid";
+import { cacheMermaidRender, cachedMermaidRender, loadMermaid } from "./mermaid";
 import { CLASS } from "./theme";
 
 /**
@@ -194,13 +194,15 @@ let nextMermaidWidgetId = 0;
 
 /**
  * Replaces a ` ```mermaid ` fenced block with a rendered diagram, mirroring
- * `ImageWidget`'s synchronous-`toDOM`-then-async-mutate pattern. `eq()` is
- * content-based (source text only) so CM6 reuses the same DOM node — and
- * Mermaid never re-renders — across any decoration recompute that doesn't
- * change this particular block's text. On invalid syntax, the container
- * shows a distinct error panel with Mermaid's own parser message instead.
- * Clicking the container (rendered diagram or error panel alike) drops the
- * cursor into the raw source, matching `ImageWidget`'s click-to-edit.
+ * `ImageWidget`'s synchronous-`toDOM`-then-async-mutate pattern, except that a
+ * diagram already rendered once is restored synchronously from
+ * `renderedDiagrams` (see its docstring). `eq()` is content-based (source text
+ * only) so CM6 reuses the same DOM node — and Mermaid never re-renders —
+ * across any decoration recompute that doesn't change this particular block's
+ * text. On invalid syntax, the container shows a distinct error panel with
+ * Mermaid's own parser message instead. Clicking the container (rendered
+ * diagram or error panel alike) drops the cursor into the raw source, matching
+ * `ImageWidget`'s click-to-edit.
  */
 export class MermaidWidget extends WidgetType {
   private destroyed = false;
@@ -226,10 +228,17 @@ export class MermaidWidget extends WidgetType {
       view.focus();
     });
 
+    const alreadyRendered = cachedMermaidRender(this.source);
+    if (alreadyRendered !== undefined) {
+      container.innerHTML = alreadyRendered;
+      return container;
+    }
+
     const id = `cm-mermaid-${nextMermaidWidgetId++}`;
     loadMermaid()
       .then((mod) => mod.default.render(id, this.source))
       .then(({ svg }) => {
+        cacheMermaidRender(this.source, svg);
         if (this.destroyed) {
           return;
         }
