@@ -51,22 +51,23 @@ describe("minimap Overlay window-listener leak fix", () => {
     vi.restoreAllMocks();
   });
 
-  it("does not accumulate window mouseup/mousemove listeners across repeated tab close/reopen", async () => {
+  it("does not accumulate window mouseup/mousemove/blur listeners across repeated tab close/reopen", async () => {
     const registered: Record<string, EventListenerOrEventListenerObject[]> = {
       mouseup: [],
       mousemove: [],
+      blur: [],
     };
     const originalAdd = window.addEventListener.bind(window);
     const originalRemove = window.removeEventListener.bind(window);
 
     vi.spyOn(window, "addEventListener").mockImplementation((type, listener, opts) => {
-      if (type === "mouseup" || type === "mousemove") {
+      if (type === "mouseup" || type === "mousemove" || type === "blur") {
         registered[type].push(listener as EventListenerOrEventListenerObject);
       }
       return originalAdd(type, listener as EventListenerOrEventListenerObject, opts);
     });
     vi.spyOn(window, "removeEventListener").mockImplementation((type, listener, opts) => {
-      if (type === "mouseup" || type === "mousemove") {
+      if (type === "mouseup" || type === "mousemove" || type === "blur") {
         const idx = registered[type].indexOf(listener as EventListenerOrEventListenerObject);
         if (idx !== -1) registered[type].splice(idx, 1);
       }
@@ -90,5 +91,6 @@ describe("minimap Overlay window-listener leak fix", () => {
 
     expect(registered.mouseup.length).toBe(0);
     expect(registered.mousemove.length).toBe(0);
+    expect(registered.blur.length).toBe(0);
   });
 });

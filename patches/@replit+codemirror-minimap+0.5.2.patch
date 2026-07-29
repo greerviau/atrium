@@ -1,8 +1,40 @@
 diff --git a/node_modules/@replit/codemirror-minimap/dist/index.cjs b/node_modules/@replit/codemirror-minimap/dist/index.cjs
-index 3f0c98a..a804dd4 100644
+index 3f0c98a..dd8e77e 100644
 --- a/node_modules/@replit/codemirror-minimap/dist/index.cjs
 +++ b/node_modules/@replit/codemirror-minimap/dist/index.cjs
-@@ -108,9 +108,12 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+@@ -95,6 +95,31 @@ const Theme$1 = view.EditorView.theme({
+     },
+ });
+ const SCALE = Scale.PixelMultiplier * Scale.SizeRatio;
++// Forces the cursor via a body class with `!important` rather than an
++// inline `document.body.style.cursor` write — see the rule itself in
++// markdown.css for why: this exact pattern is already proven, in this
++// codebase, to survive dragging across live contenteditable text on the
++// same WebKit target this app ships on (tableHandles.ts's table-row
++// drag), whereas a plain inline style is not (see selectstart below for
++// why the same asymmetry applies to selection).
++const DRAGGING_CLASS = "cm-minimap-dragging-active";
++// WebKit's effectiveUserSelect deliberately ignores an inherited
++// `user-select: none` on any element carrying `-webkit-user-modify:
++// read-write*` (see WebKit changeset 293028) — which is exactly what
++// CodeMirror's own baseTheme sets on `.cm-content` whenever it's
++// contenteditable. That's a CSS-computation rule: it governs how WebKit
++// resolves the `user-select` property's effective value, nothing more.
++// `selectstart` fires at the point a selection is actually about to
++// begin or change — a different, event-level question WebKit's
++// `user-select` computation has no say over — so intercepting it here
++// isn't subject to the same exemption. Module-level, not per-instance:
++// this is intentionally the SAME function reference added/removed by
++// every OverlayView, so addEventListener/removeEventListener are no-ops
++// on repeat regardless of which instance's drag is starting or ending —
++// there's nothing to pair or leak.
++function preventSelectStart(event) {
++    event.preventDefault();
++}
+ const OverlayView = view.ViewPlugin.fromClass(class {
+     constructor(view) {
+         this.view = view;
+@@ -108,9 +133,22 @@ const OverlayView = view.ViewPlugin.fromClass(class {
          this.dom = crelt__default["default"]("div", { class: "cm-minimap-overlay" });
          this.container.appendChild(this.dom);
          // Attach event listeners for overlay
@@ -12,13 +44,23 @@ index 3f0c98a..a804dd4 100644
 +        this._boundOnMouseDown = this.onMouseDown.bind(this);
 +        this._boundOnMouseUp = this.onMouseUp.bind(this);
 +        this._boundOnMouseMove = this.onMouseMove.bind(this);
++        this._boundOnBlur = this._endDrag.bind(this);
 +        this.container.addEventListener("mousedown", this._boundOnMouseDown);
 +        window.addEventListener("mouseup", this._boundOnMouseUp);
 +        window.addEventListener("mousemove", this._boundOnMouseMove);
++        // A window blur mid-drag (Cmd-Tab, a Space switch, a native context
++        // menu) otherwise self-heals only on the next mousemove with the
++        // primary button released — and an inactive macOS window never
++        // gets one. Tearing down on blur too matches the rule
++        // tableHandles.ts's own drag-reorder already established for
++        // exactly this failure mode: an OS/browser-level interruption or a
++        // mid-drag app/tab switch needs its own exit path, not just the
++        // in-window ones.
++        window.addEventListener("blur", this._boundOnBlur);
          // Attach the overlay elements to the minimap
          const inner = view.dom.querySelector(".cm-minimap-inner");
          if (inner) {
-@@ -123,10 +126,13 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+@@ -123,12 +161,57 @@ const OverlayView = view.ViewPlugin.fromClass(class {
      }
      remove() {
          if (this.container) {
@@ -28,33 +70,81 @@ index 3f0c98a..a804dd4 100644
 +            this.container.removeEventListener("mousedown", this._boundOnMouseDown);
 +            window.removeEventListener("mouseup", this._boundOnMouseUp);
 +            window.removeEventListener("mousemove", this._boundOnMouseMove);
++            window.removeEventListener("blur", this._boundOnBlur);
++            this._endDrag();
              this.container.remove();
-+            if (this._isDragging) {
-+                document.body.style.cursor = "";
-+            }
          }
      }
++    // Single teardown path for every way a drag can end: a normal mouseup,
++    // the off-window self-heal in onMouseMove, a window blur, a
++    // still-latched drag getting superseded by a fresh mousedown (see
++    // onMouseDown), or the view/overlay being torn down mid-drag.
++    //
++    // Every line in this body — the class removal, the listener removal,
++    // the two inline-style clears — is a plain, unconditional no-op when
++    // the thing it's undoing was never applied, because none of them
++    // carry "did I personally capture something that must be paired back"
++    // state. That's deliberate: it's what makes calling this from every
++    // one of those exit paths, on every open pane's OverlayView, always
++    // safe, with no registry of who-suppressed-what to keep in sync. The
++    // one thing worth naming honestly: if a second, independent physical
++    // pointer (a trackpad and a mouse, say — vanishingly rare for this
++    // app's real usage) were dragging a different pane's minimap at the
++    // same moment, this instance's own end would remove the shared class
++    // and listener out from under that still-live drag a little early.
++    // That's a cosmetic gap for the remainder of that other drag, not a
++    // stuck one: its own eventual _endDrag() still runs cleanly, and nothing
++    // is left mutated once every drag has actually ended. Not worth a
++    // reference count to close.
++    //
++    // The `!this._isDragging` check isn't required for that safety — it's
++    // kept because onMouseUp/blur fire globally, from every open pane,
++    // whether or not that pane ever started a drag, and skipping this body
++    // entirely for the panes that didn't avoids pointless DOM churn on
++    // every unrelated click, and keeps `_dragStartY`/the re-entrancy guard
++    // below correct.
++    _endDrag() {
++        if (!this._isDragging) {
++            return;
++        }
++        this._dragStartY = undefined;
++        this._isDragging = false;
++        if (this.container) {
++            this.container.classList.remove("cm-minimap-overlay-active");
++        }
++        document.body.style.cursor = "";
++        document.body.style.userSelect = "";
++        document.body.style.webkitUserSelect = "";
++        document.body.classList.remove(DRAGGING_CLASS);
++        document.removeEventListener("selectstart", preventSelectStart, true);
++    }
      update(update) {
-@@ -192,28 +198,37 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+         const prev = update.startState.facet(Config).enabled;
+         const now = update.state.facet(Config).enabled;
+@@ -192,38 +275,67 @@ const OverlayView = view.ViewPlugin.fromClass(class {
          if (!this.container) {
              return;
          }
 -        // Ignore right click
 -        if (event.button === 2) {
+-            return;
++        // A mousedown arriving while a drag is still latched (its mouseup
++        // never reached us) must close out the stale drag first — see
++        // _endDrag()'s own doc comment for what this protects.
++        if (this._isDragging) {
++            this._endDrag();
+         }
+-        // If target is the overlay start dragging
+-        const { clientY, target } = event;
+-        if (target === this.dom) {
+-            this._dragStartY = event.clientY;
+-            this._isDragging = true;
+-            this.container.classList.add("cm-minimap-overlay-active");
 +        // Only the primary (left) button starts a drag; right- and
 +        // middle-click are left untouched.
 +        if (event.button !== 0) {
              return;
          }
--        // If target is the overlay start dragging
-+        event.preventDefault();
-         const { clientY, target } = event;
--        if (target === this.dom) {
--            this._dragStartY = event.clientY;
--            this._isDragging = true;
--            this.container.classList.add("cm-minimap-overlay-active");
--            return;
--        }
 -        // Updates the scroll position of the EditorView based on the
 -        // position of the MouseEvent on the minimap canvas
 -        const { clientHeight, scrollHeight, scrollTop } = this.view.scrollDOM;
@@ -65,6 +155,8 @@ index 3f0c98a..a804dd4 100644
 -        const visibleTop = visibleRange * scrollRatio;
 -        const top = Math.max(0, scrollTop - visibleTop);
 -        this.view.scrollDOM.scrollTop = top + deltaY - clientHeight / 2;
++        event.preventDefault();
++        const { clientY, target } = event;
 +        if (target !== this.dom) {
 +            // Updates the scroll position of the EditorView based on the
 +            // position of the MouseEvent on the minimap canvas
@@ -89,22 +181,75 @@ index 3f0c98a..a804dd4 100644
 +        this._isDragging = true;
 +        this.container.classList.add("cm-minimap-overlay-active");
 +        document.body.style.cursor = "default";
++        document.body.style.userSelect = "none";
++        document.body.style.webkitUserSelect = "none";
++        // See the doc comments on DRAGGING_CLASS/preventSelectStart above
++        // for why these two, not contentEditable or the inline cursor
++        // write above, are what actually stop WebKit's selection/cursor
++        // exemption. Engaged for the whole drag, not deferred to the first
++        // move outside the minimap: neither has any observable effect for
++        // a click-to-jump or an on-track drag (nothing there is
++        // selectable text, and the cursor class only matters once
++        // something CSS-driven would otherwise show through), so there's
++        // no reason to defer them the way clearing contentEditable once
++        // had to be.
++        document.body.classList.add(DRAGGING_CLASS);
++        document.addEventListener("selectstart", preventSelectStart, true);
      }
      onMouseUp(_event) {
          // Stop dragging on mouseup
-@@ -221,6 +236,7 @@ const OverlayView = view.ViewPlugin.fromClass(class {
-             this._dragStartY = undefined;
-             this._isDragging = false;
-             this.container.classList.remove("cm-minimap-overlay-active");
-+            document.body.style.cursor = "";
-         }
+-        if (this._isDragging && this.container) {
+-            this._dragStartY = undefined;
+-            this._isDragging = false;
+-            this.container.classList.remove("cm-minimap-overlay-active");
+-        }
++        this._endDrag();
      }
      onMouseMove(event) {
++        if (this._isDragging && (event.buttons & 1) === 0) {
++            this.onMouseUp(event);
++            return;
++        }
+         if (!this._isDragging || !this.dom) {
+             return;
+         }
 diff --git a/node_modules/@replit/codemirror-minimap/dist/index.js b/node_modules/@replit/codemirror-minimap/dist/index.js
-index c7c9a04..fab95fd 100644
+index c7c9a04..97380f0 100644
 --- a/node_modules/@replit/codemirror-minimap/dist/index.js
 +++ b/node_modules/@replit/codemirror-minimap/dist/index.js
-@@ -100,9 +100,12 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+@@ -87,6 +87,31 @@ const Theme$1 = /*@__PURE__*/EditorView.theme({
+     },
+ });
+ const SCALE = Scale.PixelMultiplier * Scale.SizeRatio;
++// Forces the cursor via a body class with `!important` rather than an
++// inline `document.body.style.cursor` write — see the rule itself in
++// markdown.css for why: this exact pattern is already proven, in this
++// codebase, to survive dragging across live contenteditable text on the
++// same WebKit target this app ships on (tableHandles.ts's table-row
++// drag), whereas a plain inline style is not (see selectstart below for
++// why the same asymmetry applies to selection).
++const DRAGGING_CLASS = "cm-minimap-dragging-active";
++// WebKit's effectiveUserSelect deliberately ignores an inherited
++// `user-select: none` on any element carrying `-webkit-user-modify:
++// read-write*` (see WebKit changeset 293028) — which is exactly what
++// CodeMirror's own baseTheme sets on `.cm-content` whenever it's
++// contenteditable. That's a CSS-computation rule: it governs how WebKit
++// resolves the `user-select` property's effective value, nothing more.
++// `selectstart` fires at the point a selection is actually about to
++// begin or change — a different, event-level question WebKit's
++// `user-select` computation has no say over — so intercepting it here
++// isn't subject to the same exemption. Module-level, not per-instance:
++// this is intentionally the SAME function reference added/removed by
++// every OverlayView, so addEventListener/removeEventListener are no-ops
++// on repeat regardless of which instance's drag is starting or ending —
++// there's nothing to pair or leak.
++function preventSelectStart(event) {
++    event.preventDefault();
++}
+ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+     constructor(view) {
+         this.view = view;
+@@ -100,9 +125,22 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
          this.dom = crelt("div", { class: "cm-minimap-overlay" });
          this.container.appendChild(this.dom);
          // Attach event listeners for overlay
@@ -114,13 +259,23 @@ index c7c9a04..fab95fd 100644
 +        this._boundOnMouseDown = this.onMouseDown.bind(this);
 +        this._boundOnMouseUp = this.onMouseUp.bind(this);
 +        this._boundOnMouseMove = this.onMouseMove.bind(this);
++        this._boundOnBlur = this._endDrag.bind(this);
 +        this.container.addEventListener("mousedown", this._boundOnMouseDown);
 +        window.addEventListener("mouseup", this._boundOnMouseUp);
 +        window.addEventListener("mousemove", this._boundOnMouseMove);
++        // A window blur mid-drag (Cmd-Tab, a Space switch, a native context
++        // menu) otherwise self-heals only on the next mousemove with the
++        // primary button released — and an inactive macOS window never
++        // gets one. Tearing down on blur too matches the rule
++        // tableHandles.ts's own drag-reorder already established for
++        // exactly this failure mode: an OS/browser-level interruption or a
++        // mid-drag app/tab switch needs its own exit path, not just the
++        // in-window ones.
++        window.addEventListener("blur", this._boundOnBlur);
          // Attach the overlay elements to the minimap
          const inner = view.dom.querySelector(".cm-minimap-inner");
          if (inner) {
-@@ -115,10 +118,13 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+@@ -115,12 +153,57 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
      }
      remove() {
          if (this.container) {
@@ -130,33 +285,81 @@ index c7c9a04..fab95fd 100644
 +            this.container.removeEventListener("mousedown", this._boundOnMouseDown);
 +            window.removeEventListener("mouseup", this._boundOnMouseUp);
 +            window.removeEventListener("mousemove", this._boundOnMouseMove);
++            window.removeEventListener("blur", this._boundOnBlur);
++            this._endDrag();
              this.container.remove();
-+            if (this._isDragging) {
-+                document.body.style.cursor = "";
-+            }
          }
      }
++    // Single teardown path for every way a drag can end: a normal mouseup,
++    // the off-window self-heal in onMouseMove, a window blur, a
++    // still-latched drag getting superseded by a fresh mousedown (see
++    // onMouseDown), or the view/overlay being torn down mid-drag.
++    //
++    // Every line in this body — the class removal, the listener removal,
++    // the two inline-style clears — is a plain, unconditional no-op when
++    // the thing it's undoing was never applied, because none of them
++    // carry "did I personally capture something that must be paired back"
++    // state. That's deliberate: it's what makes calling this from every
++    // one of those exit paths, on every open pane's OverlayView, always
++    // safe, with no registry of who-suppressed-what to keep in sync. The
++    // one thing worth naming honestly: if a second, independent physical
++    // pointer (a trackpad and a mouse, say — vanishingly rare for this
++    // app's real usage) were dragging a different pane's minimap at the
++    // same moment, this instance's own end would remove the shared class
++    // and listener out from under that still-live drag a little early.
++    // That's a cosmetic gap for the remainder of that other drag, not a
++    // stuck one: its own eventual _endDrag() still runs cleanly, and nothing
++    // is left mutated once every drag has actually ended. Not worth a
++    // reference count to close.
++    //
++    // The `!this._isDragging` check isn't required for that safety — it's
++    // kept because onMouseUp/blur fire globally, from every open pane,
++    // whether or not that pane ever started a drag, and skipping this body
++    // entirely for the panes that didn't avoids pointless DOM churn on
++    // every unrelated click, and keeps `_dragStartY`/the re-entrancy guard
++    // below correct.
++    _endDrag() {
++        if (!this._isDragging) {
++            return;
++        }
++        this._dragStartY = undefined;
++        this._isDragging = false;
++        if (this.container) {
++            this.container.classList.remove("cm-minimap-overlay-active");
++        }
++        document.body.style.cursor = "";
++        document.body.style.userSelect = "";
++        document.body.style.webkitUserSelect = "";
++        document.body.classList.remove(DRAGGING_CLASS);
++        document.removeEventListener("selectstart", preventSelectStart, true);
++    }
      update(update) {
-@@ -184,28 +190,37 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+         const prev = update.startState.facet(Config).enabled;
+         const now = update.state.facet(Config).enabled;
+@@ -184,38 +267,67 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
          if (!this.container) {
              return;
          }
 -        // Ignore right click
 -        if (event.button === 2) {
+-            return;
++        // A mousedown arriving while a drag is still latched (its mouseup
++        // never reached us) must close out the stale drag first — see
++        // _endDrag()'s own doc comment for what this protects.
++        if (this._isDragging) {
++            this._endDrag();
+         }
+-        // If target is the overlay start dragging
+-        const { clientY, target } = event;
+-        if (target === this.dom) {
+-            this._dragStartY = event.clientY;
+-            this._isDragging = true;
+-            this.container.classList.add("cm-minimap-overlay-active");
 +        // Only the primary (left) button starts a drag; right- and
 +        // middle-click are left untouched.
 +        if (event.button !== 0) {
              return;
          }
--        // If target is the overlay start dragging
-+        event.preventDefault();
-         const { clientY, target } = event;
--        if (target === this.dom) {
--            this._dragStartY = event.clientY;
--            this._isDragging = true;
--            this.container.classList.add("cm-minimap-overlay-active");
--            return;
--        }
 -        // Updates the scroll position of the EditorView based on the
 -        // position of the MouseEvent on the minimap canvas
 -        const { clientHeight, scrollHeight, scrollTop } = this.view.scrollDOM;
@@ -167,6 +370,8 @@ index c7c9a04..fab95fd 100644
 -        const visibleTop = visibleRange * scrollRatio;
 -        const top = Math.max(0, scrollTop - visibleTop);
 -        this.view.scrollDOM.scrollTop = top + deltaY - clientHeight / 2;
++        event.preventDefault();
++        const { clientY, target } = event;
 +        if (target !== this.dom) {
 +            // Updates the scroll position of the EditorView based on the
 +            // position of the MouseEvent on the minimap canvas
@@ -191,14 +396,35 @@ index c7c9a04..fab95fd 100644
 +        this._isDragging = true;
 +        this.container.classList.add("cm-minimap-overlay-active");
 +        document.body.style.cursor = "default";
++        document.body.style.userSelect = "none";
++        document.body.style.webkitUserSelect = "none";
++        // See the doc comments on DRAGGING_CLASS/preventSelectStart above
++        // for why these two, not contentEditable or the inline cursor
++        // write above, are what actually stop WebKit's selection/cursor
++        // exemption. Engaged for the whole drag, not deferred to the first
++        // move outside the minimap: neither has any observable effect for
++        // a click-to-jump or an on-track drag (nothing there is
++        // selectable text, and the cursor class only matters once
++        // something CSS-driven would otherwise show through), so there's
++        // no reason to defer them the way clearing contentEditable once
++        // had to be.
++        document.body.classList.add(DRAGGING_CLASS);
++        document.addEventListener("selectstart", preventSelectStart, true);
      }
      onMouseUp(_event) {
          // Stop dragging on mouseup
-@@ -213,6 +228,7 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
-             this._dragStartY = undefined;
-             this._isDragging = false;
-             this.container.classList.remove("cm-minimap-overlay-active");
-+            document.body.style.cursor = "";
-         }
+-        if (this._isDragging && this.container) {
+-            this._dragStartY = undefined;
+-            this._isDragging = false;
+-            this.container.classList.remove("cm-minimap-overlay-active");
+-        }
++        this._endDrag();
      }
      onMouseMove(event) {
++        if (this._isDragging && (event.buttons & 1) === 0) {
++            this.onMouseUp(event);
++            return;
++        }
+         if (!this._isDragging || !this.dom) {
+             return;
+         }
