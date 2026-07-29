@@ -88,6 +88,28 @@ describe("EditorPane: external reload no longer poisons the dirty flag (issue #2
     expect(findView(container).state.doc.toString()).toBe("v3\n");
   });
 
+  it("does not raise the conflict banner on a dirty tab when the disk read echoes back the tab's own savedDoc (MF1: auto-save's own write must not trip its own banner)", async () => {
+    seedTab();
+    const { container } = render(EditorPane, { filePath: PATH, paneId: PANE_ID });
+    await tick();
+
+    const view = findView(container);
+    view.dispatch({ changes: { from: view.state.doc.length, to: view.state.doc.length, insert: "edited" } });
+    await tick();
+    expect(currentTab().isDirty).toBe(true);
+
+    // Simulates the file watcher's debounced echo of this tab's own most
+    // recent write (manual or auto-save) — the disk read comes back
+    // identical to what this tab already believes is saved.
+    vi.mocked(commands.fsReadFile).mockResolvedValueOnce(currentTab().savedDoc);
+    await reconcileExternalChange(PATH);
+    await tick();
+    await tick();
+
+    expect(currentTab().hasExternalConflict).toBe(false);
+    expect(currentTab().isDirty).toBe(true);
+  });
+
   it("still marks dirty and preserves the buffer on a real keystroke, even with an external change pending (standing safety guard, not itself coverage of this bug)", async () => {
     seedTab();
     const { container } = render(EditorPane, { filePath: PATH, paneId: PANE_ID });

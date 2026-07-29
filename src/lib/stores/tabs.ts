@@ -265,34 +265,104 @@ export function clearPendingSelection(path: string): void {
   }));
 }
 
-/** Saves `contents` for `path` and flips the tab back to clean. */
-export async function saveTab(path: string, contents: string): Promise<void> {
-  const workspaceId = get(tabsState).tabs.find((t) => t.path === path)?.workspaceId ?? localWorkspaceId();
+/**
+ * Saves `contents` for `path` and flips the tab back to clean.
+ *
+ * `hasExternalConflict`/`isDeleted` are only cleared here when they were
+ * already set *before* this write started (captured in `before`, taken from
+ * the same pre-`await` read `workspaceId` comes from) — a successful save
+ * resolving a conflict or deletion the caller already knew about is the
+ * existing "keep mine" / recreate-on-save behavior. A flag that turns true
+ * only *during* the write — a genuinely new external event racing with this
+ * save — is left untouched: this write knows nothing about it, and clearing
+ * it would make the conflict banner disappear the instant it appears,
+ * exactly the failure `reconcileExternalChange` was fixed to avoid, one
+ * layer down.
+ *
+ * `getLiveContent`, when given (`EditorPane.svelte`'s `save()` passes its own
+ * `currentDoc`), is called from *inside* the same `tabsState.update` that
+ * applies this write's result, not after a further `await` back in the
+ * caller — a keystroke landing while `fsWriteFile`'s round trip was in
+ * flight moves the live buffer on before `savedDoc`/`isDirty` are decided,
+ * and only a check made at that exact synchronous moment can see it. A
+ * post-`await` check back in the caller is a tick too late: resolving this
+ * function's own promise takes one more microtask hop than the
+ * `tabsState.update` below, and the external-change reconciliation effect's
+ * own re-run is already scheduled off that update, ahead of the caller's
+ * continuation — it would silently replace the buffer with the
+ * (already-stale) `savedDoc` before the caller ever got to react. Without
+ * `getLiveContent`, this behaves as it always did: `isDirty` unconditionally
+ * flips to `false`.
+ */
+export async function saveTab(path: string, contents: string, getLiveContent?: () => string): Promise<void> {
+  const before = get(tabsState).tabs.find((t) => t.path === path);
+  const workspaceId = before?.workspaceId ?? localWorkspaceId();
   await fsWriteFile(workspaceId, path, contents);
   tabsState.update((s) => ({
     ...s,
-    tabs: s.tabs.map((t) =>
-      t.path === path
-        ? { ...t, savedDoc: contents, isDirty: false, hasExternalConflict: false, isDeleted: false }
-        : t,
-    ),
+    tabs: s.tabs.map((t) => {
+      if (t.path !== path) return t;
+      const movedOn = getLiveContent !== undefined && getLiveContent() !== contents;
+      return {
+        ...t,
+        savedDoc: contents,
+        isDirty: movedOn,
+        hasExternalConflict: before?.hasExternalConflict ? false : t.hasExternalConflict,
+        isDeleted: before?.isDeleted ? false : t.isDeleted,
+      };
+    }),
   }));
 }
 
 /**
  * Reacts to an `fs:changed` event for `path` (App.svelte forwards these from
- * the global listener). A clean tab silently reloads; a dirty tab shows a
- * conflict banner instead of overwriting unsaved edits (section 6.2).
+ * the global listener). A clean tab silently reloads; a dirty tab reads disk
+ * and only raises the conflict banner (instead of overwriting unsaved
+ * edits, section 6.2) when the disk contents actually differ from what this
+ * tab believes is saved.
+ *
+ * The dirty branch used to flag a conflict unconditionally, without reading
+ * disk at all. That was harmless when the only way to reach a clean-then-
+ * dirty-again cycle was manual typing between manual saves, but the file
+ * watcher has no self-write suppression: every in-app write (including
+ * auto-save) echoes back as its own `fs:changed` event, and comparing
+ * against event provenance can't distinguish "this is our own write coming
+ * back" from "something else changed this file" — only the actual disk
+ * content can. Reading first and comparing against `savedDoc` (what this
+ * tab's own last write set it to) makes an echo of our own write a no-op,
+ * while a disk content that genuinely diverges from `savedDoc` still raises
+ * the banner, even if it arrives coalesced with our own echo inside the
+ * same watcher debounce window. This never *clears* an already-raised
+ * conflict on its own — it only sets it or returns — so a later echo can't
+ * dismiss a banner the user hasn't acted on yet.
  *
  * A `NOT_FOUND` read failure is treated as a deletion rather than left as an
  * unhandled rejection: this is a defensive fallback for the timing race
  * where a `Modify` event's read loses to an external delete landing
  * microseconds later, since a genuine `Remove`-kind event is routed to
- * `markPathDeleted` directly by the `fs:changed` handler.
+ * `markPathDeleted` directly by the `fs:changed` handler. Now reachable from
+ * a dirty tab too — a dirty tab whose file disappears is correctly flagged
+ * `isDeleted` rather than only ever showing a conflict banner.
  *
- * A `FILE_TOO_LARGE` read failure (the file grew past the read guard after
- * it was already open) surfaces as a toast instead of an unhandled
- * rejection, leaving the tab showing its last-known content.
+ * A `FILE_TOO_LARGE` or `EXTERNAL_FILE_CHANGED` read failure surfaces as a
+ * toast instead of an unhandled rejection (or, for a dirty tab, instead of
+ * the conflict banner — a "Reload" action would fail against either error
+ * anyway), leaving the tab showing its last-known content.
+ *
+ * Every decision made *after* the `await fsReadFile` re-reads this tab's live
+ * state rather than trusting the snapshot taken before it — `tab.isDirty`/
+ * `tab.savedDoc` can both change while that read is in flight (a keystroke
+ * landing mid-read, or this tab's own save completing mid-read), and
+ * branching on the stale values reproduces exactly the two failure modes
+ * this function exists to prevent: a real external change lands while the
+ * tab is still clean by the stale snapshot, silently overwrites `savedDoc`
+ * with no conflict ever raised (and no later reconcile can raise one either,
+ * since the comparison baseline is now the external content); or this tab's
+ * own write completes mid-read, making the stale `savedDoc` comparison wrong
+ * and raising a spurious conflict on the app's own write. Only the read
+ * itself is issued against the pre-`await` snapshot (`tab.workspaceId`,
+ * which cannot change once a tab exists) — everything decided from the
+ * result comes from a fresh read of `tabsState`.
  */
 export async function reconcileExternalChange(path: string): Promise<void> {
   const state = get(tabsState);
@@ -300,13 +370,7 @@ export async function reconcileExternalChange(path: string): Promise<void> {
   if (!tab) {
     return;
   }
-  if (tab.isDirty) {
-    tabsState.update((s) => ({
-      ...s,
-      tabs: s.tabs.map((t) => (t.path === path ? { ...t, hasExternalConflict: true } : t)),
-    }));
-    return;
-  }
+
   let contents: string;
   try {
     contents = await fsReadFile(tab.workspaceId, path);
@@ -325,6 +389,22 @@ export async function reconcileExternalChange(path: string): Promise<void> {
     }
     throw err;
   }
+
+  const live = get(tabsState).tabs.find((t) => t.path === path);
+  if (!live) {
+    return;
+  }
+
+  if (live.isDirty) {
+    if (contents !== live.savedDoc) {
+      tabsState.update((s) => ({
+        ...s,
+        tabs: s.tabs.map((t) => (t.path === path ? { ...t, hasExternalConflict: true } : t)),
+      }));
+    }
+    return;
+  }
+
   tabsState.update((s) => ({
     ...s,
     tabs: s.tabs.map((t) => (t.path === path ? { ...t, savedDoc: contents } : t)),

@@ -8,6 +8,11 @@ import { tabsState, openFile } from "../../src/lib/stores/tabs";
 import { focusedEditorPaneId, editorPaneTree } from "../../src/lib/stores/editorPanes";
 import { closePrompt } from "../../src/lib/stores/closePrompt";
 import { loadEditorSession } from "../../src/lib/stores/editorSession";
+import {
+  restoreTabsOnStartup,
+  setRestoreTabsOnStartup,
+  DEFAULT_RESTORE_TABS_ON_STARTUP,
+} from "../../src/lib/stores/restoreTabsOnStartup";
 import * as commands from "../../src/lib/ipc/commands";
 
 // Reproduces the cross-project restore race flagged in review of #324:
@@ -66,6 +71,7 @@ function resetStores(): void {
   focusedEditorPaneId.set(null);
   editorPaneTree.set(null);
   closePrompt.set(null);
+  restoreTabsOnStartup.set(DEFAULT_RESTORE_TABS_ON_STARTUP);
 }
 
 async function flush(): Promise<void> {
@@ -132,6 +138,96 @@ describe("App editor session restore (review of #324)", () => {
       },
       focusedPaneId: "LA",
     });
+  });
+
+  it("does not restore a persisted session when restoreTabsOnStartup is off, but the no-persisted-session merge path (standalone-tab preservation) still runs, without overwriting the real persisted session on disk", async () => {
+    // A project of its own, distinct from PROJECT_A/PROJECT_B used by the
+    // other cases in this file — this test's own persist-effect writes are
+    // real-timer debounced (~400ms) and must never land on a storage key a
+    // sibling test also reads, however long after this test returns.
+    const PROJECT_NO_RESTORE = "/projects/no-restore";
+    const originalSession = {
+      paneTree: {
+        type: "leaf",
+        id: "LX",
+        tabs: [PROJECT_NO_RESTORE + "/x.ts"],
+        activeTabPath: PROJECT_NO_RESTORE + "/x.ts",
+      },
+      focusedPaneId: "LX",
+    };
+    localStorage.setItem("atrium.editorSession." + PROJECT_NO_RESTORE, JSON.stringify(originalSession));
+    setRestoreTabsOnStartup(false);
+
+    render(App);
+    await flush();
+
+    // A standalone tab (open with no project) must still survive the
+    // switch into a project even when restore-on-startup is off — this is
+    // the same "no persisted session" merge path every brand-new workspace
+    // already exercises, just reached via the setting instead of an empty
+    // storage key. It is also exactly the shape that used to trip the
+    // persist effect (which used to gate only on `restoredForRoot`, not on
+    // the setting) into writing this near-empty, standalone-only tree over
+    // the project's real persisted session the moment it next fired.
+    await openFile("/tmp/standalone.md", undefined, "standalone");
+    await flush();
+
+    await openWorkspacePath(PROJECT_NO_RESTORE);
+    await flush();
+
+    // The persisted path never appears — restore was skipped — while the
+    // standalone tab survives the switch, proving the merge path still ran.
+    expect(get(tabsState).tabs.map((t) => t.path)).toEqual(["/tmp/standalone.md"]);
+    expect(get(workspace).root).toBe(PROJECT_NO_RESTORE);
+
+    // Wait out the persist-effect's real debounce: if it fired (it must
+    // not, while the setting is off), this is enough time for it to have
+    // landed and corrupted the storage key checked below.
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    expect(loadEditorSession(PROJECT_NO_RESTORE)).toEqual(originalSession);
+  });
+
+  // Regression: gating the persist effect on the *live* restoreTabsOnStartup
+  // value closed the "open a project while off" clobber above, but relocated
+  // it — flipping the store back on re-fires the reactive effect immediately,
+  // persisting whatever the current (restore-skipped) session holds over the
+  // real stored one, before any relaunch. Re-enabling the setting must take
+  // effect at the next project open/switch, never retroactively for a root
+  // already open.
+  it("re-enabling restoreTabsOnStartup mid-session does not itself overwrite the current project's stored session", async () => {
+    const PROJECT_REENABLE = "/projects/reenable-mid-session";
+    const originalSession = {
+      paneTree: {
+        type: "leaf",
+        id: "LY",
+        tabs: [PROJECT_REENABLE + "/y.ts"],
+        activeTabPath: PROJECT_REENABLE + "/y.ts",
+      },
+      focusedPaneId: "LY",
+    };
+    localStorage.setItem("atrium.editorSession." + PROJECT_REENABLE, JSON.stringify(originalSession));
+    setRestoreTabsOnStartup(false);
+
+    render(App);
+    await flush();
+
+    // Opened with the setting off — restore is skipped, matching the
+    // previous test's scenario.
+    await openWorkspacePath(PROJECT_REENABLE);
+    await flush();
+    expect(get(tabsState).tabs).toHaveLength(0);
+
+    // Re-enable the setting without switching projects or relaunching — an
+    // entirely ordinary gesture ("I changed my mind, turn it back on").
+    setRestoreTabsOnStartup(true);
+    await flush();
+
+    // Give the persist effect's real debounce time to land if it (wrongly)
+    // fired off the live toggle.
+    await new Promise((resolve) => setTimeout(resolve, 450));
+
+    expect(loadEditorSession(PROJECT_REENABLE)).toEqual(originalSession);
   });
 
   it("a project switch started before a stale restore resolves never applies the stale project's state or corrupts the new project's storage key", async () => {

@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { get } from "svelte/store";
   import { Compartment, EditorState, Transaction, type Extension, type TransactionSpec } from "@codemirror/state";
   import { EditorView, keymap, lineNumbers } from "@codemirror/view";
   import { selectAll as cmSelectAll } from "@codemirror/commands";
-  import { syntaxHighlighting } from "@codemirror/language";
+  import { indentUnit, syntaxHighlighting } from "@codemirror/language";
   import { readText } from "@tauri-apps/plugin-clipboard-manager";
   import {
     tabsState,
@@ -14,6 +15,7 @@
     toggleMarkdownViewMode,
     notifySaveComplete,
     notifySaveFailed,
+    requestSave,
     requestSaveReportingErrors,
   } from "../stores/tabs";
   import { focusedEditorPaneId, editorPaneTree } from "../stores/editorPanes";
@@ -22,6 +24,12 @@
   import { theme as themeStore } from "../stores/theme";
   import { buildCmTheme, buildHighlightStyle } from "../theme/cmTheme";
   import { minimapEnabled } from "../stores/minimapEnabled";
+  import { wordWrapEnabled } from "../stores/wordWrap";
+  import { tabSize } from "../stores/tabSize";
+  import { lineNumbersEnabled } from "../stores/lineNumbersEnabled";
+  import { autoSaveEnabled, AUTO_SAVE_DELAY_MS, isAutoSaveBlocked, blockAutoSave, unblockAutoSave } from "../stores/autoSave";
+  import { showErrorToast, describeError } from "../stores/errorToast";
+  import { basename } from "../util/path";
   import { baseExtensions } from "./baseExtensions";
   import { minimapExtension } from "./minimap";
   import { markdownExtensions, markdownSourceExtensions } from "./markdown/livePreviewPlugin";
@@ -83,10 +91,17 @@
   const themeCompartment = new Compartment();
   const viewModeCompartment = new Compartment();
   const minimapCompartment = new Compartment();
+  const wordWrapCompartment = new Compartment();
+  const tabSizeCompartment = new Compartment();
   let lastAppliedViewMode: "rendered" | "source" | undefined;
   let lastAppliedActive: boolean | undefined;
   let lastAppliedMinimapEnabled: boolean | undefined;
+  let lastAppliedWordWrapEnabled: boolean | undefined;
+  let lastAppliedLineNumbersEnabled: boolean | undefined;
   let minimapIdleHandle: number | undefined;
+  // Imperative auto-save timer handle, same treatment as `minimapIdleHandle`
+  // above — not `$state`, since nothing in the template reads it.
+  let autoSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
   interface ContextMenuState {
     x: number;
@@ -98,15 +113,30 @@
 
   let menu = $state<ContextMenuState | null>(null);
 
-  function viewModeExtensions(mode: "code" | "markdown", viewMode: "rendered" | "source" | undefined): Extension[] {
+  function viewModeExtensions(
+    mode: "code" | "markdown",
+    viewMode: "rendered" | "source" | undefined,
+    showLineNumbers: boolean,
+  ): Extension[] {
     if (mode !== "markdown") {
-      return [lineNumbers(), ...codeExtensions(filePath)];
+      return [...(showLineNumbers ? [lineNumbers()] : []), ...codeExtensions(filePath)];
     }
-    return viewMode === "source" ? markdownSourceExtensions(filePath) : markdownExtensions(filePath);
+    return viewMode === "source" ? markdownSourceExtensions(filePath, showLineNumbers) : markdownExtensions(filePath);
   }
 
   function themeExtensions() {
     return [buildCmTheme($themeStore), syntaxHighlighting(buildHighlightStyle($themeStore), { fallback: true })];
+  }
+
+  // Markdown panes keep their existing unconditional `EditorView.lineWrapping`
+  // (see `EditorPane.lineWrapping.test.ts`'s "both rendered and source view"
+  // coverage) — this setting only ever applies to a code pane.
+  function wordWrapExtension(enabled: boolean): Extension {
+    return enabled ? EditorView.lineWrapping : [];
+  }
+
+  function wordWrapAllowedFor(mode: "markdown" | "code"): boolean {
+    return mode !== "markdown";
   }
 
   // `showMinimap`'s own text/highlight state runs a synchronous full-document
@@ -152,6 +182,7 @@
 
   const tab = $derived($tabsState.tabs.find((t) => t.path === filePath));
   const effectiveMinimapEnabled = $derived($minimapEnabled && minimapAllowedFor(tab?.mode ?? "code"));
+  const effectiveWordWrapEnabled = $derived($wordWrapEnabled && wordWrapAllowedFor(tab?.mode ?? "code"));
 
   function currentDoc(): string {
     return view.state.doc.toString();
@@ -172,8 +203,19 @@
     };
   }
 
+  // Passes `currentDoc` itself (not just its value) so `saveTab` can compare
+  // the live buffer against what was written from *inside* its own
+  // `tabsState.update` — at the same synchronous moment it decides
+  // `isDirty`, not after a further `await` back here. A check made only
+  // after `saveTab`'s own promise resolves would be a tick too late: the
+  // external-change reconciliation effect's own re-run is already scheduled
+  // off `saveTab`'s `tabsState.update`, one microtask hop ahead of this
+  // function's continuation, and would silently replace the buffer with the
+  // now-stale `savedDoc` — erasing whatever was typed during the write, with
+  // no way to undo it (the replacement doesn't enter undo history) — before
+  // this function ever got a chance to react.
   async function save(): Promise<void> {
-    await saveTab(filePath, currentDoc());
+    await saveTab(filePath, currentDoc(), currentDoc);
   }
 
   function closeMenu(): void {
@@ -281,11 +323,59 @@
     await revealInFinder(filePath);
   }
 
+  // Fires once per scheduled auto-save. Reads live tab state at the moment
+  // the timer actually goes off (not a snapshot taken when it was armed), so
+  // a conflict raised anywhere during the debounce window is still caught —
+  // only the fire-time value can see that. Enforces the full failure policy
+  // (MF3): skip entirely — no attempt at all — while the tab is deleted,
+  // conflicted, or already blocked from a prior failure; on failure, block
+  // further attempts and toast exactly once; on success, clear any prior
+  // block. `isDeleted` here is bounded by the file watcher's own 150ms
+  // debounce, not absolute — a delete landing in the last ~150ms before this
+  // fires isn't yet visible to the frontend, so the write would still land.
+  async function attemptAutoSave(): Promise<void> {
+    const current = get(tabsState).tabs.find((t) => t.path === filePath);
+    if (!current || current.isDeleted || current.hasExternalConflict || isAutoSaveBlocked(filePath)) {
+      return;
+    }
+    try {
+      await requestSave(filePath);
+      unblockAutoSave(filePath);
+    } catch (err) {
+      blockAutoSave(filePath);
+      showErrorToast(`Auto-save paused for ${basename(filePath)}: ${describeError(err)}. Save manually to resume.`);
+    }
+  }
+
+  // Debounces auto-save behind a plain per-pane timer, reset on every
+  // qualifying doc change. Known, accepted interaction: `requestSave` writes
+  // to the single-slot `saveRequest` store, so if two panes' timers (for two
+  // different paths) fire within the same tick, the second `set()` clobbers
+  // the first before its own save effect ever observes it — the earlier
+  // path's `requestSave` promise never settles and that pane stays dirty
+  // rather than losing data, self-recovering on the next edit or an
+  // explicit save. This was flagged as a real but narrow, pre-existing-
+  // shaped pressure on a single-slot design that only ever saw user-paced
+  // traffic before auto-save; not worth redesigning the save funnel to close
+  // pre-emptively.
+  function scheduleAutoSave(): void {
+    if (autoSaveTimer !== undefined) {
+      clearTimeout(autoSaveTimer);
+    }
+    autoSaveTimer = setTimeout(() => {
+      autoSaveTimer = undefined;
+      void attemptAutoSave();
+    }, AUTO_SAVE_DELAY_MS);
+  }
+
   onMount(() => {
     const initialTab = $tabsState.tabs.find((t) => t.path === filePath);
     const mode = initialTab?.mode ?? "code";
     const initialEffectiveMinimapEnabled = $minimapEnabled && minimapAllowedFor(mode);
+    const initialEffectiveWordWrapEnabled = $wordWrapEnabled && wordWrapAllowedFor(mode);
     lastAppliedViewMode = initialTab?.viewMode;
+    lastAppliedLineNumbersEnabled = $lineNumbersEnabled;
+    lastAppliedWordWrapEnabled = initialEffectiveWordWrapEnabled;
     lastAppliedActive = active;
 
     const shortcutKeymap = [
@@ -309,9 +399,10 @@
 
     const extensions = [
       baseExtensions(),
-      mode === "markdown" ? EditorView.lineWrapping : [],
+      wordWrapCompartment.of(mode === "markdown" ? EditorView.lineWrapping : wordWrapExtension($wordWrapEnabled)),
+      tabSizeCompartment.of(indentUnit.of(" ".repeat($tabSize))),
       themeCompartment.of(themeExtensions()),
-      viewModeCompartment.of(viewModeExtensions(mode, initialTab?.viewMode)),
+      viewModeCompartment.of(viewModeExtensions(mode, initialTab?.viewMode, $lineNumbersEnabled)),
       // Starts empty regardless of the setting — see `applyMinimap`'s doc
       // comment. The idle callback scheduled below performs the actual first
       // application.
@@ -322,6 +413,9 @@
           update.docChanged && update.transactions.every((tr) => tr.annotation(syncAnnotation));
         if (update.docChanged && !isSyncOnly) {
           markDirty(filePath);
+          if (get(autoSaveEnabled) && isSaveOwner) {
+            scheduleAutoSave();
+          }
         }
         if ((update.docChanged || update.selectionSet) && active) {
           setCursorPosition(computeCursorPosition(update.state));
@@ -361,6 +455,9 @@
 
   onDestroy(() => {
     cancelMinimapIdle();
+    if (autoSaveTimer !== undefined) {
+      clearTimeout(autoSaveTimer);
+    }
     detachScrollbarAutoHide?.();
     if (view) {
       unregisterView(filePath, view);
@@ -403,11 +500,43 @@
     applyMinimap(enabled);
   });
 
+  // Reconfigures the word-wrap compartment in place when the effective
+  // setting (the global setting gated by `wordWrapAllowedFor`) actually
+  // changes after mount, preserving undo history, selection, and scroll
+  // position — same guarantee as the minimap-switch effect above. A
+  // markdown pane's effective value is always `false` here regardless of
+  // the setting (it keeps its own unconditional wrap, applied once at
+  // mount and never reconfigured by this effect), so it never fires for
+  // one — mirroring `minimapAllowedFor`'s own mode-gating shape.
+  $effect(() => {
+    const enabled = effectiveWordWrapEnabled;
+    if (!view || enabled === lastAppliedWordWrapEnabled) {
+      return;
+    }
+    lastAppliedWordWrapEnabled = enabled;
+    view.dispatch({ effects: wordWrapCompartment.reconfigure(wordWrapExtension(enabled)) });
+  });
+
+  // Reconfigures the tab-size compartment in place when the setting changes,
+  // applying uniformly regardless of mode or view (not gated the way
+  // minimap/word-wrap are) — same preserve-state guarantee as the theme
+  // effect above.
+  $effect(() => {
+    const size = $tabSize;
+    if (!view) {
+      return;
+    }
+    view.dispatch({ effects: tabSizeCompartment.reconfigure(indentUnit.of(" ".repeat(size))) });
+  });
+
   // Reconfigures the view-mode compartment in place when a markdown tab's
-  // `viewMode` toggles between rendered and source, preserving document,
-  // cursor, undo history, and scroll position. Guarded against firing on
-  // unrelated tab-store updates (e.g. `markDirty` on every keystroke) by
-  // comparing against the last-applied value before dispatching.
+  // `viewMode` toggles between rendered and source, or when the Line
+  // Numbers setting changes (both extension sets `viewModeExtensions`
+  // builds already fold the gutter into this same compartment), preserving
+  // document, cursor, undo history, and scroll position. Guarded against
+  // firing on unrelated tab-store updates (e.g. `markDirty` on every
+  // keystroke) by comparing against the last-applied values before
+  // dispatching.
   //
   // The compartment swap alone leaves CodeMirror's viewport (the character
   // range it considers "visible") carried over from the previous mode: its
@@ -438,15 +567,21 @@
   // convergence.
   $effect(() => {
     const current = tab;
-    if (!view || !current || current.viewMode === lastAppliedViewMode) {
+    const showLineNumbers = $lineNumbersEnabled;
+    if (
+      !view ||
+      !current ||
+      (current.viewMode === lastAppliedViewMode && showLineNumbers === lastAppliedLineNumbersEnabled)
+    ) {
       return;
     }
     lastAppliedViewMode = current.viewMode;
+    lastAppliedLineNumbersEnabled = showLineNumbers;
     const head = view.state.selection.main.head;
     const scrollSnapshot = view.scrollSnapshot();
     view.dispatch({
       effects: [
-        viewModeCompartment.reconfigure(viewModeExtensions(current.mode, current.viewMode)),
+        viewModeCompartment.reconfigure(viewModeExtensions(current.mode, current.viewMode, showLineNumbers)),
         EditorView.scrollIntoView(head, { y: "nearest" }),
       ],
     });
@@ -528,12 +663,16 @@
 
   // Guarded on `isSaveOwner`, not just `filePath` — otherwise every pane
   // showing this path would independently save its own buffer in response
-  // to the same request (see `isSaveOwner`'s own comment).
+  // to the same request (see `isSaveOwner`'s own comment). Every save —
+  // manual or auto-triggered — funnels through this same effect, so an
+  // explicit save's success is the one thing that can clear a block a
+  // failed auto-save previously set on this path (MF3's failure policy).
   $effect(() => {
     if ($saveRequest === filePath && isSaveOwner) {
       void save()
         .then(() => {
           saveRequest.set(null);
+          unblockAutoSave(filePath);
           notifySaveComplete(filePath);
         })
         .catch((err: unknown) => {

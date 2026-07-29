@@ -2469,7 +2469,7 @@ describe("markdownSourceExtensions", () => {
     "# Heading\n\n*em* **strong** [link](https://example.com) ![img](./local.png)\n\n- [ ] task\n\n```js\nconst x = 1;\n```\n\n```mermaid\ngraph TD;\nA-->B;\n```\n";
 
   it("keeps the markdown language's syntax tree (fenced code still gets nested highlighting)", () => {
-    const state = EditorState.create({ doc: fixture, extensions: markdownSourceExtensions("test.md") });
+    const state = EditorState.create({ doc: fixture, extensions: markdownSourceExtensions("test.md", true) });
     const seen = new Set<string>();
     syntaxTree(state).iterate({
       enter(ref) {
@@ -2483,7 +2483,7 @@ describe("markdownSourceExtensions", () => {
   it("renders no decorations or interactive widgets — raw text, untouched", () => {
     const container = document.createElement("div");
     const view = new EditorView({
-      state: EditorState.create({ doc: fixture, extensions: markdownSourceExtensions("test.md") }),
+      state: EditorState.create({ doc: fixture, extensions: markdownSourceExtensions("test.md", true) }),
       parent: container,
     });
     expect(view.state.doc.toString()).toBe(fixture);
@@ -2499,7 +2499,7 @@ describe("markdownSourceExtensions", () => {
   it("renders a mermaid block as plain unrendered text, with no diagram or error DOM at all", () => {
     const container = document.createElement("div");
     const view = new EditorView({
-      state: EditorState.create({ doc: fixture, extensions: markdownSourceExtensions("test.md") }),
+      state: EditorState.create({ doc: fixture, extensions: markdownSourceExtensions("test.md", true) }),
       parent: container,
     });
     expect(container.querySelector(".cm-mermaid-diagram")).toBeNull();
@@ -2513,10 +2513,20 @@ describe("markdownSourceExtensions", () => {
   it("includes a line-number gutter", () => {
     const container = document.createElement("div");
     const view = new EditorView({
-      state: EditorState.create({ doc: "line one\nline two\n", extensions: markdownSourceExtensions("test.md") }),
+      state: EditorState.create({ doc: "line one\nline two\n", extensions: markdownSourceExtensions("test.md", true) }),
       parent: container,
     });
     expect(container.querySelector(".cm-lineNumbers")).not.toBeNull();
+    view.destroy();
+  });
+
+  it("omits the line-number gutter when lineNumbersEnabled is false", () => {
+    const container = document.createElement("div");
+    const view = new EditorView({
+      state: EditorState.create({ doc: "line one\nline two\n", extensions: markdownSourceExtensions("test.md", false) }),
+      parent: container,
+    });
+    expect(container.querySelector(".cm-lineNumbers")).toBeNull();
     view.destroy();
   });
 
@@ -2527,7 +2537,7 @@ describe("markdownSourceExtensions", () => {
   it("does not carry the cm-md-rendered marker (reading-column rules must not reach the source view)", () => {
     const container = document.createElement("div");
     const view = new EditorView({
-      state: EditorState.create({ doc: "line one\nline two\n", extensions: markdownSourceExtensions("test.md") }),
+      state: EditorState.create({ doc: "line one\nline two\n", extensions: markdownSourceExtensions("test.md", true) }),
       parent: container,
     });
     expect(view.contentDOM.classList.contains("cm-md-rendered")).toBe(false);

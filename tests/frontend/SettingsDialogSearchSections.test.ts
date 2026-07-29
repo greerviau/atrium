@@ -48,10 +48,19 @@ describe("SettingsDialog search filters section nav rows (synthetic multi-sectio
     render(SettingsDialog);
     await tick();
 
+    const searchInput = screen.getByLabelText("Search settings");
+
+    // Every category starts collapsed; while actively searching every
+    // category renders expanded regardless, so a query matching both
+    // sections ("a" is a substring of both "alpha aaa" and "beta bbb")
+    // surfaces both without needing to expand anything by hand first.
+    await fireEvent.input(searchInput, { target: { value: "a" } });
+    await tick();
+
     expect(screen.getByRole("treeitem", { name: "Alpha" })).toBeTruthy();
     expect(screen.getByRole("treeitem", { name: "Beta" })).toBeTruthy();
 
-    await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "aaa" } });
+    await fireEvent.input(searchInput, { target: { value: "aaa" } });
     await tick();
 
     expect(screen.getByRole("treeitem", { name: "Alpha" })).toBeTruthy();

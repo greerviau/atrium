@@ -6,6 +6,11 @@
   import { terminalPosition, setTerminalPosition, type TerminalPosition } from "../stores/layout";
   import { zoom, zoomIn, zoomOut, resetZoom, MIN_ZOOM, MAX_ZOOM } from "../stores/textSize";
   import { minimapEnabled, setMinimapEnabled } from "../stores/minimapEnabled";
+  import { wordWrapEnabled, setWordWrapEnabled } from "../stores/wordWrap";
+  import { tabSize, setTabSize, TAB_SIZE_OPTIONS, type TabSize } from "../stores/tabSize";
+  import { lineNumbersEnabled, setLineNumbersEnabled } from "../stores/lineNumbersEnabled";
+  import { autoSaveEnabled, setAutoSaveEnabled } from "../stores/autoSave";
+  import { restoreTabsOnStartup, setRestoreTabsOnStartup } from "../stores/restoreTabsOnStartup";
   import {
     markdownDefaultView,
     setMarkdownDefaultView,
@@ -31,6 +36,11 @@
     { id: "rendered", label: "Rendered" },
     { id: "source", label: "Source" },
   ];
+
+  const TAB_SIZE_DROPDOWN_OPTIONS: { id: string; label: string }[] = TAB_SIZE_OPTIONS.map((size) => ({
+    id: String(size),
+    label: String(size),
+  }));
 
   const DEFAULT_CATEGORY: SettingsCategoryId = "general";
 
@@ -160,6 +170,7 @@
             categories={visibleCategories}
             sections={visibleSections}
             selected={selectedCategory}
+            searching={searching}
             onSelectCategory={(id) => (selectedCategory = id)}
             onSelectSection={(id) => void scrollToSection(id)}
           />
@@ -189,6 +200,21 @@
             </SettingsSection>
           {/if}
 
+          {#if selectedCategory === "general" && isSectionVisible("restore-tabs-on-startup")}
+            <SettingsSection title="Restore Tabs on Startup" id={sectionAnchorId("restore-tabs-on-startup")}>
+              <div class="settings-row">
+                <span class="settings-label">Restore previously open tabs on startup</span>
+                <input
+                  type="checkbox"
+                  class="settings-checkbox"
+                  checked={$restoreTabsOnStartup}
+                  onchange={(e) => setRestoreTabsOnStartup(e.currentTarget.checked)}
+                  aria-label="Restore previously open tabs on startup"
+                />
+              </div>
+            </SettingsSection>
+          {/if}
+
           {#if selectedCategory === "appearance" && isSectionVisible("theme")}
             <SettingsSection title="Theme" id={sectionAnchorId("theme")}>
               <div class="settings-row">
@@ -208,6 +234,65 @@
                   checked={$minimapEnabled}
                   onchange={(e) => setMinimapEnabled(e.currentTarget.checked)}
                   aria-label="Show minimap"
+                />
+              </div>
+            </SettingsSection>
+          {/if}
+
+          {#if selectedCategory === "editor" && isSectionVisible("word-wrap")}
+            <SettingsSection title="Word Wrap" id={sectionAnchorId("word-wrap")}>
+              <div class="settings-row">
+                <span class="settings-label">Wrap long lines</span>
+                <input
+                  type="checkbox"
+                  class="settings-checkbox"
+                  checked={$wordWrapEnabled}
+                  onchange={(e) => setWordWrapEnabled(e.currentTarget.checked)}
+                  aria-label="Wrap long lines"
+                />
+              </div>
+            </SettingsSection>
+          {/if}
+
+          {#if selectedCategory === "editor" && isSectionVisible("tab-size")}
+            <SettingsSection title="Tab Size" id={sectionAnchorId("tab-size")}>
+              <div class="settings-row">
+                <span class="settings-label">Tab size</span>
+                <Dropdown
+                  options={TAB_SIZE_DROPDOWN_OPTIONS}
+                  value={String($tabSize)}
+                  onSelect={(id) => setTabSize(Number(id) as TabSize)}
+                  label="Tab size"
+                />
+              </div>
+            </SettingsSection>
+          {/if}
+
+          {#if selectedCategory === "editor" && isSectionVisible("line-numbers")}
+            <SettingsSection title="Line Numbers" id={sectionAnchorId("line-numbers")}>
+              <div class="settings-row">
+                <span class="settings-label">Show line numbers</span>
+                <input
+                  type="checkbox"
+                  class="settings-checkbox"
+                  checked={$lineNumbersEnabled}
+                  onchange={(e) => setLineNumbersEnabled(e.currentTarget.checked)}
+                  aria-label="Show line numbers"
+                />
+              </div>
+            </SettingsSection>
+          {/if}
+
+          {#if selectedCategory === "editor" && isSectionVisible("auto-save")}
+            <SettingsSection title="Auto Save" id={sectionAnchorId("auto-save")}>
+              <div class="settings-row">
+                <span class="settings-label">Automatically save changes</span>
+                <input
+                  type="checkbox"
+                  class="settings-checkbox"
+                  checked={$autoSaveEnabled}
+                  onchange={(e) => setAutoSaveEnabled(e.currentTarget.checked)}
+                  aria-label="Automatically save changes"
                 />
               </div>
             </SettingsSection>

@@ -10,6 +10,11 @@ import { terminalPosition } from "../../src/lib/stores/layout";
 import { zoom, zoomIn, DEFAULT_ZOOM } from "../../src/lib/stores/textSize";
 import { minimapEnabled, DEFAULT_MINIMAP_ENABLED } from "../../src/lib/stores/minimapEnabled";
 import { markdownDefaultView, DEFAULT_MARKDOWN_VIEW } from "../../src/lib/stores/markdownDefaultView";
+import { wordWrapEnabled, DEFAULT_WORD_WRAP_ENABLED } from "../../src/lib/stores/wordWrap";
+import { tabSize, DEFAULT_TAB_SIZE } from "../../src/lib/stores/tabSize";
+import { lineNumbersEnabled, DEFAULT_LINE_NUMBERS_ENABLED } from "../../src/lib/stores/lineNumbersEnabled";
+import { autoSaveEnabled, DEFAULT_AUTO_SAVE_ENABLED } from "../../src/lib/stores/autoSave";
+import { restoreTabsOnStartup, DEFAULT_RESTORE_TABS_ON_STARTUP } from "../../src/lib/stores/restoreTabsOnStartup";
 
 async function flush(): Promise<void> {
   for (let i = 0; i < 5; i++) {
@@ -20,6 +25,15 @@ async function flush(): Promise<void> {
 
 async function selectCategory(name: string): Promise<void> {
   await fireEvent.click(screen.getByRole("treeitem", { name }));
+  await flush();
+}
+
+// Every category starts collapsed, so a test that needs one of its section
+// rows present in the nav must expand it first — via the caret button, the
+// same control a real user would click, rather than reaching into component
+// state directly.
+async function expandCategory(label: string): Promise<void> {
+  await fireEvent.click(screen.getByRole("button", { name: `Expand ${label}` }));
   await flush();
 }
 
@@ -47,6 +61,11 @@ describe("SettingsDialog", () => {
     zoom.set(DEFAULT_ZOOM);
     minimapEnabled.set(DEFAULT_MINIMAP_ENABLED);
     markdownDefaultView.set(DEFAULT_MARKDOWN_VIEW);
+    wordWrapEnabled.set(DEFAULT_WORD_WRAP_ENABLED);
+    tabSize.set(DEFAULT_TAB_SIZE);
+    lineNumbersEnabled.set(DEFAULT_LINE_NUMBERS_ENABLED);
+    autoSaveEnabled.set(DEFAULT_AUTO_SAVE_ENABLED);
+    restoreTabsOnStartup.set(DEFAULT_RESTORE_TABS_ON_STARTUP);
     scrollIntoViewSpy = vi.fn();
     Element.prototype.scrollIntoView = scrollIntoViewSpy;
   });
@@ -104,7 +123,7 @@ describe("SettingsDialog", () => {
   });
 
   describe("sidebar navigation", () => {
-    it("renders all five categories expanded with their one section each, General selected and its content shown by default", async () => {
+    it("renders all five categories collapsed, General selected and its content shown by default", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
@@ -119,8 +138,12 @@ describe("SettingsDialog", () => {
         "Terminal",
       ]);
       expect(categoryRows[0].getAttribute("aria-selected")).toBe("true");
-      expect(screen.getByRole("treeitem", { name: "Zoom" })).toBeTruthy();
-      expect(screen.getByRole("treeitem", { name: "Theme" })).toBeTruthy();
+      // Every category starts collapsed — no section rows render in the nav
+      // until a caret is clicked (or the row arrowed-into via ArrowRight).
+      expect(categoryRows.every((r) => r.getAttribute("aria-expanded") === "false")).toBe(true);
+      expect(rows).toHaveLength(categoryRows.length);
+      // The content pane is independent of the nav's own collapse state —
+      // General's controls still show even though its nav row is collapsed.
       expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
       expect(screen.queryByRole("heading", { name: "Theme" })).toBeNull();
     });
@@ -138,6 +161,28 @@ describe("SettingsDialog", () => {
       expect(screen.queryByRole("heading", { name: "Zoom" })).toBeNull();
     });
 
+    it("clicking a category's text never expands or collapses it, whether it starts collapsed or already expanded", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const appearance = screen.getByRole("treeitem", { name: "Appearance" });
+      expect(appearance.getAttribute("aria-expanded")).toBe("false");
+
+      await selectCategory("Appearance");
+
+      expect(screen.getByRole("heading", { name: "Theme" })).toBeTruthy();
+      expect(appearance.getAttribute("aria-expanded")).toBe("false");
+
+      // Expand it via the caret, then select it again by text — it must
+      // stay expanded, not toggle closed.
+      await expandCategory("Appearance");
+      expect(appearance.getAttribute("aria-expanded")).toBe("true");
+
+      await selectCategory("Appearance");
+      expect(appearance.getAttribute("aria-expanded")).toBe("true");
+    });
+
     it("resets the selected category back to General each time the dialog re-opens", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
@@ -152,6 +197,126 @@ describe("SettingsDialog", () => {
       await tick();
 
       expect(screen.getByRole("treeitem", { name: "General" }).getAttribute("aria-selected")).toBe("true");
+    });
+  });
+
+  describe("category caret vs. text click targets", () => {
+    it("clicking the caret toggles expansion without selecting the category or changing the content pane", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const appearance = screen.getByRole("treeitem", { name: "Appearance" });
+      expect(appearance.getAttribute("aria-expanded")).toBe("false");
+      // `mounted` (not `aria-selected`) is what tracks which category's
+      // content the pane actually shows — `aria-selected` here doubles as
+      // "currently holds the roving-tabindex focus", which the caret click
+      // legitimately moves (see MUST-FIX 2's `onFocusRow` call) without
+      // that meaning the category was selected/activated.
+      expect(appearance.classList.contains("mounted")).toBe(false);
+      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
+
+      await expandCategory("Appearance");
+
+      expect(appearance.getAttribute("aria-expanded")).toBe("true");
+      // The caret must never select the category — General's content stays
+      // mounted regardless of which row the click moved keyboard focus to.
+      expect(appearance.classList.contains("mounted")).toBe(false);
+      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
+      expect(screen.queryByRole("heading", { name: "Theme" })).toBeNull();
+
+      await fireEvent.click(screen.getByRole("button", { name: "Collapse Appearance" }));
+      await flush();
+
+      expect(appearance.getAttribute("aria-expanded")).toBe("false");
+      expect(appearance.classList.contains("mounted")).toBe(false);
+    });
+
+    it("gives the caret its own accessible name reflecting the category and its current expansion state", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const caret = screen.getByRole("button", { name: "Expand Editor" });
+      expect(caret.getAttribute("aria-expanded")).toBe("false");
+
+      await fireEvent.click(caret);
+      await flush();
+
+      expect(screen.getByRole("button", { name: "Collapse Editor" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Expand Editor" })).toBeNull();
+    });
+
+    // Regression: onTreeKeydown used to read `data-row-id` directly off the
+    // keydown event's own target. The caret button carries none, so a key
+    // pressed while it holds focus (reachable via a real click in some
+    // engines, or programmatically via assistive tech regardless) was
+    // silently dropped — arrow-key expand/collapse went dead from that
+    // point on, undercutting the whole reason the caret is kept out of the
+    // Tab sequence.
+    it("keeps arrow-key navigation working when the caret itself holds focus", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const caret = screen.getByRole("button", { name: "Expand General" });
+      await fireEvent.click(caret);
+      await flush();
+      caret.focus();
+
+      await fireEvent.keyDown(caret, { key: "ArrowDown" });
+      await flush();
+
+      const zoomRow = screen.getByRole("treeitem", { name: "Zoom" });
+      expect(zoomRow.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(zoomRow);
+    });
+
+    // Regression: toggleCategory used to compute off `isExpanded`'s
+    // search-forced value rather than the category's own stored one, so
+    // clicking a caret while a search forced every category open wrote the
+    // wrong collapsed/expanded value — invisible in the moment (every
+    // category already reads expanded during a search) and only surfacing
+    // once the query cleared.
+    it("toggling a caret during an active search flips the category's real stored state, not the search-forced display", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      // Appearance has never been expanded — its stored state is false.
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "a" } });
+      await tick();
+
+      // Forced open by the search, so the caret already reads "Collapse"
+      // even though nothing has actually been stored yet.
+      expect(screen.getByRole("button", { name: "Collapse Appearance" })).toBeTruthy();
+
+      await fireEvent.click(screen.getByRole("button", { name: "Collapse Appearance" }));
+      await flush();
+
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "" } });
+      await tick();
+
+      // The click toggled the real stored value (false -> true) rather
+      // than writing the forced display value (which would have left it
+      // collapsed).
+      expect(screen.getByRole("treeitem", { name: "Appearance" }).getAttribute("aria-expanded")).toBe("true");
+    });
+
+    it("renders subcategory labels visibly smaller than master-category labels", async () => {
+      settingsOverlay.set({ open: true });
+      const { container } = render(SettingsDialog);
+      await tick();
+      await expandCategory("General");
+
+      const categoryRow = container.querySelector(".settings-nav-category");
+      const sectionRow = container.querySelector(".settings-nav-section");
+      expect(categoryRow).not.toBeNull();
+      expect(sectionRow).not.toBeNull();
+
+      const categorySize = parseFloat(getComputedStyle(categoryRow!).fontSize);
+      const sectionSize = parseFloat(getComputedStyle(sectionRow!).fontSize);
+      expect(sectionSize).toBeLessThan(categorySize);
     });
   });
 
@@ -190,6 +355,8 @@ describe("SettingsDialog", () => {
       await tick();
 
       const general = screen.getByRole("treeitem", { name: "General" });
+      await fireEvent.keyDown(general, { key: "ArrowRight" });
+      await flush();
       await fireEvent.keyDown(general, { key: "ArrowDown" });
       await flush();
 
@@ -205,6 +372,14 @@ describe("SettingsDialog", () => {
       await fireEvent.keyDown(zoomRow, { key: "ArrowDown" });
       await flush();
 
+      const restoreOnStartupRow = screen.getByRole("treeitem", { name: "Restore Tabs on Startup" });
+      expect(restoreOnStartupRow.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(restoreOnStartupRow);
+      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
+
+      await fireEvent.keyDown(restoreOnStartupRow, { key: "ArrowDown" });
+      await flush();
+
       const appearance = screen.getByRole("treeitem", { name: "Appearance" });
       expect(appearance.getAttribute("aria-selected")).toBe("true");
       expect(document.activeElement).toBe(appearance);
@@ -217,6 +392,8 @@ describe("SettingsDialog", () => {
       await tick();
 
       const general = screen.getByRole("treeitem", { name: "General" });
+      await fireEvent.keyDown(general, { key: "ArrowRight" });
+      await flush();
       await fireEvent.keyDown(general, { key: "ArrowDown" });
       await flush();
       const zoomRow = screen.getByRole("treeitem", { name: "Zoom" });
@@ -237,35 +414,59 @@ describe("SettingsDialog", () => {
       await fireEvent.keyDown(general, { key: "End" });
       await flush();
 
-      const dockPosition = screen.getByRole("treeitem", { name: "Dock Position" });
-      expect(dockPosition.getAttribute("aria-selected")).toBe("true");
-      expect(document.activeElement).toBe(dockPosition);
+      // Every category starts collapsed, so the last *visible* row is the
+      // last category itself (Terminal), not a section nested under it.
+      const terminal = screen.getByRole("treeitem", { name: "Terminal" });
+      expect(terminal.getAttribute("aria-selected")).toBe("true");
+      expect(document.activeElement).toBe(terminal);
 
-      await fireEvent.keyDown(dockPosition, { key: "Home" });
+      await fireEvent.keyDown(terminal, { key: "Home" });
       await flush();
 
       expect(general.getAttribute("aria-selected")).toBe("true");
       expect(document.activeElement).toBe(general);
     });
 
+    it("Left on an already-collapsed category row is a harmless no-op", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      const appearance = screen.getByRole("treeitem", { name: "Appearance" });
+      expect(appearance.getAttribute("aria-expanded")).toBe("false");
+
+      await fireEvent.keyDown(appearance, { key: "ArrowLeft" });
+      await flush();
+
+      expect(appearance.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByRole("treeitem", { name: "Theme" })).toBeNull();
+    });
+
+    // Right must exercise the expand path and Left must exercise the
+    // collapse path against an *actually expanded* row — pressing Left
+    // first, while still collapsed, would assert a value that was already
+    // true and never touch the collapse branch at all (regression: this
+    // test used to do exactly that, and the whole suite stayed green with
+    // the collapse assignment deleted).
     it("Right expands a collapsed category to reveal its section row, Left collapses it again, neither changing the mounted category", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
 
       const appearance = screen.getByRole("treeitem", { name: "Appearance" });
-      await fireEvent.keyDown(appearance, { key: "ArrowLeft" });
-      await flush();
-
-      expect(appearance.getAttribute("aria-expanded")).toBe("false");
-      expect(screen.queryByRole("treeitem", { name: "Theme" })).toBeNull();
-      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
 
       await fireEvent.keyDown(appearance, { key: "ArrowRight" });
       await flush();
 
       expect(appearance.getAttribute("aria-expanded")).toBe("true");
       expect(screen.getByRole("treeitem", { name: "Theme" })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
+
+      await fireEvent.keyDown(appearance, { key: "ArrowLeft" });
+      await flush();
+
+      expect(appearance.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByRole("treeitem", { name: "Theme" })).toBeNull();
       expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
     });
 
@@ -275,6 +476,8 @@ describe("SettingsDialog", () => {
       await tick();
 
       const general = screen.getByRole("treeitem", { name: "General" });
+      await fireEvent.keyDown(general, { key: "ArrowRight" });
+      await flush();
       await fireEvent.keyDown(general, { key: "ArrowDown" });
       await flush();
       const zoomRow = screen.getByRole("treeitem", { name: "Zoom" });
@@ -291,12 +494,10 @@ describe("SettingsDialog", () => {
       render(SettingsDialog);
       await tick();
 
-      const general = screen.getByRole("treeitem", { name: "General" });
-      await fireEvent.keyDown(general, { key: "ArrowDown" });
+      const appearance = screen.getByRole("treeitem", { name: "Appearance" });
+      await fireEvent.keyDown(appearance, { key: "ArrowRight" });
       await flush();
-      await fireEvent.keyDown(screen.getByRole("treeitem", { name: "Zoom" }), { key: "ArrowDown" });
-      await flush();
-      await fireEvent.keyDown(screen.getByRole("treeitem", { name: "Appearance" }), { key: "ArrowDown" });
+      await fireEvent.keyDown(appearance, { key: "ArrowDown" });
       await flush();
       const themeRow = screen.getByRole("treeitem", { name: "Theme" });
       expect(themeRow.getAttribute("aria-selected")).toBe("true");
@@ -319,12 +520,10 @@ describe("SettingsDialog", () => {
       render(SettingsDialog);
       await tick();
 
-      const general = screen.getByRole("treeitem", { name: "General" });
-      await fireEvent.keyDown(general, { key: "ArrowDown" });
+      const appearance = screen.getByRole("treeitem", { name: "Appearance" });
+      await fireEvent.keyDown(appearance, { key: "ArrowRight" });
       await flush();
-      await fireEvent.keyDown(screen.getByRole("treeitem", { name: "Zoom" }), { key: "ArrowDown" });
-      await flush();
-      await fireEvent.keyDown(screen.getByRole("treeitem", { name: "Appearance" }), { key: "ArrowDown" });
+      await fireEvent.keyDown(appearance, { key: "ArrowDown" });
       await flush();
       const themeRow = screen.getByRole("treeitem", { name: "Theme" });
 
@@ -338,24 +537,31 @@ describe("SettingsDialog", () => {
       expect(scrollIntoViewSpy).toHaveBeenCalled();
     });
 
-    it("Enter on a focused category row activates it, toggling expansion and switching the mounted category", async () => {
+    it("Enter on a focused category row selects it (switches the mounted category) without ever toggling its own expansion", async () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
 
-      const general = screen.getByRole("treeitem", { name: "General" });
-      await fireEvent.keyDown(general, { key: "ArrowDown" });
-      await flush();
-      await fireEvent.keyDown(screen.getByRole("treeitem", { name: "Zoom" }), { key: "ArrowDown" });
-      await flush();
       const appearance = screen.getByRole("treeitem", { name: "Appearance" });
       expect(screen.getByRole("heading", { name: "Zoom" })).toBeTruthy();
+      expect(appearance.getAttribute("aria-expanded")).toBe("false");
 
       await fireEvent.keyDown(appearance, { key: "Enter" });
       await flush();
 
       expect(screen.getByRole("heading", { name: "Theme" })).toBeTruthy();
+      // Selecting must never also expand the row.
       expect(appearance.getAttribute("aria-expanded")).toBe("false");
+
+      // Expand it via the caret's own keyboard path, then confirm Enter
+      // still never touches expansion state — it doesn't collapse it either.
+      await fireEvent.keyDown(appearance, { key: "ArrowRight" });
+      await flush();
+      expect(appearance.getAttribute("aria-expanded")).toBe("true");
+
+      await fireEvent.keyDown(appearance, { key: "Enter" });
+      await flush();
+      expect(appearance.getAttribute("aria-expanded")).toBe("true");
     });
 
     it("falls the tabbable row back to the first visible row when a search unmounts the focused row, and arrow movement still works from there", async () => {
@@ -366,8 +572,8 @@ describe("SettingsDialog", () => {
       const general = screen.getByRole("treeitem", { name: "General" });
       await fireEvent.keyDown(general, { key: "End" });
       await flush();
-      const dockPosition = screen.getByRole("treeitem", { name: "Dock Position" });
-      expect(dockPosition.getAttribute("tabindex")).toBe("0");
+      const terminal = screen.getByRole("treeitem", { name: "Terminal" });
+      expect(terminal.getAttribute("tabindex")).toBe("0");
 
       await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "theme" } });
       await tick();
@@ -391,6 +597,7 @@ describe("SettingsDialog", () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
+      await expandCategory("Appearance");
 
       const themeRow = screen.getByRole("treeitem", { name: "Theme" });
       await fireEvent.click(themeRow);
@@ -417,6 +624,7 @@ describe("SettingsDialog", () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
+      await expandCategory("Appearance");
 
       const themeRow = screen.getByRole("treeitem", { name: "Theme" });
       await fireEvent.click(themeRow);
@@ -430,6 +638,7 @@ describe("SettingsDialog", () => {
       settingsOverlay.set({ open: true });
       render(SettingsDialog);
       await tick();
+      await expandCategory("General");
 
       const zoomRow = screen.getByRole("treeitem", { name: "Zoom" });
       await fireEvent.click(zoomRow);
@@ -665,6 +874,30 @@ describe("SettingsDialog", () => {
     });
   });
 
+  describe("restore tabs on startup", () => {
+    it("shows the checkbox checked by default (on by default)", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("General");
+
+      expect(screen.getByLabelText("Restore previously open tabs on startup")).toHaveProperty("checked", true);
+    });
+
+    it("unchecking the toggle turns the setting off, reflected in the shared store", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("General");
+
+      await fireEvent.click(screen.getByLabelText("Restore previously open tabs on startup"));
+      await flush();
+
+      expect(get(restoreTabsOnStartup)).toBe(false);
+      expect(screen.getByLabelText("Restore previously open tabs on startup")).toHaveProperty("checked", false);
+    });
+  });
+
   describe("minimap", () => {
     it("shows the checkbox checked by default (on by default)", async () => {
       settingsOverlay.set({ open: true });
@@ -699,6 +932,144 @@ describe("SettingsDialog", () => {
       await flush();
 
       expect(get(minimapEnabled)).toBe(true);
+    });
+  });
+
+  describe("word wrap", () => {
+    it("shows the checkbox unchecked by default (off by default, preserving current code-pane behavior)", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      expect(screen.getByLabelText("Wrap long lines")).toHaveProperty("checked", false);
+    });
+
+    it("checking the toggle turns the setting on, reflected in the shared store", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      await fireEvent.click(screen.getByLabelText("Wrap long lines"));
+      await flush();
+
+      expect(get(wordWrapEnabled)).toBe(true);
+      expect(screen.getByLabelText("Wrap long lines")).toHaveProperty("checked", true);
+    });
+  });
+
+  describe("tab size", () => {
+    async function openTabSizeDropdown(): Promise<HTMLElement> {
+      settingsOverlay.set({ open: true });
+      const { container } = render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+      await fireEvent.click(dropdownTrigger(container));
+      await flush();
+      return container;
+    }
+
+    it("marks the current tab size as selected", async () => {
+      tabSize.set(4);
+      await openTabSizeDropdown();
+
+      expect(screen.getByRole("option", { name: "2" }).getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByRole("option", { name: "4" }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("option", { name: "8" }).getAttribute("aria-selected")).toBe("false");
+    });
+
+    it("clicking a size option updates the shared tabSize store and closes the dropdown", async () => {
+      await openTabSizeDropdown();
+
+      await fireEvent.click(screen.getByRole("option", { name: "8" }));
+      await flush();
+
+      expect(get(tabSize)).toBe(8);
+      expect(screen.queryByRole("listbox")).toBeNull();
+    });
+  });
+
+  describe("line numbers", () => {
+    it("shows the checkbox checked by default (on by default)", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      expect(screen.getByLabelText("Show line numbers")).toHaveProperty("checked", true);
+    });
+
+    it("unchecking the toggle turns the setting off, reflected in the shared store", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      await fireEvent.click(screen.getByLabelText("Show line numbers"));
+      await flush();
+
+      expect(get(lineNumbersEnabled)).toBe(false);
+      expect(screen.getByLabelText("Show line numbers")).toHaveProperty("checked", false);
+    });
+  });
+
+  describe("auto save", () => {
+    it("shows the checkbox unchecked by default (off by default, preserving current always-manual-save behavior)", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      expect(screen.getByLabelText("Automatically save changes")).toHaveProperty("checked", false);
+    });
+
+    it("checking the toggle turns the setting on, reflected in the shared store", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Editor");
+
+      await fireEvent.click(screen.getByLabelText("Automatically save changes"));
+      await flush();
+
+      expect(get(autoSaveEnabled)).toBe(true);
+      expect(screen.getByLabelText("Automatically save changes")).toHaveProperty("checked", true);
+    });
+  });
+
+  describe("search: new settings are findable", () => {
+    it("finds Word Wrap by keyword", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "wrap" } });
+      await tick();
+
+      expect(screen.getByRole("heading", { name: "Word Wrap" })).toBeTruthy();
+    });
+
+    it("finds Auto Save by the 'autosave' synonym", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "autosave" } });
+      await tick();
+
+      expect(screen.getByRole("heading", { name: "Auto Save" })).toBeTruthy();
+    });
+
+    it("finds Restore Tabs on Startup by the 'reopen' synonym", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "reopen" } });
+      await tick();
+
+      expect(screen.getByRole("heading", { name: "Restore Tabs on Startup" })).toBeTruthy();
     });
   });
 
