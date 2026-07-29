@@ -22,6 +22,7 @@ afterEach(() => {
 function tab(path: string, patch: Partial<Tab> = {}): Tab {
   return {
     path,
+    workspaceId: "local",
     mode: "code",
     savedDoc: "",
     isDirty: false,

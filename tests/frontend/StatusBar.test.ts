@@ -36,7 +36,7 @@ vi.mock("../../src/lib/stores/settingsOverlay", async () => {
 });
 
 const ACTIVE_TAB: Tab = {
-  path: "/proj/src/app.ts",
+  path: "/proj/src/app.ts", workspaceId: "local",
   mode: "code",
   savedDoc: "",
   isDirty: false,
@@ -60,11 +60,12 @@ describe("StatusBar", () => {
     document.querySelectorAll(".atrium-tooltip").forEach((el) => el.remove());
   });
 
-  it("does not render at all with no workspace open", () => {
+  it("still renders (a standalone tab's cursor position/language stay meaningful, issue #325), but hides the search button, with no workspace open", () => {
     workspace.set({ id: "local", root: null });
     const { container } = render(StatusBar);
 
-    expect(container.querySelector(".status-bar")).toBeNull();
+    expect(container.querySelector(".status-bar")).not.toBeNull();
+    expect(screen.queryByLabelText("Search (⌘⇧F)")).toBeNull();
   });
 
   it("renders an empty right group with no tabs open", () => {

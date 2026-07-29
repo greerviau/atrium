@@ -26,7 +26,7 @@ const PANE_B = "pane-b";
 
 function seedTab(): Tab {
   const tab: Tab = {
-    path: PATH,
+    path: PATH, workspaceId: "local",
     mode: "code",
     savedDoc: "original\n",
     isDirty: false,

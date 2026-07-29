@@ -39,9 +39,15 @@ export type PtyEvent =
   | { type: "title"; cwd: string; program: string | null };
 
 const LOCAL_WORKSPACE_ID = "local";
+const STANDALONE_WORKSPACE_ID = "standalone";
 
 export function localWorkspaceId(): string {
   return LOCAL_WORKSPACE_ID;
+}
+
+/** The fixed id of the root-less workspace a file opened with no project open is read/written through — see `src-tauri/src/workspace/standalone.rs`. */
+export function standaloneWorkspaceId(): string {
+  return STANDALONE_WORKSPACE_ID;
 }
 
 export function workspaceOpenFolderDialog(): Promise<string | null> {
@@ -66,8 +72,8 @@ export function workspaceRemoveRecent(path: string): Promise<void> {
   return invoke("workspace_remove_recent", { path });
 }
 
-/** Consumes a pending Dock-menu-picked path from a cold launch, if any (macOS only). */
-export function workspaceTakePendingOpen(): Promise<string | null> {
+/** Drains every pending Dock-menu-picked (or OS "Open With Atrium") path from a cold launch, if any (macOS only). */
+export function workspaceTakePendingOpen(): Promise<string[]> {
   return invoke("workspace_take_pending_open");
 }
 

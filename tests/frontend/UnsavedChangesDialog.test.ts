@@ -32,6 +32,7 @@ vi.mock("../../src/lib/ipc/commands", () => ({
 function dirtyTab(path: string): Tab {
   return {
     path,
+    workspaceId: "local",
     mode: "code",
     savedDoc: "",
     isDirty: true,

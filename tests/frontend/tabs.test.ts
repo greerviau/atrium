@@ -39,6 +39,7 @@ vi.mock("../../src/lib/ipc/commands", () => ({
 function markdownTab(path: string, overrides: Partial<Tab> = {}): Tab {
   return {
     path,
+    workspaceId: "local",
     mode: "markdown",
     savedDoc: "",
     isDirty: false,
@@ -53,6 +54,7 @@ function markdownTab(path: string, overrides: Partial<Tab> = {}): Tab {
 function codeTab(path: string, overrides: Partial<Tab> = {}): Tab {
   return {
     path,
+    workspaceId: "local",
     mode: "code",
     savedDoc: "",
     isDirty: false,

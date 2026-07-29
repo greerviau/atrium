@@ -30,7 +30,7 @@ vi.mock("../../src/lib/ipc/commands", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/lib/ipc/commands")>();
   return {
     ...actual,
-    workspaceTakePendingOpen: vi.fn().mockResolvedValue(null),
+    workspaceTakePendingOpen: vi.fn().mockResolvedValue([]),
     appConfirmClose: vi.fn().mockResolvedValue(undefined),
     fsReadFile: vi.fn().mockResolvedValue("original\n"),
     fsListDir: vi.fn().mockResolvedValue([]),

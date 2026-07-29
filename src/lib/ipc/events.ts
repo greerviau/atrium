@@ -48,7 +48,13 @@ export function onMenuEvent(
   return listen(id, () => handler());
 }
 
-/** A macOS Dock-menu pick resolved while the app was already running. */
+/**
+ * A path the OS resolved while the app was already running: a macOS
+ * Dock-menu pick (always a folder), or `RunEvent::Opened` — a system-level
+ * "Open Recent" pick or a real "Open With Atrium" (issue #325), either of
+ * which may now be a file, not a folder. The handler classifies which
+ * before deciding what to do with it (`App.svelte`'s `doHandleOsOpenPath`).
+ */
 export function onDockOpenPath(handler: (path: string) => void): Promise<UnlistenFn> {
   return listen<string>("dock:open-path", (event) => handler(event.payload));
 }

@@ -17,6 +17,7 @@ const ROOT = "/proj";
 function codeTab(path: string, overrides: Partial<Tab> = {}): Tab {
   return {
     path,
+    workspaceId: "local",
     mode: "code",
     savedDoc: "",
     isDirty: false,

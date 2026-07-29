@@ -15,7 +15,7 @@ describe("EditorPane: line wrapping by file type", () => {
 
   it("does not wrap long lines in a code-mode pane", () => {
     seedTab({
-      path: "/example.py",
+      path: "/example.py", workspaceId: "local",
       mode: "code",
       savedDoc: "x = 1\n",
       isDirty: false,
@@ -30,7 +30,7 @@ describe("EditorPane: line wrapping by file type", () => {
 
   it("wraps long lines in a markdown-mode pane, in both rendered and source view", () => {
     seedTab({
-      path: "/notes.md",
+      path: "/notes.md", workspaceId: "local",
       mode: "markdown",
       savedDoc: "some prose\n",
       isDirty: false,
@@ -44,7 +44,7 @@ describe("EditorPane: line wrapping by file type", () => {
     cleanup();
 
     seedTab({
-      path: "/notes.md",
+      path: "/notes.md", workspaceId: "local",
       mode: "markdown",
       savedDoc: "some prose\n",
       isDirty: false,
@@ -66,7 +66,7 @@ describe("EditorPane: scrollbar auto-hide", () => {
 
   it("adds scrollbar-autohide to the CodeMirror scroller once mounted", () => {
     seedTab({
-      path: "/example.py",
+      path: "/example.py", workspaceId: "local",
       mode: "code",
       savedDoc: "x = 1\n",
       isDirty: false,

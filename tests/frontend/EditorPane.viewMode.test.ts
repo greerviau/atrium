@@ -32,7 +32,7 @@ function findView(container: HTMLElement): EditorView {
 
 function seedMarkdownTab(): Tab {
   const tab: Tab = {
-    path: FILE_PATH,
+    path: FILE_PATH, workspaceId: "local",
     mode: "markdown",
     savedDoc: FIXTURE_DOC,
     isDirty: false,

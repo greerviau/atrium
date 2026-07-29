@@ -38,7 +38,7 @@ const MD_PATH = "/notes.md";
 
 function seedCodeTab(): void {
   const tab: Tab = {
-    path: CODE_PATH,
+    path: CODE_PATH, workspaceId: "local",
     mode: "code",
     savedDoc: "const x = 1;\n",
     isDirty: false,
@@ -51,7 +51,7 @@ function seedCodeTab(): void {
 
 function seedMarkdownTab(viewMode: "rendered" | "source" = "rendered"): void {
   const tab: Tab = {
-    path: MD_PATH,
+    path: MD_PATH, workspaceId: "local",
     mode: "markdown",
     savedDoc: "# Heading\n",
     isDirty: false,
