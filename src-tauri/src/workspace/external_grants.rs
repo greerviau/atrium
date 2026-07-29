@@ -249,12 +249,25 @@ impl ExternalGrants {
         if !ASSET_EXTENSION_ALLOWLIST.contains(&extension.as_str()) {
             return None;
         }
-        self.granted_directories()
-            .into_iter()
-            .filter(|dir| dir.components().count() > MIN_ASSET_ROOT_COMPONENTS) // refuse a degenerate root, e.g. a grant sitting directly at `/`
-            .find(|dir| canonical_candidate.starts_with(dir))
-            .map(|_| canonical_candidate)
+        asset_root_permits(&canonical_candidate, &self.granted_directories())
+            .then_some(canonical_candidate)
     }
+}
+
+/// Whether `candidate` sits at or under one of `granted_dirs`, subject to the
+/// minimum-depth floor (`MIN_ASSET_ROOT_COMPONENTS`) that refuses a
+/// degenerate root (e.g. a grant sitting directly at `/`). Factored out of
+/// `resolve_asset` — its only caller — purely so the floor itself can be
+/// exercised directly in a test: constructing a real grant at the actual
+/// filesystem root requires privileges the test process doesn't have, so a
+/// test going through `resolve_asset` end-to-end can never reach that
+/// branch. This function is pure and filesystem-independent, so a test can
+/// hand it a synthetic `PathBuf::from("/")` directly.
+fn asset_root_permits(candidate: &Path, granted_dirs: &[PathBuf]) -> bool {
+    granted_dirs
+        .iter()
+        .filter(|dir| dir.components().count() > MIN_ASSET_ROOT_COMPONENTS)
+        .any(|dir| candidate.starts_with(dir))
 }
 
 /// Extensions this app's markdown image rendering can ever actually
@@ -660,10 +673,18 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_asset_rejects_a_non_image_file_under_the_granted_directory() {
+        // Deliberately given a real (non-allowlisted) extension rather than
+        // being fully extensionless: an extensionless path already gets
+        // rejected earlier by `canonical_candidate.extension()?` alone, so
+        // that alone wouldn't exercise the allowlist's own `contains` check
+        // — deleting the allowlist check entirely would leave this case
+        // untouched and the test would stay green. A `.pem` extension does
+        // reach the allowlist check, so this goes red if that check is
+        // removed.
         let dir = tempfile::tempdir().unwrap();
         let md = dir.path().join("README.md");
         write(&md, "# hi");
-        let secret = dir.path().join("id_rsa");
+        let secret = dir.path().join("id_rsa.pem");
         write(&secret, "-----BEGIN PRIVATE KEY-----");
         let grants = ExternalGrants::new();
         grants.grant(md.to_str().unwrap()).await.unwrap();
@@ -704,29 +725,50 @@ mod tests {
         assert_eq!(resolved, None);
     }
 
-    #[tokio::test]
-    async fn resolve_asset_rejects_a_grant_sitting_directly_at_a_degenerate_root() {
+    #[test]
+    fn depth_floor_rejects_a_grant_sitting_directly_at_a_degenerate_root() {
         // A grant whose canonical parent is exactly "/" (one RootDir
-        // component) must never be usable as an asset-resolution root,
-        // regardless of extension — pinning the depth floor. Constructing
-        // this exactly requires a real file at filesystem root, which the
-        // test process can't create, so this exercises the floor directly
-        // via the component-count logic through a synthetic check instead:
-        // a granted directory with exactly one component can't occur under
-        // a tempdir, so we assert the floor's boundary condition using
-        // `Path` directly.
-        assert!(Path::new("/").components().count() <= MIN_ASSET_ROOT_COMPONENTS);
-        assert!(Path::new("/home").components().count() > MIN_ASSET_ROOT_COMPONENTS);
+        // component) must never be usable as an asset-resolution root.
+        // Constructing this for real requires a file at the actual
+        // filesystem root, which the test process has no permission to
+        // create — so this calls `asset_root_permits`, the exact function
+        // `resolve_asset` delegates this decision to, directly with a
+        // synthetic root path. This is genuinely mutation-sensitive:
+        // deleting the floor's `.filter(...)` inside `asset_root_permits`
+        // makes `/` match via `starts_with` like any other directory (every
+        // absolute path starts with `/`), which flips the first assertion
+        // below from pass to fail.
+        let degenerate_root = [PathBuf::from("/")];
+        let real_subdirectory = [PathBuf::from("/home/alice")];
+        let candidate = PathBuf::from("/home/alice/logo.png");
+
+        assert!(
+            !asset_root_permits(&candidate, &degenerate_root),
+            "a grant sitting directly at the filesystem root must not authorize anything"
+        );
+        // Proves the assertion above actually exercises the floor rather
+        // than being vacuously false for every input: the identical
+        // candidate against a real subdirectory grant does match.
+        assert!(asset_root_permits(&candidate, &real_subdirectory));
     }
 
     // Round 3's ordering bug: symlink named with an allowlisted extension
-    // whose target has no extension at all (standing in for ~/.ssh/id_rsa).
+    // whose target has a real, non-allowlisted extension (standing in for
+    // ~/.ssh/id_rsa). The target deliberately has an extension of its own
+    // (`.pem`, not extensionless) so this test also exercises the allowlist
+    // `contains` check itself, not just the canonicalize-before-extension
+    // ordering: if the ordering fix regressed (extension taken from the raw
+    // `logo.png` name instead of the resolved path), this would see the
+    // allowlisted "png" and wrongly resolve; if the allowlist check itself
+    // were deleted, the resolved "pem" extension would sail through
+    // unfiltered and this would also wrongly resolve. Either mutation turns
+    // this red.
     #[tokio::test]
     async fn resolve_asset_rejects_a_symlink_named_with_an_image_extension_pointing_at_a_secret() {
         let dir = tempfile::tempdir().unwrap();
         let md = dir.path().join("README.md");
         write(&md, "# hi");
-        let secret = dir.path().join("id_rsa");
+        let secret = dir.path().join("id_rsa.pem");
         write(&secret, "-----BEGIN PRIVATE KEY-----\nsuper secret\n");
         let disguised_link = dir.path().join("logo.png");
         std::os::unix::fs::symlink(&secret, &disguised_link).unwrap();
@@ -737,7 +779,7 @@ mod tests {
         let resolved = grants.resolve_asset(disguised_link.to_str().unwrap()).await;
         assert_eq!(
             resolved, None,
-            "a symlink named *.png pointing at an extensionless secret must not resolve"
+            "a symlink named *.png pointing at a non-image secret must not resolve"
         );
 
         // Critical: the secret's contents were never read/returned via this path.
