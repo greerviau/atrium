@@ -50,6 +50,38 @@ function threeTabRects(): Array<{ path: string; rect: DOMRect }> {
   ];
 }
 
+/**
+ * A tab element whose own measured `left` can be changed mid-gesture, via
+ * the returned setter — standing in for what a real committed reorder does
+ * to the dragged tab's own layout position (it moves to a new sibling slot,
+ * so its next `getBoundingClientRect()` reads a different `left`).
+ * `makeTabEl`'s own rect is fixed for its whole lifetime, which can't
+ * exercise the clear-measure-reapply fix at all: with a rect that never
+ * changes, `e.clientX - grabOffsetX - rect.left` and the naive, gesture-
+ * start-anchored `e.clientX - startX` compute the exact same number on
+ * every move, so a reversion to the naive form would leave every existing
+ * assertion green.
+ */
+function makeMovableTabEl(initialLeft: number, width: number): { el: HTMLElement; setLeft: (left: number) => void } {
+  let left = initialLeft;
+  const el = document.createElement("div");
+  vi.spyOn(el, "getBoundingClientRect").mockImplementation(
+    () =>
+      ({
+        left,
+        right: left + width,
+        top: 0,
+        bottom: 20,
+        width,
+        height: 20,
+        x: left,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect,
+  );
+  return { el, setLeft: (l) => (left = l) };
+}
+
 afterEach(() => {
   draggingTabKey.set(null);
 });
@@ -77,6 +109,33 @@ describe("beginTabDrag", () => {
     expect(get(draggingTabKey)).toBe("leaf:a");
     expect(onReorder).toHaveBeenCalledTimes(1);
     expect(onReorder).toHaveBeenCalledWith("a", 1);
+  });
+
+  // This is the test that catches M3 (the clear-measure-reapply fix): a
+  // naive, gesture-start-anchored transform (`translateX(clientX - startX)`)
+  // and the correct clear-measure-reapply one (`clientX - grabOffsetX -
+  // rect.left`, re-measuring the tab's own live position on every move)
+  // compute the *same* number as long as the tab's own measured position
+  // never changes mid-gesture — which is exactly what a fixed-rect mock
+  // gives you, and exactly why this needs `makeMovableTabEl` rather than
+  // `makeTabEl`. `setLeft` between the two moves stands in for a real
+  // committed reorder relocating the dragged tab's DOM node to a new
+  // sibling slot: the second move's pointer travels 50px further, but the
+  // tab's own layout position also shifted 50px, so the *correct* transform
+  // stays anchored at the same 70px offset from the pointer throughout — a
+  // stale, start-anchored implementation can't see the shift at all and
+  // drifts to 120px instead.
+  it("re-measures the tab's own position fresh on each move, instead of caching the offset from drag start (M3 regression)", () => {
+    const { el: tabEl, setLeft } = makeMovableTabEl(0, 50);
+    const onReorder = vi.fn();
+    beginTabDrag(tabEl, pointerEvt("pointerdown", { clientX: 10 }), "leaf:a", "a", threeTabRects, onReorder);
+
+    window.dispatchEvent(pointerEvt("pointermove", { clientX: 80 }));
+    expect(tabEl.style.transform).toBe("translateX(70px)");
+
+    setLeft(50); // simulate the prior commit relocating the tab 50px right
+    window.dispatchEvent(pointerEvt("pointermove", { clientX: 130 }));
+    expect(tabEl.style.transform).toBe("translateX(70px)");
   });
 
   // This is the test that would have caught round 1's M2 (pointer capture
