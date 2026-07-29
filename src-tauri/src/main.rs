@@ -8,6 +8,8 @@ mod fs_watch;
 mod link_resolve;
 #[cfg(target_os = "macos")]
 mod macos_dock;
+#[cfg(target_os = "macos")]
+mod macos_traffic_lights;
 mod pty_manager;
 mod recents;
 mod state;
@@ -286,6 +288,28 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 /// styles (`style-mod`'s `document.createElement("style")` +
 /// `.textContent`, the one real `style-src` need) with no obvious cause in
 /// whatever diff triggered it.
+/// The compiled-in `tauri.conf.json`, with the main window's
+/// `trafficLightPosition` filled in on macOS.
+///
+/// That offset is deliberately absent from `tauri.conf.json`: centering the
+/// native traffic lights in the custom title bar depends on AppKit button
+/// metrics that changed between macOS versions, so any value hardcoded in
+/// the config is correct on exactly one of them (issue #332). It is
+/// measured and derived at startup instead — see `macos_traffic_lights` —
+/// and patched in here because `trafficLightPosition` takes effect only at
+/// window creation, which happens inside `build()` below.
+fn build_context() -> tauri::Context<tauri::Wry> {
+    #[allow(unused_mut)]
+    let mut context = tauri::generate_context!();
+
+    #[cfg(target_os = "macos")]
+    if let Some(window) = context.config_mut().app.windows.first_mut() {
+        window.traffic_light_position = Some(macos_traffic_lights::position());
+    }
+
+    context
+}
+
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -394,7 +418,7 @@ fn main() {
             commands::shell::shell_open_external,
             commands::shell::open_external_link,
         ])
-        .build(tauri::generate_context!())
+        .build(build_context())
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {

@@ -78,10 +78,11 @@
 
 <style>
   .title-bar {
-    /* Native traffic lights are positioned independently via trafficLightPosition in
-       src-tauri/tauri.conf.json: x pairs with padding-left, y with this height. If height
-       changes, re-derive y ≈ 21 + (height - 38) / 2 — 21 is empirically calibrated for
-       this 38px bar, not a general offset formula to extrapolate from. */
+    /* The native traffic lights are laid out by AppKit, not by this element. They are
+       centered against this height by src-tauri/src/macos_traffic_lights.rs, which
+       mirrors it as TITLE_BAR_HEIGHT (and pairs TRAFFIC_LIGHT_X with the padding-left
+       below, which reserves room for the cluster) — update those two constants
+       alongside these. */
     height: 38px;
     flex-shrink: 0;
     display: flex;
