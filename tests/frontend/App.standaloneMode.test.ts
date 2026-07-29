@@ -259,6 +259,67 @@ describe("App standalone mode (issue #325)", () => {
     expect(new Set(allPaths)).toEqual(new Set([localPathA, localPathB, standalonePathA, standalonePathB]));
   });
 
+  // Test 5, the other direction — localTree a single (non-split) leaf,
+  // standalone already a row split. Reachable by the ordinary gesture of
+  // splitting the standalone pane left/right before ever opening a project.
+  // A merge that only checked `localIsRow` (missing the `standaloneIsRow`
+  // branch) would fall through to the always-nest default here, producing a
+  // 2-child split whose second child is itself a 2-child row split — this
+  // asserts the flat 3-leaf result instead.
+  it("merges a single local leaf into an already-row-split standalone tree, flat, not nested", async () => {
+    const standalonePathA = "/tmp/s-a.ts";
+    const standalonePathB = "/tmp/s-b.ts";
+    const localPathA = PROJECT_A + "/a.ts";
+
+    localStorage.setItem(
+      "atrium.editorSession." + PROJECT_A,
+      JSON.stringify({
+        paneTree: { type: "leaf", id: "LA", tabs: [localPathA], activeTabPath: localPathA },
+        focusedPaneId: "LA",
+      }),
+    );
+
+    render(App);
+    await flush();
+
+    tabsState.set({
+      tabs: [
+        { path: standalonePathA, workspaceId: standaloneWorkspaceId(), mode: "code", savedDoc: "", isDirty: false, hasExternalConflict: false, isExternal: true, isDeleted: false },
+        { path: standalonePathB, workspaceId: standaloneWorkspaceId(), mode: "code", savedDoc: "", isDirty: false, hasExternalConflict: false, isExternal: true, isDeleted: false },
+      ],
+      activeTabPath: standalonePathA,
+    });
+    editorPaneTree.set({
+      type: "split",
+      id: "standalone-row",
+      direction: "row",
+      children: [
+        { type: "leaf", id: "SL1", tabs: [standalonePathA], activeTabPath: standalonePathA },
+        { type: "leaf", id: "SL2", tabs: [standalonePathB], activeTabPath: standalonePathB },
+      ],
+      sizes: [0.5, 0.5],
+    });
+    focusedEditorPaneId.set("SL1");
+    await flush();
+
+    await openWorkspacePath(PROJECT_A);
+    await flush();
+    await flush();
+
+    const tree = get(editorPaneTree);
+    expect(tree).not.toBeNull();
+    expect(tree?.type).toBe("split");
+    if (tree?.type !== "split") throw new Error("expected a split");
+    expect(tree.direction).toBe("row");
+    // Flat: three leaves directly under one split, none of them themselves a
+    // split — the missing-branch bug instead nests the standalone row two
+    // levels deep as the second child of a 2-child outer split.
+    expect(tree.children).toHaveLength(3);
+    expect(tree.children.every((c) => c.type === "leaf")).toBe(true);
+    const allPaths = listLeaves(tree).flatMap((l) => l.tabs);
+    expect(new Set(allPaths)).toEqual(new Set([localPathA, standalonePathA, standalonePathB]));
+  });
+
   // Test 6 — the project's persisted session never contains an out-of-root
   // (standalone) path after a merge, including on the project's first-ever
   // open (no persisted session at all, `restored === null`).

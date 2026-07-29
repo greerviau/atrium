@@ -46,8 +46,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
-/// The fixed id `StandaloneWorkspace` is registered under — see
-/// `workspace::mod::register_startup_workspaces` and
+/// The fixed id `StandaloneWorkspace` is registered under — see `main.rs`'s
+/// `.setup()`, where the sole instance is created and registered once, and
 /// `commands::workspace::is_reserved_workspace_id`, which refuses to ever
 /// let `workspace_set_root` be called with this id.
 pub const STANDALONE_WORKSPACE_ID: &str = "standalone";
