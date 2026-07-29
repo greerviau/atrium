@@ -470,6 +470,22 @@ body.cm-table-dragging-active * {
   cursor: grabbing !important;
 }
 
+/* Same pattern as .cm-table-dragging-active above, for the editor
+   minimap's own drag: an inline `document.body.style.cursor` write loses
+   to WebKit's auto-cursor-over-editable-content heuristic once the
+   pointer crosses into a `.cm-content` region, because nothing in the
+   cascade gives that element an explicit value there — inheritance alone
+   isn't enough. An `!important` rule matching the element directly always
+   wins over that heuristic instead, which is exactly why the table-drag
+   cursor above already survives crossing over live editable text on the
+   same WebKit target this app runs. Toggled on `document.body` by the
+   vendored minimap patch's `onMouseDown`/`_endDrag`
+   (patches/@replit+codemirror-minimap+0.5.2.patch). */
+body.cm-minimap-dragging-active,
+body.cm-minimap-dragging-active * {
+  cursor: default !important;
+}
+
 .cm-table-row-handle:hover .cm-table-handle-dot,
 .cm-table-col-bar:hover .cm-table-handle-dot {
   background: var(--atrium-accent);
