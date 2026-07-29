@@ -924,9 +924,13 @@
     for (const path of filePaths) {
       if (root) {
         try {
-          await fsGrantExternalFile(root, path);
-        } catch {
-          // Swallowed deliberately — see the doc comment above.
+          await fsGrantExternalFile(localWorkspaceId(), path);
+        } catch (err) {
+          // Deliberately not toasted — openFileReportingErrors below surfaces its own
+          // error. Logged so a failed grant is diagnosable rather than invisible: this
+          // is the only runtime signal a rejected grant ever produces, and its absence
+          // is part of why this bug survived three review rounds undetected.
+          console.warn("atrium: fs_grant_external_file failed", path, err);
         }
       }
       openFileReportingErrors(path);
