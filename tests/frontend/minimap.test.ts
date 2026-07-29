@@ -1,20 +1,30 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { minimapExtension } from "../../src/lib/editor/minimap";
 
 let view: EditorView | undefined;
+let mountedContainer: HTMLElement | undefined;
 
 afterEach(() => {
   view?.destroy();
   view = undefined;
+  mountedContainer?.remove();
+  mountedContainer = undefined;
   document.body.style.cursor = "";
   document.body.style.userSelect = "";
   document.body.style.webkitUserSelect = "";
 });
 
+// Attached to document.body (not left detached) because a mousemove
+// dispatched from `.cm-content` needs to bubble all the way to the
+// `window`-level listener the overlay actually registers — a detached
+// subtree's events never reach `window` at all, only ancestors within the
+// same detached tree.
 function mount(enabled: boolean): HTMLElement {
   const container = document.createElement("div");
+  document.body.appendChild(container);
+  mountedContainer = container;
   view = new EditorView({
     state: EditorState.create({
       doc: "line one\nline two\nline three\n",
@@ -249,21 +259,47 @@ describe("minimapExtension", () => {
   // The cases below cover the contentEditable lifecycle added to defeat
   // WebKit's -webkit-user-modify exemption (see the vendored patch's
   // _restoreEditability doc comment for the mechanism). jsdom has no
-  // selection engine and doesn't implement WebKit's effectiveUserSelect at
-  // all, so these can only prove the DOM attribute is toggled and restored
-  // at the right moments — not that a real WebKit build actually stops
-  // selecting text or shows the right cursor. That can only be confirmed by
-  // hand against the packaged app.
+  // selection engine and doesn't implement WebKit's effectiveUserSelect, or
+  // WebKit's blur-on-loss-of-editability, at all — it still reports
+  // `hasFocus === true` with `contenteditable="false"` — so these can only
+  // prove the DOM attribute (and, where noted, the view.focus() call) are
+  // toggled and restored at the right moments, never that a real WebKit
+  // build actually stops selecting text, shows the right cursor, or keeps
+  // the caret visible. That can only be confirmed by hand against the
+  // packaged app.
 
-  it("disables contentEditable on the content DOM for the duration of a drag, and restores it on mouseup", () => {
+  /** Simulates the pointer being over `el` when a mousemove fires, by dispatching from `el` so it bubbles to `window` with `event.target === el` — matching how a real browser sets `target` from hit-testing, which `window.dispatchEvent(...)` alone cannot reproduce (its `target` would be `window` itself). */
+  function moveFrom(el: Element, opts: Partial<MouseEventInit> = {}) {
+    el.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, buttons: 1, clientY: 50, ...opts }));
+  }
+
+  it("defers clearing contentEditable until the drag leaves the minimap, then restores it on mouseup", () => {
     const container = mount(true);
     const content = container.querySelector(".cm-content") as HTMLElement;
-    const overlayContainer = container.querySelector(".cm-minimap-overlay-container");
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container") as HTMLElement;
     expect(overlayContainer).not.toBeNull();
     expect(content.getAttribute("contenteditable")).toBe("true");
 
-    overlayContainer!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    // Mousedown alone must never blur the editor — only a drag that
+    // actually reaches outside the minimap needs the guard.
+    expect(content.getAttribute("contenteditable")).toBe("true");
+
+    moveFrom(content);
     expect(content.getAttribute("contenteditable")).toBe("false");
+
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+    expect(content.getAttribute("contenteditable")).toBe("true");
+  });
+
+  it("never clears contentEditable for a click-to-jump or a drag that stays on the minimap track", () => {
+    const container = mount(true);
+    const content = container.querySelector(".cm-content") as HTMLElement;
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container") as HTMLElement;
+
+    overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    moveFrom(overlayContainer, { clientY: 60 });
+    expect(content.getAttribute("contenteditable")).toBe("true");
 
     window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
     expect(content.getAttribute("contenteditable")).toBe("true");
@@ -272,25 +308,113 @@ describe("minimapExtension", () => {
   it("restores contentEditable via the off-window self-heal path", () => {
     const container = mount(true);
     const content = container.querySelector(".cm-content") as HTMLElement;
-    const overlayContainer = container.querySelector(".cm-minimap-overlay-container");
-    expect(overlayContainer).not.toBeNull();
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container") as HTMLElement;
 
-    overlayContainer!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    moveFrom(content);
     expect(content.getAttribute("contenteditable")).toBe("false");
 
+    // The mouseup happened outside the window, so no mouseup event was ever
+    // dispatched; the next mousemove back inside the window reports buttons
+    // === 0, which is the only signal this recovery path has to go on.
     window.dispatchEvent(
       new MouseEvent("mousemove", { bubbles: true, cancelable: true, buttons: 0, clientY: 50 }),
     );
     expect(content.getAttribute("contenteditable")).toBe("true");
   });
 
+  it("restores contentEditable and cursor on a window blur mid-drag", () => {
+    const container = mount(true);
+    const content = container.querySelector(".cm-content") as HTMLElement;
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container") as HTMLElement;
+
+    overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    moveFrom(content);
+    expect(content.getAttribute("contenteditable")).toBe("false");
+    expect(document.body.style.cursor).toBe("default");
+
+    // A mid-drag Cmd-Tab / Space switch / native context menu blurs the
+    // window; the in-window self-heal above never fires because an
+    // inactive window gets no mousemove at all — this is the recovery path
+    // that case needs instead.
+    window.dispatchEvent(new Event("blur"));
+
+    expect(content.getAttribute("contenteditable")).toBe("true");
+    expect(document.body.style.cursor).toBe("");
+    expect(overlayContainer.classList.contains("cm-minimap-overlay-active")).toBe(false);
+  });
+
+  it("recovers from a mousedown arriving while a drag is still latched, restoring contentEditable", () => {
+    const container = mount(true);
+    const content = container.querySelector(".cm-content") as HTMLElement;
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container") as HTMLElement;
+
+    // The first drag leaves the minimap (clearing contentEditable) but its
+    // mouseup is never delivered — e.g. released outside the window before
+    // any self-heal move was observed.
+    overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    moveFrom(content);
+    expect(content.getAttribute("contenteditable")).toBe("false");
+
+    // A fresh mousedown arrives while that stale drag is still latched.
+    // Without the re-entrancy guard in onMouseDown, this would re-capture
+    // "was editable" from the already-false DOM, and the mouseup below
+    // would then skip the restore permanently.
+    overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+
+    expect(content.getAttribute("contenteditable")).toBe("true");
+  });
+
+  it("restores contentEditable immediately on a keydown mid-drag, without ending the drag", () => {
+    const container = mount(true);
+    const content = container.querySelector(".cm-content") as HTMLElement;
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container") as HTMLElement;
+
+    overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    moveFrom(content);
+    expect(content.getAttribute("contenteditable")).toBe("false");
+    expect(overlayContainer.classList.contains("cm-minimap-overlay-active")).toBe(true);
+
+    // Doesn't rescue this exact keystroke (see onKeyDown's doc comment),
+    // but restores editability and focus before the next one, so typing
+    // resumes rather than staying silently stuck for the rest of the drag.
+    window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "a" }));
+    expect(content.getAttribute("contenteditable")).toBe("true");
+
+    // The drag itself keeps running: a stray keystroke isn't a mouseup.
+    expect(overlayContainer.classList.contains("cm-minimap-overlay-active")).toBe(true);
+    expect(document.body.style.cursor).toBe("default");
+
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+    expect(overlayContainer.classList.contains("cm-minimap-overlay-active")).toBe(false);
+  });
+
+  it("ignores a bare modifier keydown mid-drag, leaving contentEditable cleared", () => {
+    const container = mount(true);
+    const content = container.querySelector(".cm-content") as HTMLElement;
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container") as HTMLElement;
+
+    overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    moveFrom(content);
+    expect(content.getAttribute("contenteditable")).toBe("false");
+
+    for (const key of ["Shift", "Control", "Alt", "Meta"]) {
+      window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key }));
+      expect(content.getAttribute("contenteditable"), `expected ${key} to be ignored`).toBe("false");
+    }
+
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+    expect(content.getAttribute("contenteditable")).toBe("true");
+  });
+
   it("restores contentEditable when the view is destroyed mid-drag", () => {
     const container = mount(true);
     const content = container.querySelector(".cm-content") as HTMLElement;
-    const overlayContainer = container.querySelector(".cm-minimap-overlay-container");
-    expect(overlayContainer).not.toBeNull();
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container") as HTMLElement;
 
-    overlayContainer!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    moveFrom(content);
     expect(content.getAttribute("contenteditable")).toBe("false");
 
     view?.destroy();
@@ -298,32 +422,10 @@ describe("minimapExtension", () => {
     expect(content.getAttribute("contenteditable")).toBe("true");
   });
 
-  it("restores contentEditable immediately on a keydown mid-drag, without ending the drag", () => {
-    const container = mount(true);
-    const content = container.querySelector(".cm-content") as HTMLElement;
-    const overlayContainer = container.querySelector(".cm-minimap-overlay-container");
-    expect(overlayContainer).not.toBeNull();
-
-    overlayContainer!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
-    expect(content.getAttribute("contenteditable")).toBe("false");
-    expect(overlayContainer!.classList.contains("cm-minimap-overlay-active")).toBe(true);
-
-    // A keystroke landing mid-drag must never be silently dropped — the
-    // content DOM regains editability before this event's own default
-    // action (native text insertion) would otherwise run against it.
-    window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "a" }));
-    expect(content.getAttribute("contenteditable")).toBe("true");
-
-    // The drag itself keeps running: a stray keystroke isn't a mouseup.
-    expect(overlayContainer!.classList.contains("cm-minimap-overlay-active")).toBe(true);
-    expect(document.body.style.cursor).toBe("default");
-
-    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
-    expect(overlayContainer!.classList.contains("cm-minimap-overlay-active")).toBe(false);
-  });
-
   it("leaves a non-editable editor's contentEditable untouched by a minimap drag", () => {
     const container = document.createElement("div");
+    document.body.appendChild(container);
+    mountedContainer = container;
     view = new EditorView({
       state: EditorState.create({
         doc: "line one\nline two\nline three\n",
@@ -334,13 +436,61 @@ describe("minimapExtension", () => {
     const content = container.querySelector(".cm-content") as HTMLElement;
     expect(content.getAttribute("contenteditable")).toBe("false");
 
-    const overlayContainer = container.querySelector(".cm-minimap-overlay-container");
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container") as HTMLElement;
     expect(overlayContainer).not.toBeNull();
 
-    overlayContainer!.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    moveFrom(content);
     expect(content.getAttribute("contenteditable")).toBe("false");
 
     window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
     expect(content.getAttribute("contenteditable")).toBe("false");
+  });
+
+  it("restores pre-existing body cursor/user-select instead of blanking them", () => {
+    document.body.style.cursor = "grabbing";
+    document.body.style.userSelect = "text";
+    document.body.style.webkitUserSelect = "text";
+
+    const container = mount(true);
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container") as HTMLElement;
+
+    overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    expect(document.body.style.cursor).toBe("default");
+
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+    expect(document.body.style.cursor).toBe("grabbing");
+    expect(document.body.style.userSelect).toBe("text");
+    expect(document.body.style.webkitUserSelect).toBe("text");
+  });
+
+  it("calls view.focus() on restore only when the view was focused going into the drag", () => {
+    const container = mount(true);
+    const content = container.querySelector(".cm-content") as HTMLElement;
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container") as HTMLElement;
+    content.focus();
+    expect(view!.hasFocus).toBe(true);
+    const focusSpy = vi.spyOn(view!, "focus");
+
+    overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    moveFrom(content);
+    expect(content.getAttribute("contenteditable")).toBe("false");
+
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+    expect(focusSpy).toHaveBeenCalled();
+  });
+
+  it("does not call view.focus() on restore when the view wasn't focused going into the drag", () => {
+    const container = mount(true);
+    const content = container.querySelector(".cm-content") as HTMLElement;
+    const overlayContainer = container.querySelector(".cm-minimap-overlay-container") as HTMLElement;
+    // Deliberately not focused: content.focus() is never called.
+    const focusSpy = vi.spyOn(view!, "focus");
+
+    overlayContainer.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+    moveFrom(content);
+    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+
+    expect(focusSpy).not.toHaveBeenCalled();
   });
 });

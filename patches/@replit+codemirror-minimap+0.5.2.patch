@@ -1,17 +1,26 @@
 diff --git a/node_modules/@replit/codemirror-minimap/dist/index.cjs b/node_modules/@replit/codemirror-minimap/dist/index.cjs
-index 3f0c98a..b76e30e 100644
+index 3f0c98a..7e18405 100644
 --- a/node_modules/@replit/codemirror-minimap/dist/index.cjs
 +++ b/node_modules/@replit/codemirror-minimap/dist/index.cjs
-@@ -99,6 +99,8 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+@@ -95,10 +95,17 @@ const Theme$1 = view.EditorView.theme({
+     },
+ });
+ const SCALE = Scale.PixelMultiplier * Scale.SizeRatio;
++const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta"]);
+ const OverlayView = view.ViewPlugin.fromClass(class {
      constructor(view) {
          this.view = view;
          this._isDragging = false;
 +        this._wasEditable = false;
 +        this._wasFocused = false;
++        this._editableToggled = false;
++        this._prevCursor = "";
++        this._prevUserSelect = "";
++        this._prevWebkitUserSelect = "";
          if (view.state.facet(Config).enabled) {
              this.create(view);
          }
-@@ -108,9 +110,14 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+@@ -108,9 +115,24 @@ const OverlayView = view.ViewPlugin.fromClass(class {
          this.dom = crelt__default["default"]("div", { class: "cm-minimap-overlay" });
          this.container.appendChild(this.dom);
          // Attach event listeners for overlay
@@ -22,14 +31,24 @@ index 3f0c98a..b76e30e 100644
 +        this._boundOnMouseUp = this.onMouseUp.bind(this);
 +        this._boundOnMouseMove = this.onMouseMove.bind(this);
 +        this._boundOnKeyDown = this.onKeyDown.bind(this);
++        this._boundOnBlur = this._endDrag.bind(this);
 +        this.container.addEventListener("mousedown", this._boundOnMouseDown);
 +        window.addEventListener("mouseup", this._boundOnMouseUp);
 +        window.addEventListener("mousemove", this._boundOnMouseMove);
 +        window.addEventListener("keydown", this._boundOnKeyDown);
++        // A window blur mid-drag (Cmd-Tab, a Space switch, a native context
++        // menu) otherwise self-heals only on the next mousemove with the
++        // primary button released — and an inactive macOS window never
++        // gets one. Tearing down on blur too matches the rule
++        // tableHandles.ts's own drag-reorder already established for
++        // exactly this failure mode: an OS/browser-level interruption or a
++        // mid-drag app/tab switch needs its own exit path, not just the
++        // in-window ones.
++        window.addEventListener("blur", this._boundOnBlur);
          // Attach the overlay elements to the minimap
          const inner = view.dom.querySelector(".cm-minimap-inner");
          if (inner) {
-@@ -123,12 +130,67 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+@@ -123,12 +145,82 @@ const OverlayView = view.ViewPlugin.fromClass(class {
      }
      remove() {
          if (this.container) {
@@ -40,15 +59,19 @@ index 3f0c98a..b76e30e 100644
 +            window.removeEventListener("mouseup", this._boundOnMouseUp);
 +            window.removeEventListener("mousemove", this._boundOnMouseMove);
 +            window.removeEventListener("keydown", this._boundOnKeyDown);
++            window.removeEventListener("blur", this._boundOnBlur);
 +            this._endDrag();
              this.container.remove();
          }
      }
 +    // Single teardown path for every way a drag can end: a normal mouseup,
-+    // the off-window self-heal in onMouseMove, or the view/overlay being
-+    // torn down mid-drag. Restoring contentEditable here (rather than at
-+    // each call site) is what keeps the escape hatch in onKeyDown safe to
-+    // call independently without duplicating this bookkeeping.
++    // the off-window self-heal in onMouseMove, a window blur, or the
++    // view/overlay being torn down mid-drag. Restoring contentEditable and
++    // the body-level guards here (rather than at each call site) is what
++    // keeps the escape hatch in onKeyDown safe to call independently
++    // without duplicating this bookkeeping, and is also what makes the
++    // re-entrancy guard at the top of onMouseDown correct: it closes out
++    // whatever drag was still latched, fully, before a fresh one starts.
 +    _endDrag() {
 +        if (!this._isDragging) {
 +            return;
@@ -58,9 +81,9 @@ index 3f0c98a..b76e30e 100644
 +        if (this.container) {
 +            this.container.classList.remove("cm-minimap-overlay-active");
 +        }
-+        document.body.style.cursor = "";
-+        document.body.style.userSelect = "";
-+        document.body.style.webkitUserSelect = "";
++        document.body.style.cursor = this._prevCursor;
++        document.body.style.userSelect = this._prevUserSelect;
++        document.body.style.webkitUserSelect = this._prevWebkitUserSelect;
 +        this._restoreEditability();
 +    }
 +    // WebKit's effectiveUserSelect deliberately ignores an inherited
@@ -74,38 +97,62 @@ index 3f0c98a..b76e30e 100644
 +    // duration; restoring it here (and refocusing, if the view was
 +    // focused) hands control back to CodeMirror without ever touching its
 +    // own EditorState, so the caret, selection, and scroll position are
-+    // exactly what they were before the toggle.
++    // exactly what they were before the toggle. `observer.ignore` matches
++    // how CodeMirror's own updateAttrs touches this same attribute — it
++    // stops the DOMObserver's MutationObserver for the duration of the
++    // write so this doesn't needlessly mark the doc view dirty.
 +    _restoreEditability() {
 +        if (this._wasEditable) {
-+            this.view.contentDOM.setAttribute("contenteditable", "true");
++            this.view.observer.ignore(() => {
++                this.view.contentDOM.setAttribute("contenteditable", "true");
++            });
 +            if (this._wasFocused && document.contains(this.view.contentDOM)) {
 +                this.view.focus();
 +            }
 +        }
 +        this._wasEditable = false;
 +        this._wasFocused = false;
++        this._editableToggled = false;
 +    }
-+    // A keystroke arriving mid-drag must never be silently swallowed: with
-+    // contentEditable cleared, the browser drops native text input before
-+    // CodeMirror ever sees it. Restoring editability immediately, before
-+    // this event's default action runs, lets the keystroke land normally.
-+    // The tradeoff is narrow and one-sided: only the rest of *this* drag
-+    // gesture can select text again outside the minimap, typing is never
-+    // lost.
-+    onKeyDown(_event) {
-+        if (this._isDragging) {
-+            this._restoreEditability();
++    // Doesn't rescue the keystroke that triggered this: clearing
++    // contenteditable already blurred `.cm-content`, so this keydown
++    // dispatched against a non-editable, unfocused element and
++    // CodeMirror's own input handling never saw it — refocusing here
++    // can't retarget an event already in flight. What it does do is put
++    // editability and focus back before the *next* one, so typing resumes
++    // normally instead of staying silently stuck for the rest of the
++    // drag. A bare modifier isn't a signal to act on here: nothing was
++    // going to be inserted by it, and firing on every Shift/Cmd tap would
++    // needlessly re-expose `.cm-content` to the WebKit exemption for the
++    // rest of the gesture.
++    onKeyDown(event) {
++        if (!this._isDragging || MODIFIER_KEYS.has(event.key)) {
++            return;
 +        }
++        this._restoreEditability();
 +    }
      update(update) {
          const prev = update.startState.facet(Config).enabled;
          const now = update.state.facet(Config).enabled;
-@@ -192,38 +254,56 @@ const OverlayView = view.ViewPlugin.fromClass(class {
+@@ -192,41 +284,88 @@ const OverlayView = view.ViewPlugin.fromClass(class {
          if (!this.container) {
              return;
          }
 -        // Ignore right click
 -        if (event.button === 2) {
++        // A mousedown arriving while a drag is still latched (its mouseup
++        // never reached us) must close out the stale drag first. Without
++        // this, a fresh mousedown would fall straight through to the
++        // capture below while `.cm-content` is already contenteditable
++        // "false" from the earlier drag, recording `_wasEditable = false`
++        // and permanently skipping the restore — the editor keeps focus
++        // and silently drops every keystroke until the file is closed and
++        // reopened. Routing through _endDrag() here instead restores
++        // correctly, using whatever was captured when the *first* drag
++        // actually toggled it.
++        if (this._isDragging) {
++            this._endDrag();
++        }
 +        // Only the primary (left) button starts a drag; right- and
 +        // middle-click are left untouched.
 +        if (event.button !== 0) {
@@ -119,6 +166,17 @@ index 3f0c98a..b76e30e 100644
 -            this._isDragging = true;
 -            this.container.classList.add("cm-minimap-overlay-active");
 -            return;
+-        }
+-        // Updates the scroll position of the EditorView based on the
+-        // position of the MouseEvent on the minimap canvas
+-        const { clientHeight, scrollHeight, scrollTop } = this.view.scrollDOM;
+-        const targetTop = target.getBoundingClientRect().top;
+-        const deltaY = (clientY - targetTop) * SCALE;
+-        const scrollRatio = scrollTop / (scrollHeight - clientHeight);
+-        const visibleRange = clientHeight * SCALE - clientHeight;
+-        const visibleTop = visibleRange * scrollRatio;
+-        const top = Math.max(0, scrollTop - visibleTop);
+-        this.view.scrollDOM.scrollTop = top + deltaY - clientHeight / 2;
 +        if (target !== this.dom) {
 +            // Updates the scroll position of the EditorView based on the
 +            // position of the MouseEvent on the minimap canvas
@@ -142,26 +200,14 @@ index 3f0c98a..b76e30e 100644
 +        this._dragStartY = event.clientY;
 +        this._isDragging = true;
 +        this.container.classList.add("cm-minimap-overlay-active");
++        this._prevCursor = document.body.style.cursor;
++        this._prevUserSelect = document.body.style.userSelect;
++        this._prevWebkitUserSelect = document.body.style.webkitUserSelect;
 +        document.body.style.cursor = "default";
 +        document.body.style.userSelect = "none";
 +        document.body.style.webkitUserSelect = "none";
-+        // See _restoreEditability() for why this is necessary: the
-+        // user-select guards above don't reach `.cm-content` in WebKit.
-+        this._wasEditable = this.view.contentDOM.getAttribute("contenteditable") === "true";
-+        this._wasFocused = this.view.hasFocus;
-+        if (this._wasEditable) {
-+            this.view.contentDOM.setAttribute("contenteditable", "false");
-         }
--        // Updates the scroll position of the EditorView based on the
--        // position of the MouseEvent on the minimap canvas
--        const { clientHeight, scrollHeight, scrollTop } = this.view.scrollDOM;
--        const targetTop = target.getBoundingClientRect().top;
--        const deltaY = (clientY - targetTop) * SCALE;
--        const scrollRatio = scrollTop / (scrollHeight - clientHeight);
--        const visibleRange = clientHeight * SCALE - clientHeight;
--        const visibleTop = visibleRange * scrollRatio;
--        const top = Math.max(0, scrollTop - visibleTop);
--        this.view.scrollDOM.scrollTop = top + deltaY - clientHeight / 2;
++        // contentEditable is deliberately NOT touched here — see the check
++        // at the top of onMouseMove for why.
      }
      onMouseUp(_event) {
          // Stop dragging on mouseup
@@ -180,20 +226,50 @@ index 3f0c98a..b76e30e 100644
          if (!this._isDragging || !this.dom) {
              return;
          }
++        // WebKit only exempts `.cm-content` from the user-select/cursor
++        // guards set in onMouseDown once the pointer is actually over it —
++        // so clearing contenteditable is only needed once a drag reaches
++        // outside the minimap, not for a plain click-to-jump or a drag
++        // that never leaves the track. Deferring the check to here (once
++        // per drag, via _editableToggled) means those common cases never
++        // blur `.cm-content`, so the native caret never disappears for
++        // them.
++        if (!this._editableToggled && this.container && event.target instanceof Node && !this.container.contains(event.target)) {
++            this._editableToggled = true;
++            this._wasEditable = this.view.contentDOM.getAttribute("contenteditable") === "true";
++            this._wasFocused = this.view.hasFocus;
++            if (this._wasEditable) {
++                this.view.observer.ignore(() => {
++                    this.view.contentDOM.setAttribute("contenteditable", "false");
++                });
++            }
++        }
+         event.preventDefault();
+         event.stopPropagation();
+         // Without an existing position, we're just beginning to drag.
 diff --git a/node_modules/@replit/codemirror-minimap/dist/index.js b/node_modules/@replit/codemirror-minimap/dist/index.js
-index c7c9a04..90007a8 100644
+index c7c9a04..1fc9fa6 100644
 --- a/node_modules/@replit/codemirror-minimap/dist/index.js
 +++ b/node_modules/@replit/codemirror-minimap/dist/index.js
-@@ -91,6 +91,8 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+@@ -87,10 +87,17 @@ const Theme$1 = /*@__PURE__*/EditorView.theme({
+     },
+ });
+ const SCALE = Scale.PixelMultiplier * Scale.SizeRatio;
++const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta"]);
+ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
      constructor(view) {
          this.view = view;
          this._isDragging = false;
 +        this._wasEditable = false;
 +        this._wasFocused = false;
++        this._editableToggled = false;
++        this._prevCursor = "";
++        this._prevUserSelect = "";
++        this._prevWebkitUserSelect = "";
          if (view.state.facet(Config).enabled) {
              this.create(view);
          }
-@@ -100,9 +102,14 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+@@ -100,9 +107,24 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
          this.dom = crelt("div", { class: "cm-minimap-overlay" });
          this.container.appendChild(this.dom);
          // Attach event listeners for overlay
@@ -204,14 +280,24 @@ index c7c9a04..90007a8 100644
 +        this._boundOnMouseUp = this.onMouseUp.bind(this);
 +        this._boundOnMouseMove = this.onMouseMove.bind(this);
 +        this._boundOnKeyDown = this.onKeyDown.bind(this);
++        this._boundOnBlur = this._endDrag.bind(this);
 +        this.container.addEventListener("mousedown", this._boundOnMouseDown);
 +        window.addEventListener("mouseup", this._boundOnMouseUp);
 +        window.addEventListener("mousemove", this._boundOnMouseMove);
 +        window.addEventListener("keydown", this._boundOnKeyDown);
++        // A window blur mid-drag (Cmd-Tab, a Space switch, a native context
++        // menu) otherwise self-heals only on the next mousemove with the
++        // primary button released — and an inactive macOS window never
++        // gets one. Tearing down on blur too matches the rule
++        // tableHandles.ts's own drag-reorder already established for
++        // exactly this failure mode: an OS/browser-level interruption or a
++        // mid-drag app/tab switch needs its own exit path, not just the
++        // in-window ones.
++        window.addEventListener("blur", this._boundOnBlur);
          // Attach the overlay elements to the minimap
          const inner = view.dom.querySelector(".cm-minimap-inner");
          if (inner) {
-@@ -115,12 +122,67 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+@@ -115,12 +137,82 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
      }
      remove() {
          if (this.container) {
@@ -222,15 +308,19 @@ index c7c9a04..90007a8 100644
 +            window.removeEventListener("mouseup", this._boundOnMouseUp);
 +            window.removeEventListener("mousemove", this._boundOnMouseMove);
 +            window.removeEventListener("keydown", this._boundOnKeyDown);
++            window.removeEventListener("blur", this._boundOnBlur);
 +            this._endDrag();
              this.container.remove();
          }
      }
 +    // Single teardown path for every way a drag can end: a normal mouseup,
-+    // the off-window self-heal in onMouseMove, or the view/overlay being
-+    // torn down mid-drag. Restoring contentEditable here (rather than at
-+    // each call site) is what keeps the escape hatch in onKeyDown safe to
-+    // call independently without duplicating this bookkeeping.
++    // the off-window self-heal in onMouseMove, a window blur, or the
++    // view/overlay being torn down mid-drag. Restoring contentEditable and
++    // the body-level guards here (rather than at each call site) is what
++    // keeps the escape hatch in onKeyDown safe to call independently
++    // without duplicating this bookkeeping, and is also what makes the
++    // re-entrancy guard at the top of onMouseDown correct: it closes out
++    // whatever drag was still latched, fully, before a fresh one starts.
 +    _endDrag() {
 +        if (!this._isDragging) {
 +            return;
@@ -240,9 +330,9 @@ index c7c9a04..90007a8 100644
 +        if (this.container) {
 +            this.container.classList.remove("cm-minimap-overlay-active");
 +        }
-+        document.body.style.cursor = "";
-+        document.body.style.userSelect = "";
-+        document.body.style.webkitUserSelect = "";
++        document.body.style.cursor = this._prevCursor;
++        document.body.style.userSelect = this._prevUserSelect;
++        document.body.style.webkitUserSelect = this._prevWebkitUserSelect;
 +        this._restoreEditability();
 +    }
 +    // WebKit's effectiveUserSelect deliberately ignores an inherited
@@ -256,38 +346,62 @@ index c7c9a04..90007a8 100644
 +    // duration; restoring it here (and refocusing, if the view was
 +    // focused) hands control back to CodeMirror without ever touching its
 +    // own EditorState, so the caret, selection, and scroll position are
-+    // exactly what they were before the toggle.
++    // exactly what they were before the toggle. `observer.ignore` matches
++    // how CodeMirror's own updateAttrs touches this same attribute — it
++    // stops the DOMObserver's MutationObserver for the duration of the
++    // write so this doesn't needlessly mark the doc view dirty.
 +    _restoreEditability() {
 +        if (this._wasEditable) {
-+            this.view.contentDOM.setAttribute("contenteditable", "true");
++            this.view.observer.ignore(() => {
++                this.view.contentDOM.setAttribute("contenteditable", "true");
++            });
 +            if (this._wasFocused && document.contains(this.view.contentDOM)) {
 +                this.view.focus();
 +            }
 +        }
 +        this._wasEditable = false;
 +        this._wasFocused = false;
++        this._editableToggled = false;
 +    }
-+    // A keystroke arriving mid-drag must never be silently swallowed: with
-+    // contentEditable cleared, the browser drops native text input before
-+    // CodeMirror ever sees it. Restoring editability immediately, before
-+    // this event's default action runs, lets the keystroke land normally.
-+    // The tradeoff is narrow and one-sided: only the rest of *this* drag
-+    // gesture can select text again outside the minimap, typing is never
-+    // lost.
-+    onKeyDown(_event) {
-+        if (this._isDragging) {
-+            this._restoreEditability();
++    // Doesn't rescue the keystroke that triggered this: clearing
++    // contenteditable already blurred `.cm-content`, so this keydown
++    // dispatched against a non-editable, unfocused element and
++    // CodeMirror's own input handling never saw it — refocusing here
++    // can't retarget an event already in flight. What it does do is put
++    // editability and focus back before the *next* one, so typing resumes
++    // normally instead of staying silently stuck for the rest of the
++    // drag. A bare modifier isn't a signal to act on here: nothing was
++    // going to be inserted by it, and firing on every Shift/Cmd tap would
++    // needlessly re-expose `.cm-content` to the WebKit exemption for the
++    // rest of the gesture.
++    onKeyDown(event) {
++        if (!this._isDragging || MODIFIER_KEYS.has(event.key)) {
++            return;
 +        }
++        this._restoreEditability();
 +    }
      update(update) {
          const prev = update.startState.facet(Config).enabled;
          const now = update.state.facet(Config).enabled;
-@@ -184,38 +246,56 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
+@@ -184,41 +276,88 @@ const OverlayView = /*@__PURE__*/ViewPlugin.fromClass(class {
          if (!this.container) {
              return;
          }
 -        // Ignore right click
 -        if (event.button === 2) {
++        // A mousedown arriving while a drag is still latched (its mouseup
++        // never reached us) must close out the stale drag first. Without
++        // this, a fresh mousedown would fall straight through to the
++        // capture below while `.cm-content` is already contenteditable
++        // "false" from the earlier drag, recording `_wasEditable = false`
++        // and permanently skipping the restore — the editor keeps focus
++        // and silently drops every keystroke until the file is closed and
++        // reopened. Routing through _endDrag() here instead restores
++        // correctly, using whatever was captured when the *first* drag
++        // actually toggled it.
++        if (this._isDragging) {
++            this._endDrag();
++        }
 +        // Only the primary (left) button starts a drag; right- and
 +        // middle-click are left untouched.
 +        if (event.button !== 0) {
@@ -301,6 +415,17 @@ index c7c9a04..90007a8 100644
 -            this._isDragging = true;
 -            this.container.classList.add("cm-minimap-overlay-active");
 -            return;
+-        }
+-        // Updates the scroll position of the EditorView based on the
+-        // position of the MouseEvent on the minimap canvas
+-        const { clientHeight, scrollHeight, scrollTop } = this.view.scrollDOM;
+-        const targetTop = target.getBoundingClientRect().top;
+-        const deltaY = (clientY - targetTop) * SCALE;
+-        const scrollRatio = scrollTop / (scrollHeight - clientHeight);
+-        const visibleRange = clientHeight * SCALE - clientHeight;
+-        const visibleTop = visibleRange * scrollRatio;
+-        const top = Math.max(0, scrollTop - visibleTop);
+-        this.view.scrollDOM.scrollTop = top + deltaY - clientHeight / 2;
 +        if (target !== this.dom) {
 +            // Updates the scroll position of the EditorView based on the
 +            // position of the MouseEvent on the minimap canvas
@@ -324,26 +449,14 @@ index c7c9a04..90007a8 100644
 +        this._dragStartY = event.clientY;
 +        this._isDragging = true;
 +        this.container.classList.add("cm-minimap-overlay-active");
++        this._prevCursor = document.body.style.cursor;
++        this._prevUserSelect = document.body.style.userSelect;
++        this._prevWebkitUserSelect = document.body.style.webkitUserSelect;
 +        document.body.style.cursor = "default";
 +        document.body.style.userSelect = "none";
 +        document.body.style.webkitUserSelect = "none";
-+        // See _restoreEditability() for why this is necessary: the
-+        // user-select guards above don't reach `.cm-content` in WebKit.
-+        this._wasEditable = this.view.contentDOM.getAttribute("contenteditable") === "true";
-+        this._wasFocused = this.view.hasFocus;
-+        if (this._wasEditable) {
-+            this.view.contentDOM.setAttribute("contenteditable", "false");
-         }
--        // Updates the scroll position of the EditorView based on the
--        // position of the MouseEvent on the minimap canvas
--        const { clientHeight, scrollHeight, scrollTop } = this.view.scrollDOM;
--        const targetTop = target.getBoundingClientRect().top;
--        const deltaY = (clientY - targetTop) * SCALE;
--        const scrollRatio = scrollTop / (scrollHeight - clientHeight);
--        const visibleRange = clientHeight * SCALE - clientHeight;
--        const visibleTop = visibleRange * scrollRatio;
--        const top = Math.max(0, scrollTop - visibleTop);
--        this.view.scrollDOM.scrollTop = top + deltaY - clientHeight / 2;
++        // contentEditable is deliberately NOT touched here — see the check
++        // at the top of onMouseMove for why.
      }
      onMouseUp(_event) {
          // Stop dragging on mouseup
@@ -362,3 +475,24 @@ index c7c9a04..90007a8 100644
          if (!this._isDragging || !this.dom) {
              return;
          }
++        // WebKit only exempts `.cm-content` from the user-select/cursor
++        // guards set in onMouseDown once the pointer is actually over it —
++        // so clearing contenteditable is only needed once a drag reaches
++        // outside the minimap, not for a plain click-to-jump or a drag
++        // that never leaves the track. Deferring the check to here (once
++        // per drag, via _editableToggled) means those common cases never
++        // blur `.cm-content`, so the native caret never disappears for
++        // them.
++        if (!this._editableToggled && this.container && event.target instanceof Node && !this.container.contains(event.target)) {
++            this._editableToggled = true;
++            this._wasEditable = this.view.contentDOM.getAttribute("contenteditable") === "true";
++            this._wasFocused = this.view.hasFocus;
++            if (this._wasEditable) {
++                this.view.observer.ignore(() => {
++                    this.view.contentDOM.setAttribute("contenteditable", "false");
++                });
++            }
++        }
+         event.preventDefault();
+         event.stopPropagation();
+         // Without an existing position, we're just beginning to drag.
