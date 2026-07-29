@@ -173,3 +173,60 @@ pub fn note_recent_document(path: &str) {
     let url = NSURL::fileURLWithPath_isDirectory(&NSString::from_str(path), true);
     controller.noteNewRecentDocumentURL(&url);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Cold-launch replay (issue #325 follow-up): the frontend's one-shot
+    // `workspace_take_pending_open` drains this queue exactly once per
+    // launch, so a second `RunEvent::Opened` landing before that drain runs
+    // (e.g. a multi-file "Open With Atrium", delivered as separate
+    // `open_paths` calls rather than one) must accumulate onto whatever is
+    // already queued, never replace it — otherwise every path but the last
+    // batch silently never reaches the frontend at all.
+    #[test]
+    fn extend_pending_accumulates_across_multiple_calls_rather_than_overwriting() {
+        let pending: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        extend_pending(&pending, &["/tmp/a.md".to_string()]);
+        extend_pending(
+            &pending,
+            &["/tmp/b.md".to_string(), "/tmp/c.md".to_string()],
+        );
+        assert_eq!(
+            *pending.lock().unwrap(),
+            vec![
+                "/tmp/a.md".to_string(),
+                "/tmp/b.md".to_string(),
+                "/tmp/c.md".to_string(),
+            ]
+        );
+    }
+
+    // A single `RunEvent::Opened` carrying several urls (one multi-select
+    // "Open With Atrium") is batched into one `extend_pending` call by
+    // `open_paths` — this asserts that batch itself preserves arrival order
+    // and every path, not just a truncated prefix.
+    #[test]
+    fn extend_pending_preserves_order_within_a_single_multi_file_batch() {
+        let pending: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        extend_pending(
+            &pending,
+            &["/tmp/x.md".to_string(), "/tmp/y.md".to_string()],
+        );
+        assert_eq!(
+            *pending.lock().unwrap(),
+            vec!["/tmp/x.md".to_string(), "/tmp/y.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn extend_pending_on_an_empty_slice_is_a_no_op() {
+        let pending: Mutex<Vec<String>> = Mutex::new(vec!["/tmp/already-there.md".to_string()]);
+        extend_pending(&pending, &[]);
+        assert_eq!(
+            *pending.lock().unwrap(),
+            vec!["/tmp/already-there.md".to_string()]
+        );
+    }
+}

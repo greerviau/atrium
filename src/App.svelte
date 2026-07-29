@@ -1051,7 +1051,29 @@
       }
       void refreshDirectoryContaining(event.path);
     });
-    void onDockOpenPath((path) => handleOsOpenPath(path));
+    // Cold-launch replay (issue #325 follow-up): `RunEvent::Opened` on the
+    // Rust side (`macos_dock::open_paths`) unconditionally stashes every
+    // path into `pending_open` *and* attempts a live emit on this same
+    // event, regardless of whether this listener or `pending_open`'s own
+    // drain below has run yet — so between the two of them, a path is lost
+    // only if BOTH miss it. Chaining the drain onto this listener's own
+    // registration (rather than firing both independently, as before)
+    // closes the one gap that was otherwise unguarded: without this, the
+    // one-shot drain and the listener subscription are two unsequenced IPC
+    // round trips, and nothing prevented the drain from completing and
+    // returning an empty snapshot *before* the subscription had actually
+    // taken effect on the Rust side — a path processed by Rust in exactly
+    // that window would be stashed (past the drain's snapshot) but never
+    // live-delivered (listener not yet active) and so never opened.
+    // Sequencing it this way guarantees the drain's snapshot is always taken
+    // no earlier than the moment this listener is already live, so anything
+    // not in that snapshot is guaranteed to arrive after and be caught by
+    // it instead.
+    void onDockOpenPath((path) => handleOsOpenPath(path)).then(() => {
+      void workspaceTakePendingOpen().then((paths) => {
+        for (const path of paths) handleOsOpenPath(path);
+      });
+    });
     void onDragDropEvent((event) => {
       if (event.type === "leave") {
         setDragOverTargetDir(null);
@@ -1092,9 +1114,6 @@
         return;
       }
       closePrompt.set({ kind: "window", paths: dirty.map((t) => t.path) });
-    });
-    void workspaceTakePendingOpen().then((paths) => {
-      for (const path of paths) handleOsOpenPath(path);
     });
     return () => {
       window.removeEventListener("resize", handleWindowResize);
