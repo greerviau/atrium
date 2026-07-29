@@ -6,12 +6,14 @@
     categories,
     sections,
     selected,
+    searching = false,
     onSelectCategory,
     onSelectSection,
   }: {
     categories: SettingsCategory[];
     sections: SettingsSectionDef[];
     selected: SettingsCategoryId;
+    searching?: boolean;
     onSelectCategory: (id: SettingsCategoryId) => void;
     onSelectSection: (id: string) => void;
   } = $props();
@@ -25,13 +27,19 @@
 
   let treeEl: HTMLDivElement | undefined = $state();
 
-  // Every category starts expanded (an id absent from this map reads as
-  // expanded), matching today's "everything visible, nothing hidden by
-  // default" feel — no init pass over `categories` is needed for that.
+  // Every category starts collapsed (an id absent from this map reads as
+  // collapsed) — no init pass over `categories` is needed for that.
   let expandedCategories = $state<Record<string, boolean>>({});
 
+  // While actively searching, every category renders as expanded regardless
+  // of its own stored state — the whole point of search is to surface a
+  // matching section row no matter which category it lives under, and a
+  // collapsed category would otherwise hide it from the nav entirely. This
+  // doesn't touch `expandedCategories` itself, so a category's real
+  // collapsed/expanded state is exactly as the user left it once the query
+  // is cleared.
   function isExpanded(categoryId: string): boolean {
-    return expandedCategories[categoryId] ?? true;
+    return searching || (expandedCategories[categoryId] ?? false);
   }
 
   // Row ids are namespaced (`cat:`/`sec:`) so a category id and a section id
@@ -97,12 +105,20 @@
     )?.focus();
   }
 
-  function activateCategory(categoryId: SettingsCategoryId): void {
-    // A category header both toggles its own expansion and activates it
-    // (switches which category's content is mounted) in one action,
-    // consistent with how a click already did both under the old tablist.
-    expandedCategories[categoryId] = !isExpanded(categoryId);
+  // Selecting a category (its text, or Enter/Space on the row) only ever
+  // switches which category's content is mounted — it never touches
+  // `expandedCategories`. Expansion is the caret's job alone (`toggleCategory`
+  // below, plus ArrowLeft/ArrowRight for keyboard users), so a category can
+  // be selected and shown in the content pane while its own nav row stays
+  // collapsed with no visible children — a deliberate split, not an
+  // oversight: text and disclosure are two different actions on two
+  // different controls.
+  function selectCategory(categoryId: SettingsCategoryId): void {
     onSelectCategory(categoryId);
+  }
+
+  function toggleCategory(categoryId: SettingsCategoryId): void {
+    expandedCategories[categoryId] = !isExpanded(categoryId);
   }
 
   // Arrow/Home/End/Enter/Space handling over the flattened row list, matching
@@ -172,7 +188,7 @@
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       if (row.kind === "category") {
-        activateCategory(row.categoryId);
+        selectCategory(row.categoryId);
       } else if (row.sectionId) {
         onSelectSection(row.sectionId);
       }
@@ -197,6 +213,7 @@
 >
   {#each categories as category (category.id)}
     {@const rowId = categoryRowId(category.id)}
+    {@const expanded = isExpanded(category.id)}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
@@ -205,16 +222,45 @@
       data-row-id={rowId}
       role="treeitem"
       aria-selected={activeNavId === rowId}
-      aria-expanded={isExpanded(category.id)}
+      aria-expanded={expanded}
       aria-level="1"
       tabindex={activeNavId === rowId ? 0 : -1}
       onclick={() => {
         onFocusRow(rowId);
-        activateCategory(category.id);
+        selectCategory(category.id);
       }}
       onfocus={() => onFocusRow(rowId)}
     >
-      <span class="settings-nav-chevron" class:expanded={isExpanded(category.id)} aria-hidden="true">▸</span>
+      <!--
+        A real button, not a bare clickable span: it needs its own
+        accessible name (the chevron glyph alone means nothing to a screen
+        reader) and its own `aria-expanded`, and it must never also select
+        the category the way the row's own click does — `stopPropagation`
+        keeps the two actions independent even though the button sits
+        inside the row.
+
+        `tabindex="-1"`: kept out of the normal Tab sequence rather than
+        given its own roving-tabindex slot alongside the row, so Tab still
+        visits exactly one stop per visible row, matching the rest of this
+        tree. Keyboard users toggle expansion via ArrowRight/ArrowLeft on
+        the focused row (already implemented below) rather than tabbing
+        into this button — mouse/touch users get a real, generously-sized
+        target instead of the 12px glyph alone.
+      -->
+      <button
+        type="button"
+        class="settings-nav-chevron"
+        class:expanded
+        aria-expanded={expanded}
+        aria-label={expanded ? `Collapse ${category.label}` : `Expand ${category.label}`}
+        tabindex="-1"
+        onclick={(event) => {
+          event.stopPropagation();
+          toggleCategory(category.id);
+        }}
+      >
+        <span aria-hidden="true">▸</span>
+      </button>
       {category.label}
     </div>
     {#if isExpanded(category.id)}
@@ -264,9 +310,16 @@
     cursor: pointer;
     padding: 7px 10px;
   }
+  .settings-nav-category {
+    /* Explicit rather than left to inherit, so the hierarchy between this
+       and .settings-nav-section's own smaller size is a real, visible
+       relationship rather than an accident of whatever the ancestor
+       happens to set. */
+    font-size: 1em;
+  }
   .settings-nav-section {
     padding-left: 26px;
-    font-size: 0.95em;
+    font-size: 0.85em;
   }
   .settings-nav-row:hover {
     background: var(--atrium-bg-hover);
@@ -280,11 +333,34 @@
   }
   .settings-nav-chevron {
     display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    margin: -2px;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    padding: 0;
+    font: inherit;
     font-size: 0.75em;
     color: var(--atrium-text-muted);
+    cursor: pointer;
+  }
+  .settings-nav-chevron:hover {
+    background: var(--atrium-bg-active);
+    color: var(--atrium-text-primary);
+  }
+  .settings-nav-chevron:focus-visible {
+    outline: 2px solid var(--atrium-accent);
+    outline-offset: 1px;
+  }
+  .settings-nav-chevron span {
+    display: inline-flex;
     transition: transform 0.1s ease;
   }
-  .settings-nav-chevron.expanded {
+  .settings-nav-chevron.expanded span {
     transform: rotate(90deg);
   }
 </style>

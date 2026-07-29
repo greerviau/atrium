@@ -170,6 +170,7 @@
             categories={visibleCategories}
             sections={visibleSections}
             selected={selectedCategory}
+            searching={searching}
             onSelectCategory={(id) => (selectedCategory = id)}
             onSelectSection={(id) => void scrollToSection(id)}
           />
