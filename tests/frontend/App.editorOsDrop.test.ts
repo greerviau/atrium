@@ -151,7 +151,7 @@ describe("App editor-panel OS drop routing (issue #303)", () => {
     await flush();
 
     expect(calls).toEqual(["grant", "read"]);
-    expect(commands.fsGrantExternalFile).toHaveBeenCalledWith(ROOT, path);
+    expect(commands.fsGrantExternalFile).toHaveBeenCalledWith(commands.localWorkspaceId(), path);
     const tab = get(tabsState).tabs.find((t) => t.path === path);
     expect(tab?.isExternal).toBe(true);
     expect(get(errorToast)).toBeNull();
