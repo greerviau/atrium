@@ -46,6 +46,7 @@ vi.mock("../../src/lib/ipc/commands", async (importOriginal) => {
     fsExternalPathsAreDirs: vi.fn().mockResolvedValue([false]),
     workspaceSetRoot: vi.fn().mockResolvedValue(undefined),
     workspaceGetRecents: vi.fn().mockResolvedValue([]),
+    workspaceRecordRecentFile: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -174,5 +175,55 @@ describe("App OS-open delivery (issue #325)", () => {
 
     expect(get(tabsState).tabs.map((t) => t.path)).not.toContain(path);
     expect(screen.getByRole("alert")).toBeTruthy();
+  });
+
+  // Regression coverage for the human's fourth reported follow-on defect:
+  // "it doesnt save these cold start workspaces to the recent workspaces."
+  // `doHandleOsOpenPath`'s file branch now goes through `openExternalFile`,
+  // which records a standalone open to the recents list — this is the
+  // frontend half of that; `recents.rs`'s own unit tests (and the
+  // `require_recent_external_open` gate they exercise indirectly) cover the
+  // Rust-side provenance requirement this call is gated on.
+  it("records a cold-launched standalone file to the recents list", async () => {
+    const path = "/repo/src-tauri/Cargo.lock";
+    vi.mocked(commands.workspaceTakePendingOpen).mockResolvedValue([path]);
+
+    render(App);
+    await flush();
+
+    expect(get(workspace).root).toBeNull();
+    expect(commands.workspaceRecordRecentFile).toHaveBeenCalledWith(path);
+  });
+
+  // A folder open is recorded by `workspace_set_root` on the Rust side
+  // already (unconditionally, for every "open a folder" action) — the new
+  // `workspaceRecordRecentFile` call exists specifically for the file
+  // branch `workspace_set_root` never sees, and must not double-record a
+  // directory open.
+  it("does not call workspaceRecordRecentFile for a directory open", async () => {
+    const path = "/repo/project";
+    vi.mocked(commands.workspaceTakePendingOpen).mockResolvedValue([path]);
+    vi.mocked(commands.fsExternalPathsAreDirs).mockResolvedValue([true]);
+
+    render(App);
+    await flush();
+
+    expect(commands.workspaceRecordRecentFile).not.toHaveBeenCalled();
+  });
+
+  // A file opened externally while a project is already open becomes an
+  // ordinary local tab (not a standalone workspace) — recording it to the
+  // recents *workspaces* list would be wrong; `recentFiles.ts` is the
+  // existing, separate mechanism for "recently opened files" within a
+  // project.
+  it("does not record an externally-opened file to recents when a project is already open", async () => {
+    workspace.set({ id: "local", root: "/repo/project" });
+    const path = "/elsewhere/notes.md";
+    vi.mocked(commands.workspaceTakePendingOpen).mockResolvedValue([path]);
+
+    render(App);
+    await flush();
+
+    expect(commands.workspaceRecordRecentFile).not.toHaveBeenCalled();
   });
 });

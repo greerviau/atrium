@@ -8,8 +8,8 @@ vi.mock("../../src/lib/ipc/commands", () => ({
   workspaceRemoveRecent: vi.fn(),
 }));
 
-const projectA = { path: "/projects/a", name: "a", lastOpenedAt: 1 };
-const projectB = { path: "/projects/b", name: "b", lastOpenedAt: 2 };
+const projectA = { path: "/projects/a", name: "a", lastOpenedAt: 1, isFile: false };
+const projectB = { path: "/projects/b", name: "b", lastOpenedAt: 2, isFile: false };
 
 describe("recents store", () => {
   beforeEach(() => {
