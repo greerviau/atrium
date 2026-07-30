@@ -10,7 +10,7 @@ Agentic development has made markdown a first-class artifact for engineers: spec
 
 Not to mention how modern IDEs try to shove native AI features down your throat when all most people need is a terminal so they can use whatever tools suit them best.
 
-Atrium fixes all that by combining a rendered markdown editor with an IDE. All the tools you need with none that you don't.
+Atrium fixes all that by combining a rendered markdown editor with a simple IDE. All the tools you need with none that you don't.
 
 ## Key Features
 
