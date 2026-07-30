@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import FileTree from "./lib/explorer/FileTree.svelte";
+  import StandaloneFileList from "./lib/explorer/StandaloneFileList.svelte";
   import EditorPaneSplit from "./lib/editor/EditorPaneSplit.svelte";
   import PaneSplit from "./lib/terminal/PaneSplit.svelte";
   import WelcomeScreen from "./lib/welcome/WelcomeScreen.svelte";
@@ -50,7 +51,8 @@
     clampToContainer,
     HEIGHT_MIN,
     WIDTH_MIN,
-    explorerVisible,
+    explorerShown,
+    standaloneExplorerVisible,
     terminalVisible,
     terminalPosition,
     setTerminalVisible,
@@ -115,7 +117,7 @@
 
   /** `.main`'s content width, derived analytically instead of read back from `mainEl.clientWidth` — Svelte 5 batches DOM updates to a microtask, so a same-pass DOM read of `mainEl` after writing `explorerWidth` would still reflect the pre-update sidebar width. */
   function mainContentWidth(appWidthPx: number, explorerWidthPx: number): number {
-    return appWidthPx - (get(explorerVisible) ? explorerWidthPx + RESIZER_THICKNESS : 0);
+    return appWidthPx - (get(explorerShown) ? explorerWidthPx + RESIZER_THICKNESS : 0);
   }
 
   /** Establishes `explorerRatio` on first call, then re-derives `explorerWidth` from it on every later call. Returns the pixel value it computed, for callers deriving `.main`'s width from it in the same pass. */
@@ -836,6 +838,20 @@
     }
   });
 
+  // Resets the standalone explorer back to hidden (issue #325) the moment
+  // the welcome screen returns — the last standalone tab closed with no
+  // project open. `standaloneExplorerVisible` is deliberately session-only
+  // (§7.2(a) of the plan), but without this it would still be `true` from
+  // whatever the user last toggled it to, and the *next* single-file open
+  // would start with the sidebar shown instead of hidden — the reset makes
+  // "always starts hidden" true per single-file open, not just once per
+  // process.
+  $effect(() => {
+    if (!$workspace.root && $tabsState.tabs.length === 0) {
+      standaloneExplorerVisible.set(false);
+    }
+  });
+
   // Persists the editor session (pane tree + focused pane) for the current
   // root whenever it changes — but only once `restoreEditorSession` above
   // has actually finished restoring this same root, per the guard comment
@@ -1051,7 +1067,24 @@
       }
       void refreshDirectoryContaining(event.path);
     });
-    void onDockOpenPath((path) => handleOsOpenPath(path));
+    // Rust's `launch_open` module (issue #325's cold-launch plan) delivers
+    // each OS-opened path exactly once, via exactly one of two mechanisms:
+    // the live `dock:open-path` emit below, once the frontend is
+    // considered "ready," or the one-shot `workspaceTakePendingOpen` drain,
+    // for anything that arrived before then — including a cold launch,
+    // where the OS can hand Atrium a path before Tauri's `.setup()` closure
+    // has even run. Rust only flips to "ready" (stopping the queue and
+    // switching to live delivery) when this drain call actually happens, so
+    // chaining it onto this listener's own registration — rather than
+    // firing both independently — guarantees the listener is already live
+    // before that flip can occur. Anything not in the drain's own snapshot
+    // is therefore guaranteed to arrive after via the live emit instead;
+    // there is no gap where a path could be missed by both.
+    void onDockOpenPath((path) => handleOsOpenPath(path)).then(() => {
+      void workspaceTakePendingOpen().then((paths) => {
+        for (const path of paths) handleOsOpenPath(path);
+      });
+    });
     void onDragDropEvent((event) => {
       if (event.type === "leave") {
         setDragOverTargetDir(null);
@@ -1093,9 +1126,6 @@
       }
       closePrompt.set({ kind: "window", paths: dirty.map((t) => t.path) });
     });
-    void workspaceTakePendingOpen().then((paths) => {
-      for (const path of paths) handleOsOpenPath(path);
-    });
     return () => {
       window.removeEventListener("resize", handleWindowResize);
     };
@@ -1122,9 +1152,13 @@
     <SearchOverlay />
     <div class="app-shell">
     <main class="app" bind:this={appEl}>
-      {#if $explorerVisible && $workspace.root}
+      {#if $explorerShown}
         <div class="explorer" style={`width: ${explorerWidth}px`}>
-          <FileTree />
+          {#if $workspace.root}
+            <FileTree />
+          {:else}
+            <StandaloneFileList />
+          {/if}
         </div>
         <div class="resizer vertical" role="separator" aria-orientation="vertical" onpointerdown={startDragExplorer}>
           <div class="resizer-line"></div>

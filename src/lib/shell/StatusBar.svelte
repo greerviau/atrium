@@ -4,7 +4,7 @@
   import { cursorPosition } from "../stores/editorStatus";
   import { languageLabel } from "../editor/languageLabel";
   import {
-    explorerVisible,
+    explorerShown,
     terminalVisible,
     toggleExplorerVisible,
     toggleTerminalVisible,
@@ -69,9 +69,9 @@
   <div class="status-group actions">
     <button
       class="status-btn"
-      class:active={$explorerVisible}
+      class:active={$explorerShown}
       onclick={toggleExplorerVisible}
-      aria-pressed={$explorerVisible}
+      aria-pressed={$explorerShown}
       aria-label={`Toggle Explorer (${SHORTCUT_LABELS.toggleExplorer})`}
       use:tooltip={{ label: "Toggle Explorer", shortcut: SHORTCUT_LABELS.toggleExplorer }}
     >

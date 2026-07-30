@@ -1,4 +1,6 @@
-import { writable, get } from "svelte/store";
+import { writable, get, derived } from "svelte/store";
+import { workspace } from "./workspace";
+import { isStandaloneWorkspace } from "./workspaceMode";
 
 export type TerminalPosition = "bottom" | "left" | "right";
 
@@ -186,12 +188,42 @@ const initialPanelVisibility = loadPanelVisibility();
 export const explorerVisible = writable<boolean>(initialPanelVisibility.explorerVisible);
 export const terminalVisible = writable<boolean>(initialPanelVisibility.terminalVisible);
 
+/**
+ * The explorer's shown/hidden state in a root-less single-file workspace
+ * (issue #325) — deliberately NOT persisted (a bare `writable`, not backed
+ * by `loadPanelVisibility`/`persistPanelVisibility` like `explorerVisible`
+ * above): a single-file window always starts with the sidebar hidden,
+ * matching Zed, regardless of whatever `explorerVisible`'s own persisted
+ * value is for project mode. `App.svelte` resets this to `false` whenever
+ * the last standalone tab closes with no project open, so the *next*
+ * single-file open starts hidden too, not just the first one this process.
+ */
+export const standaloneExplorerVisible = writable<boolean>(false);
+
+/**
+ * The single store every consumer should read instead of `explorerVisible`
+ * directly — folds "is there a project or standalone reason to show the
+ * explorer at all" into one value, so the app-shell template,
+ * `mainContentWidth`, and the status-bar toggle button need no mode
+ * knowledge of their own.
+ */
+export const explorerShown = derived(
+  [explorerVisible, standaloneExplorerVisible, workspace, isStandaloneWorkspace],
+  ([$explorerVisible, $standaloneExplorerVisible, $workspace, $isStandalone]) =>
+    $workspace.root ? $explorerVisible : $isStandalone && $standaloneExplorerVisible,
+);
+
+/** Mode-aware: flips (and persists) `explorerVisible` when a project is open, or flips `standaloneExplorerVisible` (session-only, no persistence) otherwise. */
 export function toggleExplorerVisible(): void {
-  explorerVisible.update((visible) => {
-    const next = !visible;
-    persistPanelVisibility({ explorerVisible: next, terminalVisible: get(terminalVisible) });
-    return next;
-  });
+  if (get(workspace).root) {
+    explorerVisible.update((visible) => {
+      const next = !visible;
+      persistPanelVisibility({ explorerVisible: next, terminalVisible: get(terminalVisible) });
+      return next;
+    });
+  } else {
+    standaloneExplorerVisible.update((visible) => !visible);
+  }
 }
 
 export function toggleTerminalVisible(): void {

@@ -181,11 +181,18 @@ describe("terminalPosition", () => {
  * (module-level `const initialPanelVisibility = loadPanelVisibility()`), so
  * each test that needs a specific starting localStorage state resets the
  * module registry and re-imports it fresh, matching the pattern already
- * used for the theme store in themeStore.test.ts.
+ * used for the theme store in themeStore.test.ts. Also re-imports
+ * `workspace.ts` from the same fresh module generation (not re-exported by
+ * `layout.ts` itself) so a test can set `$workspace.root` and have
+ * `toggleExplorerVisible`'s own internal `import { workspace }` see the
+ * exact same singleton instance (issue #325 — `toggleExplorerVisible` is
+ * mode-aware, and project-mode persistence only kicks in with a root open).
  */
 async function freshLayoutStore() {
   vi.resetModules();
-  return import("../../src/lib/stores/layout");
+  const layout = await import("../../src/lib/stores/layout");
+  const { workspace } = await import("../../src/lib/stores/workspace");
+  return { ...layout, workspace };
 }
 
 describe("panel visibility", () => {
@@ -195,8 +202,9 @@ describe("panel visibility", () => {
     expect(get(terminalVisible)).toBe(true);
   });
 
-  it("round-trips a toggled explorer visibility through localStorage", async () => {
-    const { explorerVisible, terminalVisible, toggleExplorerVisible } = await freshLayoutStore();
+  it("round-trips a toggled explorer visibility through localStorage, with a project open", async () => {
+    const { explorerVisible, terminalVisible, workspace, toggleExplorerVisible } = await freshLayoutStore();
+    workspace.set({ id: "local", root: "/proj" });
 
     toggleExplorerVisible();
 
@@ -227,8 +235,9 @@ describe("panel visibility", () => {
     expect(get(reloaded.terminalVisible)).toBe(false);
   });
 
-  it("toggles independently, preserving the other panel's state", async () => {
-    const { explorerVisible, terminalVisible, toggleExplorerVisible } = await freshLayoutStore();
+  it("toggles independently, preserving the other panel's state, with a project open", async () => {
+    const { explorerVisible, terminalVisible, workspace, toggleExplorerVisible } = await freshLayoutStore();
+    workspace.set({ id: "local", root: "/proj" });
 
     toggleExplorerVisible();
     toggleExplorerVisible();
@@ -261,8 +270,9 @@ describe("panel visibility", () => {
     expect(get(terminalVisible)).toBe(true);
   });
 
-  it("swallows a write error instead of throwing", async () => {
-    const { toggleExplorerVisible } = await freshLayoutStore();
+  it("swallows a write error instead of throwing, with a project open", async () => {
+    const { workspace, toggleExplorerVisible } = await freshLayoutStore();
+    workspace.set({ id: "local", root: "/proj" });
     const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new DOMException("QuotaExceededError");
     });
@@ -270,6 +280,58 @@ describe("panel visibility", () => {
     expect(() => toggleExplorerVisible()).not.toThrow();
 
     setItem.mockRestore();
+  });
+});
+
+// Standalone (root-less) explorer visibility (issue #325's cold-launch
+// plan, §7.2(a)): `toggleExplorerVisible` and `explorerShown` both branch on
+// whether a project is open, and the standalone half is deliberately
+// session-only — no persisted key, always starts hidden.
+describe("standalone explorer visibility (issue #325)", () => {
+  it("standaloneExplorerVisible starts false and is not read from any persisted key", async () => {
+    localStorage.setItem(PANELS_STORAGE_KEY, JSON.stringify({ explorerVisible: true, terminalVisible: true }));
+    const { standaloneExplorerVisible } = await freshLayoutStore();
+    expect(get(standaloneExplorerVisible)).toBe(false);
+  });
+
+  it("toggleExplorerVisible with no project open flips standaloneExplorerVisible, not explorerVisible, and persists nothing", async () => {
+    const { explorerVisible, standaloneExplorerVisible, workspace, toggleExplorerVisible } = await freshLayoutStore();
+    workspace.set({ id: "local", root: null });
+
+    toggleExplorerVisible();
+
+    expect(get(standaloneExplorerVisible)).toBe(true);
+    expect(get(explorerVisible)).toBe(true);
+    expect(localStorage.getItem(PANELS_STORAGE_KEY)).toBeNull();
+  });
+
+  it("explorerShown reflects standaloneExplorerVisible with no root, and explorerVisible with one", async () => {
+    const { explorerShown, standaloneExplorerVisible, workspace } = await freshLayoutStore();
+    const { tabsState } = await import("../../src/lib/stores/tabs");
+    const { standaloneWorkspaceId } = await import("../../src/lib/ipc/commands");
+    workspace.set({ id: "local", root: null });
+    tabsState.set({
+      tabs: [
+        {
+          path: "/tmp/note.md",
+          workspaceId: standaloneWorkspaceId(),
+          mode: "markdown",
+          savedDoc: "",
+          isDirty: false,
+          hasExternalConflict: false,
+          isExternal: true,
+          isDeleted: false,
+        },
+      ],
+      activeTabPath: "/tmp/note.md",
+    });
+
+    expect(get(explorerShown)).toBe(false);
+    standaloneExplorerVisible.set(true);
+    expect(get(explorerShown)).toBe(true);
+
+    workspace.set({ id: "local", root: "/proj" });
+    expect(get(explorerShown)).toBe(true);
   });
 });
 
