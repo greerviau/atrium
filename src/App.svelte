@@ -23,11 +23,12 @@
     renameOpenTabs,
     tabRenameSignal,
     openFileReportingErrors,
+    openExternalFile,
     type Tab,
   } from "./lib/stores/tabs";
   import { closePrompt } from "./lib/stores/closePrompt";
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
-  import { isPathUnderOrEqual } from "./lib/util/path";
+  import { isPathUnderOrEqual, dirOf } from "./lib/util/path";
   import { rekeyPath } from "./lib/editor/editorViewRegistry";
   import { get } from "svelte/store";
   import { onFsChanged, onDockOpenPath, onCloseRequested, onDragDropEvent } from "./lib/ipc/events";
@@ -266,17 +267,29 @@
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  function spawnSession(root: string): TerminalSession {
-    return { id: genId("term"), cwd: root, title: folderName(root) };
+  function spawnSession(cwd: string): TerminalSession {
+    return { id: genId("term"), cwd, title: folderName(cwd) };
   }
+
+  /**
+   * Where a newly-spawned terminal session should start: the workspace root
+   * when a project is open, or — in a root-less standalone workspace (issue
+   * #325's follow-on defect) — the directory containing whichever tab is
+   * currently active, matching Zed. `null` when neither exists (no root and
+   * no active tab), the one state every terminal-creation call site below
+   * refuses to act on.
+   */
+  const terminalCwd = $derived(
+    $workspace.root ?? ($tabsState.activeTabPath ? dirOf($tabsState.activeTabPath) : null),
+  );
 
   // Adds a new tab to a specific panel — used by that panel's own `+` button,
   // where the target pane id is already known.
   function addTabToPane(paneId: string): void {
     lastFocusedSurface = "terminal";
-    const root = $workspace.root;
-    if (!root || !terminalPaneTree) return;
-    terminalPaneTree = addTabToLeaf(terminalPaneTree, paneId, spawnSession(root));
+    const cwd = terminalCwd;
+    if (!cwd || !terminalPaneTree) return;
+    terminalPaneTree = addTabToLeaf(terminalPaneTree, paneId, spawnSession(cwd));
     focusedPaneId = paneId;
   }
 
@@ -285,12 +298,12 @@
   // otherwise adds a tab to whichever panel last had focus.
   function newTerminalTab(): void {
     lastFocusedSurface = "terminal";
-    const root = $workspace.root;
-    if (!root) return;
+    const cwd = terminalCwd;
+    if (!cwd) return;
     suppressAutoSpawn = false;
     if (!terminalPaneTree) {
       const paneId = genId("pane");
-      const session = spawnSession(root);
+      const session = spawnSession(cwd);
       terminalPaneTree = { type: "leaf", id: paneId, tabs: [session], activeTabId: session.id };
       focusedPaneId = paneId;
       return;
@@ -305,12 +318,13 @@
   // shell, not the old one).
   function splitPaneAt(paneId: string, direction: SplitDirection): void {
     lastFocusedSurface = "terminal";
-    const root = $workspace.root;
-    if (!terminalPaneTree || !root) return;
-    // A new panel's first tab always starts at the workspace root, matching
-    // new-tab behavior, rather than wherever the panel being split has since
-    // cd'd to.
-    const session = spawnSession(root);
+    const cwd = terminalCwd;
+    if (!terminalPaneTree || !cwd) return;
+    // A new panel's first tab always starts at the resolved terminal cwd
+    // (the workspace root, or — standalone — the active tab's directory),
+    // matching new-tab behavior, rather than wherever the panel being split
+    // has since cd'd to.
+    const session = spawnSession(cwd);
     const newLeaf: LeafPane = { type: "leaf", id: genId("pane"), tabs: [session], activeTabId: session.id };
     terminalPaneTree = splitPane(terminalPaneTree, paneId, direction, newLeaf);
     focusedPaneId = newLeaf.id;
@@ -916,9 +930,14 @@
   // the dock (see closeTabInPane), so this effect never observes
   // $terminalVisible true with an empty tree for that case. Guarded by
   // suppressAutoSpawn so a session that exits immediately after spawning
-  // can't respawn itself forever.
+  // can't respawn itself forever. Reads `terminalCwd` (not `$workspace.root`
+  // directly) so this also fires for a cold-launched standalone tab, whose
+  // arrival changes `$tabsState.activeTabPath` but never `$workspace.root`
+  // — without that dependency, a root-less launch would never re-run this
+  // effect once the tab actually opens (issue #325's follow-on defect: the
+  // dock rendered open with a dead, unclickable "+ New Terminal" button).
   $effect(() => {
-    if ($terminalVisible && $workspace.root && terminalPaneTree === null && !suppressAutoSpawn) {
+    if ($terminalVisible && terminalCwd && terminalPaneTree === null && !suppressAutoSpawn) {
       newTerminalTab();
     }
   });
@@ -1015,8 +1034,11 @@
    * Classifies `path` (Finding 2: a real file can now flow through the same
    * `RunEvent::Opened`/Dock-menu path a folder always used to) and routes it
    * accordingly: a directory opens as the workspace root, exactly as before;
-   * a file grants itself external access and opens standalone or as an
-   * ordinary local tab, depending on whether a project is currently open.
+   * a file goes through `openExternalFile`, which grants it and opens it
+   * standalone or as an ordinary local tab (depending on whether a project
+   * is currently open) and, for a standalone open, records it to the
+   * recents list so it can be reopened later (issue #325's follow-on
+   * defect: a cold-launched file never showed up there).
    */
   async function doHandleOsOpenPath(path: string): Promise<void> {
     const [isDir] = await fsExternalPathsAreDirs([path]);
@@ -1024,16 +1046,7 @@
       await openWorkspacePath(path);
       return;
     }
-
-    const root = get(workspace).root;
-    const targetWorkspaceId = root ? localWorkspaceId() : standaloneWorkspaceId();
-    try {
-      await fsGrantExternalFile(targetWorkspaceId, path);
-    } catch {
-      // Swallowed deliberately — openFileReportingErrors below surfaces its
-      // own, already-tested error via the standard toast.
-    }
-    openFileReportingErrors(path, undefined, targetWorkspaceId);
+    await openExternalFile(path);
   }
 
   onMount(() => {
@@ -1221,9 +1234,11 @@
                   </div>
                 {:else}
                   <div class="terminal-empty">
-                    <!-- Disabled with no workspace root (issue #325): newTerminalTab already
-                         no-ops without one, since a standalone-only session has nothing to cd into. -->
-                    <button class="new-tab" onclick={newTerminalTab} disabled={!$workspace.root}>+ New Terminal</button>
+                    <!-- Disabled only with nothing to cd into (no workspace root and no
+                         active tab) — newTerminalTab already no-ops in that case. In a
+                         standalone workspace, terminalCwd resolves to the active tab's own
+                         directory, so this is enabled there (issue #325's follow-on). -->
+                    <button class="new-tab" onclick={newTerminalTab} disabled={!terminalCwd}>+ New Terminal</button>
                   </div>
                 {/if}
               </div>

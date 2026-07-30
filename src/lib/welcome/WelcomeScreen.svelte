@@ -1,14 +1,23 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { openWorkspaceFolder, openWorkspacePath } from "../stores/workspace";
+  import { openExternalFile } from "../stores/tabs";
   import { recents, loadRecents, removeRecent as removeRecentFromStore } from "../stores/recents";
 
   onMount(() => {
     void loadRecents();
   });
 
-  async function openRecent(path: string): Promise<void> {
-    await openWorkspacePath(path);
+  // A folder recent switches the project root as before; a file recent
+  // (issue #325's follow-on: single-file opens are now recorded here too)
+  // opens standalone instead — `openWorkspacePath` would misinterpret a
+  // file path as a directory to switch into.
+  async function openRecent(path: string, isFile: boolean): Promise<void> {
+    if (isFile) {
+      await openExternalFile(path);
+    } else {
+      await openWorkspacePath(path);
+    }
   }
 
   async function removeRecent(event: MouseEvent, path: string): Promise<void> {
@@ -31,11 +40,11 @@
           {#each $recents as project (project.path)}
             <div
               class="recent-row"
-              onclick={() => void openRecent(project.path)}
+              onclick={() => void openRecent(project.path, project.isFile)}
               onkeydown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  void openRecent(project.path);
+                  void openRecent(project.path, project.isFile);
                 }
               }}
               role="button"

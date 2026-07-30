@@ -1,6 +1,8 @@
 <script lang="ts">
   import { workspace, openWorkspaceFolder, openWorkspacePath } from "../stores/workspace";
+  import { tabsState, openExternalFile } from "../stores/tabs";
   import { recents } from "../stores/recents";
+  import type { RecentProject } from "../ipc/commands";
   import { basename } from "../util/path";
   import ContextMenu from "../ui/ContextMenu.svelte";
 
@@ -8,15 +10,30 @@
   let buttonEl: HTMLButtonElement | undefined = $state();
   let rootEl: HTMLDivElement | undefined = $state();
 
-  const otherRecents = $derived($recents.filter((r) => r.path !== $workspace.root));
+  // What this window is currently "showing," for both the button label and
+  // excluding it from its own recents list: the project root, or — in a
+  // root-less standalone workspace (issue #325's follow-on defect: the
+  // switcher used to be unreachable there at all) — whichever tab is
+  // currently active.
+  const currentPath = $derived($workspace.root ?? $tabsState.activeTabPath);
+  const switcherLabel = $derived(currentPath ? basename(currentPath) : "Untitled");
+  const otherRecents = $derived($recents.filter((r) => r.path !== currentPath));
 
   function toggleOpen(): void {
     open = !open;
   }
 
-  async function switchTo(path: string): Promise<void> {
+  // A folder recent switches the project root as before; a file recent
+  // (issue #325's follow-on: single-file opens are now recorded here too)
+  // opens standalone instead — `openWorkspacePath` would misinterpret a
+  // file path as a directory to switch into.
+  async function switchTo(project: RecentProject): Promise<void> {
     open = false;
-    await openWorkspacePath(path);
+    if (project.isFile) {
+      await openExternalFile(project.path);
+    } else {
+      await openWorkspacePath(project.path);
+    }
   }
 
   async function openFolder(): Promise<void> {
@@ -40,7 +57,7 @@
 <svelte:window onclick={onWindowClick} />
 
 <div class="title-bar" data-tauri-drag-region="deep">
-  {#if $workspace.root}
+  {#if $workspace.root || $tabsState.tabs.length > 0}
     <div class="switcher" bind:this={rootEl} data-tauri-drag-region="false">
       <button
         class="switcher-btn"
@@ -51,7 +68,7 @@
         aria-label="Switch project"
       >
         {@render folderIcon()}
-        <span class="switcher-label">{basename($workspace.root)}</span>
+        <span class="switcher-label">{switcherLabel}</span>
         <span class="switcher-chevron" aria-hidden="true">▾</span>
       </button>
       {#if open}
@@ -61,7 +78,7 @@
               <p class="empty-state">No other recent projects</p>
             {:else}
               {#each otherRecents as project (project.path)}
-                <button class="recent-row" role="menuitem" onclick={() => void switchTo(project.path)}>
+                <button class="recent-row" role="menuitem" onclick={() => void switchTo(project)}>
                   <span class="recent-name">{project.name}</span>
                   <span class="recent-path">{project.path}</span>
                 </button>
