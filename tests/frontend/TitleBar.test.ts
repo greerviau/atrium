@@ -3,7 +3,21 @@ import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import TitleBar from "../../src/lib/shell/TitleBar.svelte";
 import { workspace } from "../../src/lib/stores/workspace";
 import { recents } from "../../src/lib/stores/recents";
+import { tabsState, type Tab } from "../../src/lib/stores/tabs";
 import * as workspaceStore from "../../src/lib/stores/workspace";
+
+function standaloneTab(path: string): Tab {
+  return {
+    path,
+    workspaceId: "standalone",
+    mode: "code",
+    savedDoc: "",
+    isDirty: false,
+    hasExternalConflict: false,
+    isExternal: true,
+    isDeleted: false,
+  };
+}
 
 vi.mock("../../src/lib/stores/workspace", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/lib/stores/workspace")>();
@@ -22,6 +36,7 @@ describe("TitleBar", () => {
     vi.clearAllMocks();
     workspace.set({ id: "local", root: null });
     recents.set([]);
+    tabsState.set({ tabs: [], activeTabPath: null });
   });
 
   afterEach(() => {
@@ -116,5 +131,52 @@ describe("TitleBar", () => {
     const menu = container.querySelector(".switcher-menu");
     expect(menu).toBeTruthy();
     expect(window.getComputedStyle(menu!).userSelect).toBe("text");
+  });
+
+  // Issue #325's follow-on defect: in a root-less standalone workspace the
+  // switcher used to be entirely absent (gated on `$workspace.root` alone),
+  // so there was no in-window way to switch to another project — only the
+  // native File menu worked, with no visible affordance for it. It must now
+  // be reachable whenever there's a standalone tab open, using that tab's
+  // name as the label (there is no folder to name).
+  it("shows the switcher in a root-less standalone workspace, labeled with the active tab", () => {
+    workspace.set({ id: "local", root: null });
+    tabsState.set({ tabs: [standaloneTab("/tmp/notes.md")], activeTabPath: "/tmp/notes.md" });
+
+    const { getByRole } = render(TitleBar);
+
+    expect(getByRole("button", { name: "Switch project" }).textContent).toContain("notes.md");
+  });
+
+  it("still shows no button when there is no root and no tab open (the true welcome-screen state)", () => {
+    workspace.set({ id: "local", root: null });
+    tabsState.set({ tabs: [], activeTabPath: null });
+
+    const { queryByRole } = render(TitleBar);
+
+    expect(queryByRole("button")).toBeNull();
+  });
+
+  it("lets Open Folder… be reached from the standalone switcher, satisfying the ability to switch away", async () => {
+    workspace.set({ id: "local", root: null });
+    tabsState.set({ tabs: [standaloneTab("/tmp/notes.md")], activeTabPath: "/tmp/notes.md" });
+
+    const { getByRole, findByText } = render(TitleBar);
+    await fireEvent.click(getByRole("button", { name: "Switch project" }));
+    await fireEvent.click(await findByText("Open Folder…"));
+
+    expect(workspaceStore.openWorkspaceFolder).toHaveBeenCalledOnce();
+  });
+
+  it("lists recent projects from the standalone switcher too, all still switched to via openWorkspacePath", async () => {
+    workspace.set({ id: "local", root: null });
+    tabsState.set({ tabs: [standaloneTab("/tmp/notes.md")], activeTabPath: "/tmp/notes.md" });
+    recents.set([current, other]);
+
+    const { getByRole, findByText } = render(TitleBar);
+    await fireEvent.click(getByRole("button", { name: "Switch project" }));
+    await fireEvent.click(await findByText("demo"));
+
+    expect(workspaceStore.openWorkspacePath).toHaveBeenCalledWith(current.path);
   });
 });

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import FileTree from "./lib/explorer/FileTree.svelte";
+  import StandaloneFileList from "./lib/explorer/StandaloneFileList.svelte";
   import EditorPaneSplit from "./lib/editor/EditorPaneSplit.svelte";
   import PaneSplit from "./lib/terminal/PaneSplit.svelte";
   import WelcomeScreen from "./lib/welcome/WelcomeScreen.svelte";
@@ -26,7 +27,7 @@
   } from "./lib/stores/tabs";
   import { closePrompt } from "./lib/stores/closePrompt";
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
-  import { isPathUnderOrEqual } from "./lib/util/path";
+  import { isPathUnderOrEqual, dirOf } from "./lib/util/path";
   import { rekeyPath } from "./lib/editor/editorViewRegistry";
   import { get } from "svelte/store";
   import { onFsChanged, onDockOpenPath, onCloseRequested, onDragDropEvent } from "./lib/ipc/events";
@@ -50,7 +51,8 @@
     clampToContainer,
     HEIGHT_MIN,
     WIDTH_MIN,
-    explorerVisible,
+    explorerShown,
+    standaloneExplorerVisible,
     terminalVisible,
     terminalPosition,
     setTerminalVisible,
@@ -115,7 +117,7 @@
 
   /** `.main`'s content width, derived analytically instead of read back from `mainEl.clientWidth` — Svelte 5 batches DOM updates to a microtask, so a same-pass DOM read of `mainEl` after writing `explorerWidth` would still reflect the pre-update sidebar width. */
   function mainContentWidth(appWidthPx: number, explorerWidthPx: number): number {
-    return appWidthPx - (get(explorerVisible) ? explorerWidthPx + RESIZER_THICKNESS : 0);
+    return appWidthPx - (get(explorerShown) ? explorerWidthPx + RESIZER_THICKNESS : 0);
   }
 
   /** Establishes `explorerRatio` on first call, then re-derives `explorerWidth` from it on every later call. Returns the pixel value it computed, for callers deriving `.main`'s width from it in the same pass. */
@@ -264,17 +266,29 @@
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  function spawnSession(root: string): TerminalSession {
-    return { id: genId("term"), cwd: root, title: folderName(root) };
+  function spawnSession(cwd: string): TerminalSession {
+    return { id: genId("term"), cwd, title: folderName(cwd) };
   }
+
+  /**
+   * Where a newly-spawned terminal session should start: the workspace root
+   * when a project is open, or — in a root-less standalone workspace (issue
+   * #325's follow-on defect) — the directory containing whichever tab is
+   * currently active, matching Zed. `null` when neither exists (no root and
+   * no active tab), the one state every terminal-creation call site below
+   * refuses to act on.
+   */
+  const terminalCwd = $derived(
+    $workspace.root ?? ($tabsState.activeTabPath ? dirOf($tabsState.activeTabPath) : null),
+  );
 
   // Adds a new tab to a specific panel — used by that panel's own `+` button,
   // where the target pane id is already known.
   function addTabToPane(paneId: string): void {
     lastFocusedSurface = "terminal";
-    const root = $workspace.root;
-    if (!root || !terminalPaneTree) return;
-    terminalPaneTree = addTabToLeaf(terminalPaneTree, paneId, spawnSession(root));
+    const cwd = terminalCwd;
+    if (!cwd || !terminalPaneTree) return;
+    terminalPaneTree = addTabToLeaf(terminalPaneTree, paneId, spawnSession(cwd));
     focusedPaneId = paneId;
   }
 
@@ -283,12 +297,12 @@
   // otherwise adds a tab to whichever panel last had focus.
   function newTerminalTab(): void {
     lastFocusedSurface = "terminal";
-    const root = $workspace.root;
-    if (!root) return;
+    const cwd = terminalCwd;
+    if (!cwd) return;
     suppressAutoSpawn = false;
     if (!terminalPaneTree) {
       const paneId = genId("pane");
-      const session = spawnSession(root);
+      const session = spawnSession(cwd);
       terminalPaneTree = { type: "leaf", id: paneId, tabs: [session], activeTabId: session.id };
       focusedPaneId = paneId;
       return;
@@ -303,12 +317,13 @@
   // shell, not the old one).
   function splitPaneAt(paneId: string, direction: SplitDirection): void {
     lastFocusedSurface = "terminal";
-    const root = $workspace.root;
-    if (!terminalPaneTree || !root) return;
-    // A new panel's first tab always starts at the workspace root, matching
-    // new-tab behavior, rather than wherever the panel being split has since
-    // cd'd to.
-    const session = spawnSession(root);
+    const cwd = terminalCwd;
+    if (!terminalPaneTree || !cwd) return;
+    // A new panel's first tab always starts at the resolved terminal cwd
+    // (the workspace root, or — standalone — the active tab's directory),
+    // matching new-tab behavior, rather than wherever the panel being split
+    // has since cd'd to.
+    const session = spawnSession(cwd);
     const newLeaf: LeafPane = { type: "leaf", id: genId("pane"), tabs: [session], activeTabId: session.id };
     terminalPaneTree = splitPane(terminalPaneTree, paneId, direction, newLeaf);
     focusedPaneId = newLeaf.id;
@@ -836,6 +851,20 @@
     }
   });
 
+  // Resets the standalone explorer back to hidden (issue #325) the moment
+  // the welcome screen returns — the last standalone tab closed with no
+  // project open. `standaloneExplorerVisible` is deliberately session-only
+  // (§7.2(a) of the plan), but without this it would still be `true` from
+  // whatever the user last toggled it to, and the *next* single-file open
+  // would start with the sidebar shown instead of hidden — the reset makes
+  // "always starts hidden" true per single-file open, not just once per
+  // process.
+  $effect(() => {
+    if (!$workspace.root && $tabsState.tabs.length === 0) {
+      standaloneExplorerVisible.set(false);
+    }
+  });
+
   // Persists the editor session (pane tree + focused pane) for the current
   // root whenever it changes — but only once `restoreEditorSession` above
   // has actually finished restoring this same root, per the guard comment
@@ -900,9 +929,14 @@
   // the dock (see closeTabInPane), so this effect never observes
   // $terminalVisible true with an empty tree for that case. Guarded by
   // suppressAutoSpawn so a session that exits immediately after spawning
-  // can't respawn itself forever.
+  // can't respawn itself forever. Reads `terminalCwd` (not `$workspace.root`
+  // directly) so this also fires for a cold-launched standalone tab, whose
+  // arrival changes `$tabsState.activeTabPath` but never `$workspace.root`
+  // — without that dependency, a root-less launch would never re-run this
+  // effect once the tab actually opens (issue #325's follow-on defect: the
+  // dock rendered open with a dead, unclickable "+ New Terminal" button).
   $effect(() => {
-    if ($terminalVisible && $workspace.root && terminalPaneTree === null && !suppressAutoSpawn) {
+    if ($terminalVisible && terminalCwd && terminalPaneTree === null && !suppressAutoSpawn) {
       newTerminalTab();
     }
   });
@@ -1051,7 +1085,24 @@
       }
       void refreshDirectoryContaining(event.path);
     });
-    void onDockOpenPath((path) => handleOsOpenPath(path));
+    // Rust's `launch_open` module (issue #325's cold-launch plan) delivers
+    // each OS-opened path exactly once, via exactly one of two mechanisms:
+    // the live `dock:open-path` emit below, once the frontend is
+    // considered "ready," or the one-shot `workspaceTakePendingOpen` drain,
+    // for anything that arrived before then — including a cold launch,
+    // where the OS can hand Atrium a path before Tauri's `.setup()` closure
+    // has even run. Rust only flips to "ready" (stopping the queue and
+    // switching to live delivery) when this drain call actually happens, so
+    // chaining it onto this listener's own registration — rather than
+    // firing both independently — guarantees the listener is already live
+    // before that flip can occur. Anything not in the drain's own snapshot
+    // is therefore guaranteed to arrive after via the live emit instead;
+    // there is no gap where a path could be missed by both.
+    void onDockOpenPath((path) => handleOsOpenPath(path)).then(() => {
+      void workspaceTakePendingOpen().then((paths) => {
+        for (const path of paths) handleOsOpenPath(path);
+      });
+    });
     void onDragDropEvent((event) => {
       if (event.type === "leave") {
         setDragOverTargetDir(null);
@@ -1093,9 +1144,6 @@
       }
       closePrompt.set({ kind: "window", paths: dirty.map((t) => t.path) });
     });
-    void workspaceTakePendingOpen().then((paths) => {
-      for (const path of paths) handleOsOpenPath(path);
-    });
     return () => {
       window.removeEventListener("resize", handleWindowResize);
     };
@@ -1122,9 +1170,13 @@
     <SearchOverlay />
     <div class="app-shell">
     <main class="app" bind:this={appEl}>
-      {#if $explorerVisible && $workspace.root}
+      {#if $explorerShown}
         <div class="explorer" style={`width: ${explorerWidth}px`}>
-          <FileTree />
+          {#if $workspace.root}
+            <FileTree />
+          {:else}
+            <StandaloneFileList />
+          {/if}
         </div>
         <div class="resizer vertical" role="separator" aria-orientation="vertical" onpointerdown={startDragExplorer}>
           <div class="resizer-line"></div>
@@ -1187,9 +1239,11 @@
                   </div>
                 {:else}
                   <div class="terminal-empty">
-                    <!-- Disabled with no workspace root (issue #325): newTerminalTab already
-                         no-ops without one, since a standalone-only session has nothing to cd into. -->
-                    <button class="new-tab" onclick={newTerminalTab} disabled={!$workspace.root}>+ New Terminal</button>
+                    <!-- Disabled only with nothing to cd into (no workspace root and no
+                         active tab) — newTerminalTab already no-ops in that case. In a
+                         standalone workspace, terminalCwd resolves to the active tab's own
+                         directory, so this is enabled there (issue #325's follow-on). -->
+                    <button class="new-tab" onclick={newTerminalTab} disabled={!terminalCwd}>+ New Terminal</button>
                   </div>
                 {/if}
               </div>

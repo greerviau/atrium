@@ -29,7 +29,8 @@ pub async fn workspace_open_folder_dialog(
 /// never be allowed to overwrite — today, only `StandaloneWorkspace`'s own
 /// id. Split out as a pure predicate (no `AppState`/`AppHandle` involved) so
 /// it's directly testable, the same convention `recently_dropped` and
-/// `extend_pending` already establish in this codebase.
+/// `launch_open`'s own pure `record`/`take` already establish in this
+/// codebase.
 fn is_reserved_workspace_id(id: &str) -> bool {
     id == STANDALONE_WORKSPACE_ID
 }
@@ -111,13 +112,15 @@ pub fn workspace_remove_recent(app: AppHandle, path: String) -> Result<(), AppEr
 }
 
 /// Drains every path from a Dock-menu pick (or OS "Open With Atrium")
-/// received before the frontend had mounted its event listeners (the
-/// cold-launch case in plan section 4.3). Called once by the frontend on
-/// startup; returns an empty `Vec` on every other platform and on every
-/// subsequent call.
+/// received before the frontend declared itself ready (the cold-launch case,
+/// issue #325's cold-launch plan). Called once by the frontend on startup,
+/// after registering its live listener; returns an empty `Vec` on every
+/// other platform and on every subsequent call. Delegates to `launch_open`
+/// rather than `AppState`, since the whole point of that queue is to hold
+/// data that can arrive before `AppState` does.
 #[tauri::command]
-pub fn workspace_take_pending_open(state: State<'_, AppState>) -> Vec<String> {
-    std::mem::take(&mut *state.pending_open.lock().unwrap())
+pub fn workspace_take_pending_open() -> Vec<String> {
+    crate::launch_open::take_pending_open()
 }
 
 #[cfg(test)]

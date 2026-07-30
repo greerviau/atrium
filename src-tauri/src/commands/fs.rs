@@ -23,8 +23,9 @@ const RECENT_DROP_WINDOW: Duration = Duration::from_secs(10);
 /// an arbitrary path, with nothing enforcing that a human actually dragged
 /// that file in or the OS was actually asked to open it. `AppState.recent_drop`
 /// is written only by `main.rs`'s own `WindowEvent::DragDrop` handler, and
-/// `AppState.recent_os_open` only by `macos_dock::open_paths`, both on the
-/// Rust side, which no renderer-side bug alone can fabricate.
+/// the OS-open provenance record only by `macos_dock::open_paths` via
+/// `launch_open::record_os_open`, both on the Rust side, which no
+/// renderer-side bug alone can fabricate.
 ///
 /// Deliberately not single-use/consumed-on-check: the most recent real
 /// event's path set stays valid for the whole window, and re-checking the
@@ -41,24 +42,24 @@ const RECENT_DROP_WINDOW: Duration = Duration::from_secs(10);
 ///
 /// `path` is authorized if it was part of a recent, backend-observed event
 /// from EITHER trusted origin. The two origins are NOT equally strong —
-/// `recent_drop` requires a physical drag gesture on this window;
-/// `recent_os_open` requires only that some local process ask the OS to
-/// open `path` with Atrium (no human gesture at all), and this app's own
-/// PTY commands already let a compromised renderer induce that state
-/// directly. Accepted: a compromised renderer already has arbitrary local
-/// execution via the PTY, so nothing new becomes reachable. If the PTY
-/// commands are ever scoped down, `recent_os_open` becomes the weakest
-/// remaining link in this gate — revisit then.
+/// `recent_drop` requires a physical drag gesture on this window; the
+/// OS-open origin (`launch_open::recently_os_opened`) requires only that
+/// some local process ask the OS to open `path` with Atrium (no human
+/// gesture at all), and this app's own PTY commands already let a
+/// compromised renderer induce that state directly. Accepted: a compromised
+/// renderer already has arbitrary local execution via the PTY, so nothing
+/// new becomes reachable. If the PTY commands are ever scoped down, the
+/// OS-open origin becomes the weakest remaining link in this gate — revisit
+/// then.
 fn recently_opened_externally(
     recent_drop: &Mutex<Option<(HashSet<String>, Instant)>>,
-    recent_os_open: &Mutex<Option<(HashSet<String>, Instant)>>,
     path: &str,
 ) -> bool {
-    recently_dropped(recent_drop, path) || recently_dropped(recent_os_open, path)
+    recently_dropped(recent_drop, path) || crate::launch_open::recently_os_opened(path)
 }
 
 fn require_recent_external_open(state: &AppState, path: &str) -> Result<(), AppError> {
-    if recently_opened_externally(&state.recent_drop, &state.recent_os_open, path) {
+    if recently_opened_externally(&state.recent_drop, path) {
         Ok(())
     } else {
         Err(AppError::InvalidPath(format!(
@@ -304,56 +305,47 @@ mod tests {
         assert!(recently_dropped(&recent_drop, "/a/b.txt"));
     }
 
-    // `recently_opened_externally` — accepted from each trust origin alone,
-    // rejected from neither, rejected once expired.
+    // `recently_opened_externally` — accepted from the `recent_drop` origin
+    // alone, rejected once it's expired. The OS-open origin now lives behind
+    // `launch_open`'s own process-global statics rather than a `Mutex` this
+    // test module can construct locally; see
+    // `recently_opened_externally_routes_the_os_open_origin_through_launch_open`
+    // below for that half, and `launch_open`'s own test module (§9.2 test 6)
+    // for the OS-open origin's expiry behavior specifically.
     #[test]
     fn recently_opened_externally_accepts_a_path_from_recent_drop_alone() {
         let recent_drop = Mutex::new(Some((
             HashSet::from(["/a/b.txt".to_string()]),
             Instant::now(),
         )));
-        let recent_os_open: Mutex<Option<(HashSet<String>, Instant)>> = Mutex::new(None);
-        assert!(recently_opened_externally(
-            &recent_drop,
-            &recent_os_open,
-            "/a/b.txt"
-        ));
+        assert!(recently_opened_externally(&recent_drop, "/a/b.txt"));
     }
 
     #[test]
-    fn recently_opened_externally_accepts_a_path_from_recent_os_open_alone() {
-        let recent_drop: Mutex<Option<(HashSet<String>, Instant)>> = Mutex::new(None);
-        let recent_os_open = Mutex::new(Some((
-            HashSet::from(["/a/b.txt".to_string()]),
-            Instant::now(),
-        )));
-        assert!(recently_opened_externally(
-            &recent_drop,
-            &recent_os_open,
-            "/a/b.txt"
-        ));
-    }
-
-    #[test]
-    fn recently_opened_externally_rejects_a_path_from_neither_origin() {
-        let recent_drop: Mutex<Option<(HashSet<String>, Instant)>> = Mutex::new(None);
-        let recent_os_open: Mutex<Option<(HashSet<String>, Instant)>> = Mutex::new(None);
-        assert!(!recently_opened_externally(
-            &recent_drop,
-            &recent_os_open,
-            "/a/b.txt"
-        ));
-    }
-
-    #[test]
-    fn recently_opened_externally_rejects_a_path_once_both_origins_have_expired() {
+    fn recently_opened_externally_rejects_a_path_once_recent_drop_has_expired() {
         let stale_at = Instant::now() - (RECENT_DROP_WINDOW + Duration::from_secs(1));
         let recent_drop = Mutex::new(Some((HashSet::from(["/a/b.txt".to_string()]), stale_at)));
-        let recent_os_open = Mutex::new(Some((HashSet::from(["/a/b.txt".to_string()]), stale_at)));
-        assert!(!recently_opened_externally(
-            &recent_drop,
-            &recent_os_open,
-            "/a/b.txt"
-        ));
+        assert!(!recently_opened_externally(&recent_drop, "/a/b.txt"));
+    }
+
+    // Test 8 (§9.2) — `recently_opened_externally` also authorizes via the
+    // OS-open origin, routed through `launch_open::recently_os_opened`
+    // (the real, process-global instance — this is the one test in the
+    // crate that touches it, deliberately: `launch_open`'s own tests all
+    // construct a local `LaunchOpenState` instead precisely so they can run
+    // concurrently with everything else under `cargo test` without racing
+    // this shared static). Both assertions run in one test, sequentially on
+    // one thread, so there's no risk of another test's `record_os_open`
+    // call landing between them.
+    #[test]
+    fn recently_opened_externally_routes_the_os_open_origin_through_launch_open() {
+        let recent_drop: Mutex<Option<(HashSet<String>, Instant)>> = Mutex::new(None);
+        let never_recorded = "/tmp/atrium-test-recently-opened-externally-neither.md";
+        assert!(!recently_opened_externally(&recent_drop, never_recorded));
+
+        let os_opened = "/tmp/atrium-test-recently-opened-externally-os-open.md";
+        crate::launch_open::record_os_open(&[os_opened.to_string()]);
+        assert!(recently_opened_externally(&recent_drop, os_opened));
+        assert!(!recently_opened_externally(&recent_drop, never_recorded));
     }
 }

@@ -1,20 +1,27 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { tick } from "svelte";
+import { type Writable } from "svelte/store";
 import { render, fireEvent, cleanup, screen } from "@testing-library/svelte";
 import StatusBar from "../../src/lib/shell/StatusBar.svelte";
 import { workspace } from "../../src/lib/stores/workspace";
 import { tabsState, type Tab } from "../../src/lib/stores/tabs";
 import { cursorPosition } from "../../src/lib/stores/editorStatus";
-import { explorerVisible, terminalVisible } from "../../src/lib/stores/layout";
+import { terminalVisible } from "../../src/lib/stores/layout";
+// The real `explorerShown` is a `Readable` (a `derived`); this test's own
+// `vi.mock` below replaces it at runtime with a plain writable so tests can
+// drive it directly, so the import is typed accordingly rather than against
+// the real (read-only) export.
+import { explorerShown as explorerShownReadable } from "../../src/lib/stores/layout";
+const explorerShown = explorerShownReadable as unknown as Writable<boolean>;
 
 vi.mock("../../src/lib/stores/layout", async () => {
   const { writable } = await import("svelte/store");
-  const explorerVisible = writable(true);
+  const explorerShown = writable(true);
   const terminalVisible = writable(true);
   return {
-    explorerVisible,
+    explorerShown,
     terminalVisible,
-    toggleExplorerVisible: vi.fn(() => explorerVisible.update((v) => !v)),
+    toggleExplorerVisible: vi.fn(() => explorerShown.update((v) => !v)),
     toggleTerminalVisible: vi.fn(() => terminalVisible.update((v) => !v)),
   };
 });
@@ -51,7 +58,7 @@ describe("StatusBar", () => {
     workspace.set({ id: "local", root: "/proj" });
     tabsState.set({ tabs: [], activeTabPath: null });
     cursorPosition.set(null);
-    explorerVisible.set(true);
+    explorerShown.set(true);
     terminalVisible.set(true);
   });
 
@@ -142,7 +149,7 @@ describe("StatusBar", () => {
     expect(openSettings).toHaveBeenCalledOnce();
   });
 
-  it("clicking the explorer toggle calls toggleExplorerVisible and reflects aria-pressed from explorerVisible", async () => {
+  it("clicking the explorer toggle calls toggleExplorerVisible and reflects aria-pressed from explorerShown", async () => {
     const { toggleExplorerVisible } = await import("../../src/lib/stores/layout");
     render(StatusBar);
 

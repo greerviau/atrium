@@ -1,5 +1,6 @@
 <script lang="ts">
   import { workspace, openWorkspaceFolder, openWorkspacePath } from "../stores/workspace";
+  import { tabsState } from "../stores/tabs";
   import { recents } from "../stores/recents";
   import { basename } from "../util/path";
   import ContextMenu from "../ui/ContextMenu.svelte";
@@ -8,7 +9,14 @@
   let buttonEl: HTMLButtonElement | undefined = $state();
   let rootEl: HTMLDivElement | undefined = $state();
 
-  const otherRecents = $derived($recents.filter((r) => r.path !== $workspace.root));
+  // What this window is currently "showing," for both the button label and
+  // excluding it from its own recents list: the project root, or — in a
+  // root-less standalone workspace (issue #325's follow-on defect: the
+  // switcher used to be unreachable there at all) — whichever tab is
+  // currently active.
+  const currentPath = $derived($workspace.root ?? $tabsState.activeTabPath);
+  const switcherLabel = $derived(currentPath ? basename(currentPath) : "Untitled");
+  const otherRecents = $derived($recents.filter((r) => r.path !== currentPath));
 
   function toggleOpen(): void {
     open = !open;
@@ -40,7 +48,7 @@
 <svelte:window onclick={onWindowClick} />
 
 <div class="title-bar" data-tauri-drag-region="deep">
-  {#if $workspace.root}
+  {#if $workspace.root || $tabsState.tabs.length > 0}
     <div class="switcher" bind:this={rootEl} data-tauri-drag-region="false">
       <button
         class="switcher-btn"
@@ -51,7 +59,7 @@
         aria-label="Switch project"
       >
         {@render folderIcon()}
-        <span class="switcher-label">{basename($workspace.root)}</span>
+        <span class="switcher-label">{switcherLabel}</span>
         <span class="switcher-chevron" aria-hidden="true">▾</span>
       </button>
       {#if open}

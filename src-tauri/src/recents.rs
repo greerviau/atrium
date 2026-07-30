@@ -50,11 +50,16 @@ fn upsert(mut recents: Vec<RecentProject>, path: &str, opened_at: u64) -> Vec<Re
     recents
 }
 
-/// Drops entries whose path no longer exists on disk.
+/// Drops entries whose path is no longer a directory on disk — this list is
+/// project (folder) roots only, never individual files. Checking `is_dir`
+/// rather than plain `exists` means a file-shaped entry, however it got
+/// here, self-heals the next time this runs rather than lingering
+/// indefinitely: `exists` alone would never drop it, since the file itself
+/// is still there.
 fn prune_missing(recents: Vec<RecentProject>) -> Vec<RecentProject> {
     recents
         .into_iter()
-        .filter(|r| Path::new(&r.path).exists())
+        .filter(|r| Path::new(&r.path).is_dir())
         .collect()
 }
 
@@ -183,6 +188,28 @@ mod tests {
 
         assert_eq!(pruned.len(), 1);
         assert_eq!(pruned[0].name, "keep");
+    }
+
+    // An entry whose path exists on disk but is a *file*, not a directory,
+    // must be pruned exactly like a genuinely-missing path — this list is
+    // project roots only. A plain `.exists()` check would never drop it,
+    // since the file itself is still there, and clicking it would try to
+    // open it as a project folder and fail.
+    #[test]
+    fn prune_missing_drops_a_path_that_exists_but_is_a_file_not_a_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("stale-standalone-entry.md");
+        std::fs::write(&file_path, "hi").unwrap();
+
+        let recents = vec![RecentProject {
+            path: file_path.to_string_lossy().into_owned(),
+            name: "stale-standalone-entry.md".into(),
+            last_opened_at: 1,
+        }];
+
+        let pruned = prune_missing(recents);
+
+        assert!(pruned.is_empty());
     }
 
     #[test]
