@@ -58,12 +58,26 @@ fn recently_opened_externally(
     recently_dropped(recent_drop, path) || crate::launch_open::recently_os_opened(path)
 }
 
-fn require_recent_external_open(state: &AppState, path: &str) -> Result<(), AppError> {
-    if recently_opened_externally(&state.recent_drop, path) {
+/// Third authorization origin, orthogonal to the two time-boxed ones above:
+/// `path` was previously recorded as a standalone file in the recents list
+/// (issue #325's follow-on — "so I can get back to them"). Unlike
+/// `recently_opened_externally`, this has no freshness window — a recents
+/// entry is meant to be reopenable indefinitely, the same way a recent
+/// *project* (`workspace_set_root`, never gated at all) already is. This
+/// still grants a compromised renderer no new capability: the only way a
+/// path ever gets recorded as a file (`workspace_record_recent_file`) is by
+/// first passing this exact same gate, so everything reachable through this
+/// origin was already reachable once through one of the other two. Removing
+/// an entry from recents (`workspace_remove_recent`) revokes this standing
+/// re-authorization along with the list entry.
+pub(crate) fn require_recent_external_open(state: &AppState, path: &str) -> Result<(), AppError> {
+    if recently_opened_externally(&state.recent_drop, path)
+        || crate::recents::is_recorded_file(&state.app_handle, path)
+    {
         Ok(())
     } else {
         Err(AppError::InvalidPath(format!(
-            "'{path}' was not part of a recent drop or OS open request onto this window"
+            "'{path}' was not part of a recent drop or OS open request onto this window, and is not a previously-opened standalone file"
         )))
     }
 }

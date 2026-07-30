@@ -106,6 +106,28 @@ pub fn workspace_get_recents(app: AppHandle) -> Result<Vec<RecentProject>, AppEr
     recents::get_recents(&app)
 }
 
+/// Records `path` as a recent standalone-file entry — the file-opening
+/// counterpart to `workspace_set_root`'s own unconditional recording for
+/// folders, called by the frontend right after a file opens with no project
+/// root (issue #325's follow-on: "so I can get back to them"). Unlike the
+/// folder path, gated on the same real-OS-open provenance
+/// `fs_grant_external_file` requires — `crate::commands::fs`'s own gate, not
+/// duplicated here — so recents.json can never gain a file entry a
+/// compromised renderer fabricated out of an arbitrary path: only a path
+/// the OS was genuinely just asked to open can ever be recorded. See
+/// `commands::fs::require_recent_external_open`'s doc comment for the
+/// reciprocal check this enables — a recorded file entry authorizes
+/// reopening later, from the title-bar switcher or the welcome screen,
+/// without a second live OS event.
+#[tauri::command]
+pub async fn workspace_record_recent_file(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<(), AppError> {
+    crate::commands::fs::require_recent_external_open(&state, &path)?;
+    recents::record(&state.app_handle, &path)
+}
+
 #[tauri::command]
 pub fn workspace_remove_recent(app: AppHandle, path: String) -> Result<(), AppError> {
     recents::remove_recent(&app, &path)

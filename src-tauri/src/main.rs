@@ -427,6 +427,7 @@ fn main() {
             commands::workspace::workspace_set_root,
             commands::workspace::workspace_get_recents,
             commands::workspace::workspace_remove_recent,
+            commands::workspace::workspace_record_recent_file,
             commands::workspace::workspace_take_pending_open,
             commands::fs::fs_list_dir,
             commands::fs::fs_read_file,
