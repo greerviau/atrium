@@ -62,8 +62,6 @@ export interface RecentProject {
   path: string;
   name: string;
   lastOpenedAt: number;
-  /** True for a single file opened with no project workspace (a standalone tab, issue #325's follow-on) rather than a folder. */
-  isFile: boolean;
 }
 
 export function workspaceGetRecents(): Promise<RecentProject[]> {
@@ -72,16 +70,6 @@ export function workspaceGetRecents(): Promise<RecentProject[]> {
 
 export function workspaceRemoveRecent(path: string): Promise<void> {
   return invoke("workspace_remove_recent", { path });
-}
-
-/**
- * Records `path` as a recent standalone-file entry, so it can be reopened
- * later from the title-bar switcher or the welcome screen. Gated
- * server-side on the same real-OS-open provenance `fsGrantExternalFile`
- * requires — only call this right after a file has just opened standalone.
- */
-export function workspaceRecordRecentFile(path: string): Promise<void> {
-  return invoke("workspace_record_recent_file", { path });
 }
 
 /** Drains every pending Dock-menu-picked (or OS "Open With Atrium") path from a cold launch, if any (macOS only). */

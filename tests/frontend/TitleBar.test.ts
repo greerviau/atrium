@@ -5,7 +5,6 @@ import { workspace } from "../../src/lib/stores/workspace";
 import { recents } from "../../src/lib/stores/recents";
 import { tabsState, type Tab } from "../../src/lib/stores/tabs";
 import * as workspaceStore from "../../src/lib/stores/workspace";
-import * as tabsStore from "../../src/lib/stores/tabs";
 
 function standaloneTab(path: string): Tab {
   return {
@@ -29,17 +28,8 @@ vi.mock("../../src/lib/stores/workspace", async (importOriginal) => {
   };
 });
 
-vi.mock("../../src/lib/stores/tabs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../src/lib/stores/tabs")>();
-  return {
-    ...actual,
-    openExternalFile: vi.fn(),
-  };
-});
-
-const current = { path: "/projects/demo", name: "demo", lastOpenedAt: 3, isFile: false };
-const other = { path: "/projects/other-proj", name: "other-proj", lastOpenedAt: 2, isFile: false };
-const standaloneFile = { path: "/tmp/scratch/notes.md", name: "notes.md", lastOpenedAt: 4, isFile: true };
+const current = { path: "/projects/demo", name: "demo", lastOpenedAt: 3 };
+const other = { path: "/projects/other-proj", name: "other-proj", lastOpenedAt: 2 };
 
 describe("TitleBar", () => {
   beforeEach(() => {
@@ -178,31 +168,15 @@ describe("TitleBar", () => {
     expect(workspaceStore.openWorkspaceFolder).toHaveBeenCalledOnce();
   });
 
-  // Issue #325's follow-on defect: a file opened standalone is now recorded
-  // to the same recents list as a folder — clicking it must route through
-  // `openExternalFile` (which opens it standalone), not `openWorkspacePath`
-  // (which would misinterpret the file path as a directory to switch into).
-  it("clicking a recent FILE row opens it via openExternalFile, not openWorkspacePath", async () => {
-    workspace.set({ id: "local", root: current.path });
-    recents.set([current, standaloneFile]);
+  it("lists recent projects from the standalone switcher too, all still switched to via openWorkspacePath", async () => {
+    workspace.set({ id: "local", root: null });
+    tabsState.set({ tabs: [standaloneTab("/tmp/notes.md")], activeTabPath: "/tmp/notes.md" });
+    recents.set([current, other]);
 
     const { getByRole, findByText } = render(TitleBar);
     await fireEvent.click(getByRole("button", { name: "Switch project" }));
-    await fireEvent.click(await findByText("notes.md"));
+    await fireEvent.click(await findByText("demo"));
 
-    expect(tabsStore.openExternalFile).toHaveBeenCalledWith("/tmp/scratch/notes.md");
-    expect(workspaceStore.openWorkspacePath).not.toHaveBeenCalled();
-  });
-
-  it("excludes the active standalone tab's own path from its recents list", async () => {
-    workspace.set({ id: "local", root: null });
-    tabsState.set({ tabs: [standaloneTab(standaloneFile.path)], activeTabPath: standaloneFile.path });
-    recents.set([standaloneFile, other]);
-
-    const { getByRole, findByText, queryByText } = render(TitleBar);
-    await fireEvent.click(getByRole("button", { name: "Switch project" }));
-
-    expect(await findByText("other-proj")).toBeTruthy();
-    expect(queryByText(standaloneFile.path)).toBeNull();
+    expect(workspaceStore.openWorkspacePath).toHaveBeenCalledWith(current.path);
   });
 });

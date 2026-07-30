@@ -1,8 +1,7 @@
 <script lang="ts">
   import { workspace, openWorkspaceFolder, openWorkspacePath } from "../stores/workspace";
-  import { tabsState, openExternalFile } from "../stores/tabs";
+  import { tabsState } from "../stores/tabs";
   import { recents } from "../stores/recents";
-  import type { RecentProject } from "../ipc/commands";
   import { basename } from "../util/path";
   import ContextMenu from "../ui/ContextMenu.svelte";
 
@@ -23,17 +22,9 @@
     open = !open;
   }
 
-  // A folder recent switches the project root as before; a file recent
-  // (issue #325's follow-on: single-file opens are now recorded here too)
-  // opens standalone instead — `openWorkspacePath` would misinterpret a
-  // file path as a directory to switch into.
-  async function switchTo(project: RecentProject): Promise<void> {
+  async function switchTo(path: string): Promise<void> {
     open = false;
-    if (project.isFile) {
-      await openExternalFile(project.path);
-    } else {
-      await openWorkspacePath(project.path);
-    }
+    await openWorkspacePath(path);
   }
 
   async function openFolder(): Promise<void> {
@@ -78,7 +69,7 @@
               <p class="empty-state">No other recent projects</p>
             {:else}
               {#each otherRecents as project (project.path)}
-                <button class="recent-row" role="menuitem" onclick={() => void switchTo(project)}>
+                <button class="recent-row" role="menuitem" onclick={() => void switchTo(project.path)}>
                   <span class="recent-name">{project.name}</span>
                   <span class="recent-path">{project.path}</span>
                 </button>

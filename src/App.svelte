@@ -23,7 +23,6 @@
     renameOpenTabs,
     tabRenameSignal,
     openFileReportingErrors,
-    openExternalFile,
     type Tab,
   } from "./lib/stores/tabs";
   import { closePrompt } from "./lib/stores/closePrompt";
@@ -1034,11 +1033,8 @@
    * Classifies `path` (Finding 2: a real file can now flow through the same
    * `RunEvent::Opened`/Dock-menu path a folder always used to) and routes it
    * accordingly: a directory opens as the workspace root, exactly as before;
-   * a file goes through `openExternalFile`, which grants it and opens it
-   * standalone or as an ordinary local tab (depending on whether a project
-   * is currently open) and, for a standalone open, records it to the
-   * recents list so it can be reopened later (issue #325's follow-on
-   * defect: a cold-launched file never showed up there).
+   * a file grants itself external access and opens standalone or as an
+   * ordinary local tab, depending on whether a project is currently open.
    */
   async function doHandleOsOpenPath(path: string): Promise<void> {
     const [isDir] = await fsExternalPathsAreDirs([path]);
@@ -1046,7 +1042,16 @@
       await openWorkspacePath(path);
       return;
     }
-    await openExternalFile(path);
+
+    const root = get(workspace).root;
+    const targetWorkspaceId = root ? localWorkspaceId() : standaloneWorkspaceId();
+    try {
+      await fsGrantExternalFile(targetWorkspaceId, path);
+    } catch {
+      // Swallowed deliberately — openFileReportingErrors below surfaces its
+      // own, already-tested error via the standard toast.
+    }
+    openFileReportingErrors(path, undefined, targetWorkspaceId);
   }
 
   onMount(() => {

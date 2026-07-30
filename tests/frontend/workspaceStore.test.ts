@@ -14,7 +14,7 @@ vi.mock("../../src/lib/ipc/commands", () => ({
   workspaceGetRecents: vi.fn(),
 }));
 
-const project = { path: "/projects/demo", name: "demo", lastOpenedAt: 1, isFile: false };
+const project = { path: "/projects/demo", name: "demo", lastOpenedAt: 1 };
 
 function dirtyTab(path: string, workspaceId = "local"): Tab {
   return {

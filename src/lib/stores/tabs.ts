@@ -1,18 +1,9 @@
 import { get, writable } from "svelte/store";
-import {
-  fsReadFile,
-  fsWriteFile,
-  fsGrantExternalFile,
-  isAppError,
-  localWorkspaceId,
-  standaloneWorkspaceId,
-  workspaceRecordRecentFile,
-} from "../ipc/commands";
+import { fsReadFile, fsWriteFile, isAppError, localWorkspaceId } from "../ipc/commands";
 import { modeForPath, type PaneMode } from "../editor/codeExtensions";
 import { closePrompt } from "./closePrompt";
 import { workspace } from "./workspace";
 import { recordFileOpened } from "./recentFiles";
-import { loadRecents } from "./recents";
 import { showErrorToast, describeError } from "./errorToast";
 import { markdownDefaultView } from "./markdownDefaultView";
 import { basename, isPathUnderOrEqual } from "../util/path";
@@ -215,42 +206,6 @@ export function openFileReportingErrors(
   openFile(path, selection, workspaceId).catch((err: unknown) => {
     showErrorToast(`Couldn't open file: ${describeError(err)}`);
   });
-}
-
-/**
- * Grants external access to `path` and opens it: an ordinary external tab
- * under the current project when one is open, or a root-less standalone tab
- * (issue #325) when none is. Shared by every "open a file with no in-app
- * browsing" entry point — an OS open (`RunEvent::Opened`, a Dock-menu pick,
- * a real "Open With Atrium"), and a recent-projects entry that turns out to
- * be a file rather than a folder — so a path arriving either way ends up in
- * the same place. A standalone open is additionally recorded to the recents
- * list (issue #325's follow-on: "so I can get back to them"), so it can be
- * reopened the same way later.
- */
-export async function openExternalFile(path: string): Promise<void> {
-  const root = get(workspace).root;
-  const targetWorkspaceId = root ? localWorkspaceId() : standaloneWorkspaceId();
-  try {
-    await fsGrantExternalFile(targetWorkspaceId, path);
-  } catch {
-    // Swallowed deliberately — the open below surfaces its own,
-    // already-tested error via the standard toast.
-  }
-  try {
-    await openFile(path, undefined, targetWorkspaceId);
-  } catch (err) {
-    showErrorToast(`Couldn't open file: ${describeError(err)}`);
-    return;
-  }
-  if (targetWorkspaceId === standaloneWorkspaceId()) {
-    // Ancillary to the open that already succeeded above, so a failure here
-    // is swallowed rather than surfaced — matching `performWorkspaceSwitch`'s
-    // own best-effort recents refresh.
-    workspaceRecordRecentFile(path)
-      .then(() => loadRecents())
-      .catch(() => {});
-  }
 }
 
 /** Flips a markdown tab's `viewMode` between `"rendered"` and `"source"`; a no-op for a non-markdown tab or an unknown path. */

@@ -3,7 +3,6 @@ import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import WelcomeScreen from "../../src/lib/welcome/WelcomeScreen.svelte";
 import * as commands from "../../src/lib/ipc/commands";
 import * as workspaceStore from "../../src/lib/stores/workspace";
-import * as tabsStore from "../../src/lib/stores/tabs";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
   workspaceGetRecents: vi.fn(),
@@ -15,12 +14,7 @@ vi.mock("../../src/lib/stores/workspace", () => ({
   openWorkspacePath: vi.fn(),
 }));
 
-vi.mock("../../src/lib/stores/tabs", () => ({
-  openExternalFile: vi.fn(),
-}));
-
-const project = { path: "/projects/foo", name: "foo", lastOpenedAt: 1, isFile: false };
-const standaloneFile = { path: "/tmp/notes.md", name: "notes.md", lastOpenedAt: 2, isFile: true };
+const project = { path: "/projects/foo", name: "foo", lastOpenedAt: 1 };
 
 describe("WelcomeScreen", () => {
   beforeEach(() => {
@@ -64,23 +58,6 @@ describe("WelcomeScreen", () => {
     await fireEvent.click(await findByText("foo"));
 
     expect(workspaceStore.openWorkspacePath).toHaveBeenCalledWith("/projects/foo");
-    expect(tabsStore.openExternalFile).not.toHaveBeenCalled();
-  });
-
-  // Issue #325's follow-on defect: a file opened standalone (e.g. from a
-  // cold launch) is now recorded to the same recents list as a folder,
-  // shown right alongside one (`RecentProject.isFile` is the only way to
-  // tell them apart in this list) — clicking it must route through
-  // `openExternalFile`, not `openWorkspacePath`, which would misinterpret
-  // the file path as a directory to switch into.
-  it("clicking a recent file row opens it via openExternalFile, not openWorkspacePath", async () => {
-    vi.mocked(commands.workspaceGetRecents).mockResolvedValue([standaloneFile]);
-
-    const { findByText } = render(WelcomeScreen);
-    await fireEvent.click(await findByText("notes.md"));
-
-    expect(tabsStore.openExternalFile).toHaveBeenCalledWith("/tmp/notes.md");
-    expect(workspaceStore.openWorkspacePath).not.toHaveBeenCalled();
   });
 
   it("clicking remove calls workspace_remove_recent and does not open the project", async () => {
