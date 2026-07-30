@@ -6,11 +6,11 @@ A unified markdown and code editor for macOS.
 
 ## Why?
 
-Agentic development has made markdown a first-class artifact for engineers: specs, plans, notes, whatever your agents hand back. Reading raw markdown is a terrible experience. Other editors have a preview mode, but you can't edit the rendered view, so you switch back and forth all day. Tools like Obsidian get the reading right and they lack the rest of the features useful for developers, forcing you to use multiple apps.
+Agentic development has made markdown a first-class artifact for engineers: specs, plans, notes, whatever your agents hand back. Reading raw markdown is a terrible experience. Other editors have a preview mode, but you can't edit the rendered view, so you switch back and forth all day. Tools like Obsidian get the reading right but lack the rest of the features developers need, forcing you to juggle multiple apps.
 
 Not to mention how modern IDEs try to shove native AI features down your throat when all most people need is a terminal so they can use whatever tools suit them best.
 
-Atrium fixes all that by combining a rendered markdown editor with an IDE. All the tools you need with none that you dont.
+Atrium fixes all that by combining a rendered markdown editor with an IDE. All the tools you need with none that you don't.
 
 ## Key Features
 
@@ -22,7 +22,7 @@ Atrium fixes all that by combining a rendered markdown editor with an IDE. All t
 
 - Node.js 20+ and npm.
 - Rust (stable) via [rustup](https://rustup.rs).
-- The [Tauri v2 system prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform (Xcode command line tools on macOS; webkit2gtk and friends on Linux).
+- The [Tauri v2 system prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform (Xcode Command Line Tools on macOS; webkit2gtk and friends on Linux).
 
 ## Development
 
@@ -52,4 +52,4 @@ End-to-end smoke tests live in `tests/e2e/` and require a real display and the f
 npm run tauri build
 ```
 
-Produces a `.app` bundle in `src-tauri/target/release/bundle/`. The MVP does not require Developer ID signing or notarization — local/ad-hoc signing (or an unsigned build with a manually-cleared Gatekeeper warning) is sufficient.
+Produces a `.app` bundle in `src-tauri/target/release/bundle/`. The MVP does not require Developer ID signing or notarization; local/ad-hoc signing (or an unsigned build with a manually cleared Gatekeeper warning) is sufficient.
