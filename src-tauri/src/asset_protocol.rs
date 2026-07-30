@@ -32,7 +32,7 @@ const LOCAL_WORKSPACE_ID: &str = "local";
 /// workspace is never shadowed by a later workspace's own grants. Pure over
 /// its inputs (no `AppHandle`/`AppState`), so it's directly testable with
 /// real tempdirs and no live app, mirroring this codebase's
-/// `recently_dropped`/`extend_pending`/`is_reserved_workspace_id`
+/// `recently_dropped`/`launch_open`'s `record`/`is_reserved_workspace_id`
 /// convention for command-layer logic that would otherwise need a live app
 /// to test.
 async fn resolve_from_workspaces(

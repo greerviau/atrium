@@ -5,6 +5,7 @@ mod asset_protocol;
 mod commands;
 mod error;
 mod fs_watch;
+mod launch_open;
 mod link_resolve;
 #[cfg(target_os = "macos")]
 mod macos_dock;
@@ -453,13 +454,15 @@ fn main() {
 
     app.run(|app_handle, event| {
         // `RunEvent::Opened` fires both when a Dock-menu pick (or a real "Open
-        // With Atrium") reaches an already-running app and (per plan section
-        // 4.3) during a cold launch, before the frontend's event listeners
-        // exist yet; `macos_dock::open_paths` handles both by stashing every
-        // path for `workspace_take_pending_open` and emitting each one live.
-        // Every url in this event is batched into one `open_paths` call
-        // (rather than one call per url) so a multi-file "Open With Atrium"
-        // records all of them as a single `recent_os_open` set.
+        // With Atrium") reaches an already-running app, and — on a cold
+        // launch — before `.setup()` has run and before the frontend's event
+        // listeners exist (issue #325's cold-launch plan, §5).
+        // `macos_dock::open_paths` routes both cases through `launch_open`,
+        // whose statics exist from the first instruction of `main` for
+        // exactly that reason. Every url in this event is batched into one
+        // `open_paths` call (rather than one call per url) so a multi-file
+        // "Open With Atrium" records all of them as a single provenance
+        // stamp.
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Opened { ref urls } = event {
             let paths: Vec<String> = urls
