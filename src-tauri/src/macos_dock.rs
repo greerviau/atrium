@@ -19,7 +19,7 @@ use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{NSApplication, NSDocumentController, NSMenu, NSMenuItem};
 use objc2_foundation::{MainThreadMarker, NSString, NSURL};
 use std::sync::OnceLock;
-use tauri::{AppHandle, Emitter, Manager, Wry};
+use tauri::{AppHandle, Emitter, Wry};
 
 /// Emitted on the webview whenever a Dock menu pick (or `RunEvent::Opened`)
 /// resolves to a path the frontend should open; see `onDockOpenPath` in
