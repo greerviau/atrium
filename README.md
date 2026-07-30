@@ -8,7 +8,9 @@ A unified markdown and code editor for macOS.
 
 Agentic development has made markdown a first-class artifact for engineers: specs, plans, notes, whatever your agents hand back. Reading raw markdown is a terrible experience. Other editors have a preview mode, but you can't edit the rendered view, so you switch back and forth all day. Tools like Obsidian get the reading right and they lack the rest of the features useful for developers, forcing you to use multiple apps.
 
-Atrium renders markdown you can type straight into, wrapped in a real code editor, giving you all the tools you need in one.
+Not to mention how modern IDEs try to shove native AI features down your throat when all most people need is a terminal so they can use whatever tools suit them best.
+
+Atrium fixes all that by combining a rendered markdown editor with an IDE. All the tools you need with none that you dont.
 
 ## Key Features
 
