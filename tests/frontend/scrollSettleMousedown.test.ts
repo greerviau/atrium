@@ -21,6 +21,10 @@ function makeView(): EditorView {
   const container = document.createElement("div");
   document.body.appendChild(container);
   view = new EditorView({ state: EditorState.create({ doc: "hello world", extensions: [wheelTracker] }), parent: container });
+  vi.spyOn(view, "requestMeasure").mockImplementation((request) => {
+    request?.read(view!);
+    request?.write?.(undefined, view!);
+  });
   return view;
 }
 
@@ -38,14 +42,19 @@ function dispatchMousedownOn(target: HTMLElement, clientX = 5, clientY = 5): Mou
 }
 
 /** Replaces `requestAnimationFrame` with a queue the test flushes by hand, so the deferred replay runs deterministically. */
-function stubAnimationFrame(): { flush: () => void } {
+function stubAnimationFrame(): { flush: () => void; flushAll: () => void } {
   const callbacks: FrameRequestCallback[] = [];
-  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+  const requestFrame = (cb: FrameRequestCallback) => {
     callbacks.push(cb);
     return callbacks.length;
-  });
+  };
+  vi.stubGlobal("requestAnimationFrame", requestFrame);
+  const flush = () => callbacks.splice(0, callbacks.length).forEach((cb) => cb(0));
   return {
-    flush: () => callbacks.splice(0, callbacks.length).forEach((cb) => cb(0)),
+    flush,
+    flushAll: () => {
+      while (callbacks.length > 0) flush();
+    },
   };
 }
 
@@ -69,9 +78,30 @@ describe("handleScrollSettleMousedown: Part 2 (issue #161)", () => {
 
     const seen: string[] = [];
     target.addEventListener("mousedown", (e) => seen.push(`mousedown:${e.clientX},${e.clientY}`));
-    frame.flush();
+    frame.flushAll();
 
     expect(seen).toEqual(["mousedown:5,5"]);
+  });
+
+  it("requests a CodeMirror measure before replaying the deferred mousedown", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const frame = stubAnimationFrame();
+    const requestMeasure = vi.spyOn(v, "requestMeasure").mockImplementation((request) => {
+      request?.read(v);
+      request?.write?.(undefined, v);
+    });
+    v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+
+    const event = dispatchMousedownOn(target, 5, 5);
+    handleScrollSettleMousedown(event, v);
+
+    const seen: string[] = [];
+    target.addEventListener("mousedown", () => seen.push("mousedown"));
+    expect(requestMeasure).toHaveBeenCalledWith({ read: expect.any(Function) });
+    expect(seen).toEqual([]);
+    frame.flushAll();
+    expect(seen).toEqual(["mousedown"]);
   });
 
   it("does not defer the replayed mousedown a second time", () => {
@@ -87,7 +117,7 @@ describe("handleScrollSettleMousedown: Part 2 (issue #161)", () => {
     target.addEventListener("mousedown", (e) => {
       replayResult = handleScrollSettleMousedown(e as MouseEvent, v);
     });
-    frame.flush();
+    frame.flushAll();
 
     expect(replayResult).toBe(false);
   });
@@ -103,7 +133,7 @@ describe("handleScrollSettleMousedown: Part 2 (issue #161)", () => {
 
     const seen: string[] = [];
     target.addEventListener("mousedown", (e) => seen.push(e.type));
-    frame.flush();
+    frame.flushAll();
 
     expect(seen).toEqual(["mousedown"]);
   });
@@ -138,7 +168,7 @@ describe("handleScrollSettleMousedown: Part 2 (issue #161)", () => {
     const seenTypes: string[] = [];
     target.addEventListener("mousedown", (e) => seenTypes.push(e.type));
     target.addEventListener("mouseup", (e) => seenTypes.push(e.type));
-    frame.flush();
+    frame.flushAll();
 
     expect(seenTypes).toEqual(["mousedown", "mouseup"]);
   });
@@ -155,42 +185,36 @@ describe("handleScrollSettleMousedown: Part 2 (issue #161)", () => {
     const seenTypes: string[] = [];
     target.addEventListener("mousedown", (e) => seenTypes.push(e.type));
     target.addEventListener("mouseup", (e) => seenTypes.push(e.type));
-    frame.flush();
+    frame.flushAll();
 
     expect(seenTypes).toEqual(["mousedown"]);
   });
 });
 
 describe("guardFirstFocusScrollPosition (issue #183)", () => {
-  it("restores the scroll position on the next frame if something moved it while the pane was unfocused", () => {
+  it("pre-empts the first click and replays it after focus restores the reading position", () => {
     const v = makeView();
+    const target = makeTarget();
     const frame = stubAnimationFrame();
-    expect(v.hasFocus).toBe(false);
+    let scrollAtMousedown: number | undefined;
+    vi.spyOn(v, "focus").mockImplementation(() => {
+      // Simulate CodeMirror's focus path scrolling the current selection into view.
+      v.scrollDOM.scrollTop = 14;
+      v.contentDOM.focus();
+    });
+    v.scrollDOM.scrollTop = 668;
+    const event = dispatchMousedownOn(target);
+    expect(guardFirstFocusScrollPosition(event, v)).toBe(true);
+    target.addEventListener("mousedown", () => {
+      scrollAtMousedown = v.scrollDOM.scrollTop;
+    });
+    expect(scrollAtMousedown).toBeUndefined();
 
-    v.scrollDOM.scrollTop = 4000;
-    const event = dispatchMousedownOn(makeTarget());
-    expect(guardFirstFocusScrollPosition(event, v)).toBe(false);
+    frame.flushAll();
 
-    // Simulate whatever runs later in this same mousedown's handling (e.g.
-    // CodeMirror's own first-focus path) dropping the scroll position.
-    v.scrollDOM.scrollTop = 0;
-
-    frame.flush();
-
-    expect(v.scrollDOM.scrollTop).toBe(4000);
-  });
-
-  it("does nothing when the scroll position never moved", () => {
-    const v = makeView();
-    const frame = stubAnimationFrame();
-
-    v.scrollDOM.scrollTop = 4000;
-    const event = dispatchMousedownOn(makeTarget());
-    guardFirstFocusScrollPosition(event, v);
-
-    frame.flush();
-
-    expect(v.scrollDOM.scrollTop).toBe(4000);
+    expect(v.hasFocus).toBe(true);
+    expect(scrollAtMousedown).toBe(668);
+    expect(v.scrollDOM.scrollTop).toBe(668);
   });
 
   it("does not guard a pane that already has focus", () => {
@@ -206,36 +230,7 @@ describe("guardFirstFocusScrollPosition (issue #183)", () => {
     v.scrollDOM.scrollTop = 0;
     frame.flush();
 
-    // No restore was scheduled, since the pane already had focus.
     expect(v.scrollDOM.scrollTop).toBe(0);
-  });
-
-  it("never pre-empts other mousedown handling", () => {
-    const v = makeView();
-    const event = dispatchMousedownOn(makeTarget());
-
-    expect(guardFirstFocusScrollPosition(event, v)).toBe(false);
-  });
-
-  it("skips the capture on a mousedown that Part 2 is about to defer, instead of locking in the pre-settle position", () => {
-    const v = makeView();
-    const frame = stubAnimationFrame();
-    v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
-
-    // The compositor hasn't caught up yet — `scrollTop` still reads the
-    // stale, pre-settle position at the moment of this click.
-    v.scrollDOM.scrollTop = 1000;
-    const event = dispatchMousedownOn(makeTarget());
-    expect(guardFirstFocusScrollPosition(event, v)).toBe(false);
-
-    // The scroll settles before the deferred frame runs.
-    v.scrollDOM.scrollTop = 4000;
-    frame.flush();
-
-    // Must land on the settled position — capturing the stale 1000 here
-    // and restoring it on this same frame would roll the settle back,
-    // reintroducing issue #161 for exactly this once-per-file click.
-    expect(v.scrollDOM.scrollTop).toBe(4000);
   });
 });
 
@@ -261,31 +256,61 @@ describe("guardFirstFocusScrollPosition composed with handleScrollSettleMousedow
 
     // Settles before the deferred replay's frame runs.
     v.scrollDOM.scrollTop = 4000;
-    frame.flush();
+    frame.flushAll();
 
     expect(v.scrollDOM.scrollTop).toBe(4000);
   });
 
-  it("still restores a scroll position dropped while handling the deferred replay itself", () => {
+  it("holds an early mouseup until the first-focus scroll restore runs", () => {
     const v = makeView();
     const target = makeTarget();
     const frame = stubAnimationFrame();
     installComposedMousedownHandler(target, v);
 
+    let scrollAtMousedown: number | undefined;
+    let scrollAtMouseup: number | undefined;
+    vi.spyOn(v, "focus").mockImplementation(() => {
+      // Simulate focus moving the scroller before the click is resolved.
+      v.scrollDOM.scrollTop = 0;
+      v.contentDOM.focus();
+    });
+    target.addEventListener("mousedown", () => {
+      scrollAtMousedown = v.scrollDOM.scrollTop;
+    });
+    target.addEventListener("mouseup", () => {
+      scrollAtMouseup = v.scrollDOM.scrollTop;
+    });
+
     v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
     v.scrollDOM.scrollTop = 1000;
     dispatchMousedownOn(target, 5, 5);
     v.scrollDOM.scrollTop = 4000;
+    document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 }));
+    frame.flushAll();
 
-    // Dispatches the replayed mousedown, which re-enters the guard (still
-    // unfocused) and arms a fresh restore for whatever happens next.
-    frame.flush();
+    expect(scrollAtMousedown).toBe(4000);
+    expect(scrollAtMouseup).toBe(4000);
+  });
 
-    // Something else — e.g. CodeMirror's own first-focus path — drops the
-    // scroll position as a further effect of that same replayed mousedown.
-    v.scrollDOM.scrollTop = 0;
-    frame.flush();
+  it("records the restored scroll offset before the replayed click resolves", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const frame = stubAnimationFrame();
+    installComposedMousedownHandler(target, v);
+    let scrollAtMousedown: number | undefined;
+    vi.spyOn(v, "focus").mockImplementation(() => {
+      v.scrollDOM.scrollTop = 0;
+      v.contentDOM.focus();
+    });
+    target.addEventListener("mousedown", () => {
+      scrollAtMousedown = v.scrollDOM.scrollTop;
+    });
 
+    v.scrollDOM.scrollTop = 4000;
+    dispatchMousedownOn(target, 5, 5);
+    frame.flushAll();
+
+    expect(scrollAtMousedown).toBe(4000);
     expect(v.scrollDOM.scrollTop).toBe(4000);
   });
 });

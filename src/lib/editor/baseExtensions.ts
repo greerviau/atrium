@@ -162,10 +162,9 @@ export function movementAwareMouseSelectionStyle(view: EditorView, startEvent: M
 // 1 above stops that from producing a spurious *range*, but the resolved
 // cursor position itself is still wrong. This tracks both signals on the
 // pane's scroller and, on a `mousedown` that follows one too closely, defers
-// this click's resolution by one animation frame — by which point CodeMirror
-// has had a chance to measure the newly scrolled layout — then replays it as
-// a fresh `mousedown` so it runs back through the exact same (movement-aware)
-// selection logic as any other click.
+// this click until CodeMirror measures the newly scrolled rendered layout,
+// then replays it as a fresh `mousedown` so it runs back through the exact
+// same (movement-aware) selection logic as any other click.
 
 /** 3-4x the measured real scroll-settle window (~15-40ms): enough margin to never miss the race, without widening far enough to interfere with an intentional fast double-click. */
 export const RECENT_SCROLL_WINDOW_MS = 120;
@@ -216,36 +215,117 @@ function cloneMouseEvent(type: string, source: MouseEvent): MouseEvent {
 }
 
 /**
- * Defers `event` by one animation frame, then replays it as a fresh
- * `mousedown` on `target`. Waiting for the next frame gives CodeMirror time
- * to measure the newly scrolled rendered layout. A click that lands inside the *existing*
- * selection isn't resolved into a selection at `mousedown` at all (only on
- * the following `mouseup`, per upstream's own ambiguous click-vs-drag
- * handling) — so a real mouseup arriving faster than one animation frame
- * would otherwise fire before the deferred `mousedown` has even built the
- * selection object meant to receive it, silently swallowing the click. A
- * capturing listener grabs that early `mouseup`, if there is one, and
- * replays it immediately after the deferred `mousedown` so it's never lost.
+ * Waits for CodeMirror to measure the newly scrolled rendered layout and for
+ * the scroll offset to remain stable across consecutive frames, then replays
+ * `event` as a fresh `mousedown` on `target`.
+ * A click that lands inside the *existing* selection isn't resolved into a
+ * selection at `mousedown` at all (only on the following `mouseup`, per
+ * upstream's own ambiguous click-vs-drag handling) - so a real mouseup
+ * arriving before the deferred `mousedown` has built the selection object
+ * would otherwise silently swallow the click. A capturing listener holds
+ * that early `mouseup` until the focus and scroll guards have run, then
+ * replays it so it is never lost or resolved against the transient scroll.
  */
-function replayMousedownNextFrame(view: EditorView, event: MouseEvent, target: EventTarget): void {
+function replayMousedownAfterMeasure(view: EditorView, event: MouseEvent, target: EventTarget): void {
   const doc = view.contentDOM.ownerDocument;
   let earlyMouseup: MouseEvent | null = null;
   const captureEarlyMouseup = (e: MouseEvent) => {
+    if (earlyMouseup) {
+      return;
+    }
     earlyMouseup = e;
+    e.preventDefault();
+    e.stopImmediatePropagation();
   };
   doc.addEventListener("mouseup", captureEarlyMouseup, { capture: true });
 
-  requestAnimationFrame(() => {
-    doc.removeEventListener("mouseup", captureEarlyMouseup, { capture: true });
+  // `requestAnimationFrame` alone does not force CodeMirror to measure after
+  // a rendered-preview scroll changes the visible decoration set. The
+  // measure request runs after the viewport and its DOM have stabilized, and
+  // the following frame keeps the synthetic event outside that measure pass.
+  let stableFrames = 0;
+  let settleChecks = 0;
+  let previousScroll: { top: number; left: number } | undefined;
 
+  const dispatchMousedown = () => {
     const replayedMousedown = cloneMouseEvent("mousedown", event);
     deferredMouseEvents.add(replayedMousedown);
     target.dispatchEvent(replayedMousedown);
 
-    if (earlyMouseup) {
-      target.dispatchEvent(cloneMouseEvent("mouseup", earlyMouseup));
+    // The first-focus path has already run before this event. Dispatching the
+    // held mouseup in the next frame keeps it after the restored layout.
+    requestAnimationFrame(() => {
+      doc.removeEventListener("mouseup", captureEarlyMouseup, { capture: true });
+      if (earlyMouseup) {
+        target.dispatchEvent(cloneMouseEvent("mouseup", earlyMouseup));
+      }
+    });
+  };
+
+  const replay = () => {
+    if (view.hasFocus) {
+      dispatchMousedown();
+      return;
     }
-  });
+
+    // Focus changes the rendered decoration set before CodeMirror resolves
+    // the click. Focus first, then wait for that new layout to settle and
+    // restore the reading position before dispatching the mousedown.
+    const beforeFocusScrollTop = view.scrollDOM.scrollTop;
+    const beforeFocusScrollLeft = view.scrollDOM.scrollLeft;
+    view.focus();
+    // Keep the focus-induced movement inside this task as well. The measured
+    // write below is still required for CodeMirror's internal scroll state,
+    // but restoring here prevents the transient position from being painted.
+    view.scrollDOM.scrollTop = beforeFocusScrollTop;
+    view.scrollDOM.scrollLeft = beforeFocusScrollLeft;
+    view.requestMeasure({
+      read: () => undefined,
+      write() {
+        view.scrollDOM.scrollTop = beforeFocusScrollTop;
+        view.scrollDOM.scrollLeft = beforeFocusScrollLeft;
+        // The write above changes the DOM after CodeMirror's read phase. A
+        // second measure records the restored offset before posAtCoords runs.
+        view.requestMeasure({
+          read() {
+            requestAnimationFrame(dispatchMousedown);
+          },
+        });
+      },
+    });
+  };
+
+  const settle = () => {
+    settleChecks++;
+    view.requestMeasure({
+      read() {
+        const measured = { top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft };
+        requestAnimationFrame(() => {
+          const current = { top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft };
+          if (
+            previousScroll &&
+            previousScroll.top === measured.top &&
+            previousScroll.left === measured.left &&
+            measured.top === current.top &&
+            measured.left === current.left
+          ) {
+            stableFrames++;
+          } else {
+            stableFrames = 0;
+          }
+          previousScroll = current;
+
+          if (stableFrames >= 2 || settleChecks >= 8) {
+            replay();
+          } else {
+            settle();
+          }
+        });
+      },
+    });
+  };
+
+  settle();
 }
 
 /**
@@ -264,7 +344,7 @@ export function handleScrollSettleMousedown(event: MouseEvent, view: EditorView)
   if (sinceWheel >= RECENT_SCROLL_WINDOW_MS && sinceScroll >= RECENT_SCROLL_WINDOW_MS) {
     return false;
   }
-  replayMousedownNextFrame(view, event, event.target ?? view.contentDOM);
+  replayMousedownAfterMeasure(view, event, event.target ?? view.contentDOM);
   return true;
 }
 
@@ -272,53 +352,22 @@ export const scrollSettleMouseHandler = EditorView.domEventHandlers({
   mousedown: handleScrollSettleMousedown,
 });
 
-// --- Part 3: never let a not-yet-focused pane's first click scroll it back to the top (issue #183) ---
+// --- Part 3: resolve the first click only after the pane has been focused and measured (issue #183) ---
 //
-// A click into a pane that hasn't been focused yet runs through CodeMirror's
-// own `mustFocus` branch (`@codemirror/view` internals, `handlers.mousedown`),
-// which focuses the content element via `focusPreventScroll` — normally
-// scroll-safe, but this app has no way to verify that guard holds on every
-// engine it ships to, and a focus call also writes whatever selection the
-// pane currently holds (document position 0, for a freshly opened file)
-// into the DOM, which is itself the off-screen-caret condition a native
-// scroll-into-view reacts to. Rather than depending on knowing exactly which
-// internal path is at fault, this captures the scroll position immediately
-// before any of that runs and restores it next frame if it moved — it holds
-// regardless of mechanism, and restoring a position that never moved is a
-// no-op.
-
-/**
- * `Prec.highest` below ensures this runs before every other `mousedown`
- * handler on the view, including `handleScrollSettleMousedown` above and
- * CodeMirror's own built-in handling, so `scrollTop` is always captured
- * before anything has a chance to move it.
- */
+// CodeMirror focuses an unfocused pane during its own mousedown handling. In
+// a rendered markdown pane that focus changes the decoration layout and can
+// scroll the caret into view before CodeMirror resolves the click position.
+// Restoring `scrollTop` afterward is too late: the selection has already been
+// calculated against the wrong viewport. `Prec.highest` pre-empts that first
+// mousedown and sends it through the same focus, measure, restore, and replay
+// path as a scroll-settle click. The replay runs with the pane focused, so
+// CodeMirror resolves the click against the restored layout.
 export function guardFirstFocusScrollPosition(event: MouseEvent, view: EditorView): boolean {
   if (view.hasFocus) {
     return false;
   }
-  // A mousedown Part 2 above is about to defer (inside the settle window,
-  // not itself already a replay) hasn't seen the scroll settle yet — the
-  // current `scrollTop` here is the same stale pre-settle value Part 2
-  // exists to wait out. Capturing it now and restoring it next frame would
-  // roll the settled position back to that stale one, right as the replayed
-  // click is about to resolve against it, reintroducing issue #161. Skip the
-  // capture here; the replayed mousedown re-enters this handler on an
-  // already-settled, still-unfocused pane and arms the real guard then.
-  const tracker = view.plugin(wheelTracker);
-  const sinceWheel = Date.now() - (tracker?.lastWheelTime ?? -Infinity);
-  const sinceScroll = Date.now() - (tracker?.lastScrollTime ?? -Infinity);
-  if (!deferredMouseEvents.has(event) && (sinceWheel < RECENT_SCROLL_WINDOW_MS || sinceScroll < RECENT_SCROLL_WINDOW_MS)) {
-    return false;
-  }
-  const scroller = view.scrollDOM;
-  const before = scroller.scrollTop;
-  requestAnimationFrame(() => {
-    if (scroller.scrollTop !== before) {
-      scroller.scrollTop = before;
-    }
-  });
-  return false;
+  replayMousedownAfterMeasure(view, event, event.target ?? view.contentDOM);
+  return true;
 }
 
 export const firstFocusScrollGuard = Prec.highest(

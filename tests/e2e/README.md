@@ -40,7 +40,9 @@ The native folder-picker dialog lives outside the WebView, so the spec registers
 
 It also covers issue #250 (a failed save going silently unreported): `chmod`s `note.md` read-only, edits it, then confirms an `.error-toast` naming the file appears both via `Cmd+S` and via the editor context menu's Save item.
 
-`specs/scrollThenClick.e2e.js` covers the rendered-markdown scroll-then-click regression (issue #183): open `long.md` (a fixture long enough to scroll), scroll the pane down, click shortly after the scroll on a pane that has never yet been clicked into, and confirm the scroll position is preserved rather than snapping back to the top. This is a real-display, real-input-timing bug that a jsdom/vitest test cannot exercise (see `tests/frontend/scrollSettleMousedown.test.ts` for the unit-level coverage of the fix's mechanics instead) — this spec is the regression guard for the actual user-visible behavior.
+`specs/scrollThenClick.e2e.js` covers the rendered-markdown scroll-then-click regressions (issues #183 and #367).
+It opens `long.md`, scrolls the pane down, clicks a visible rendered heading shortly after the scroll on a pane that has never yet been clicked into, and confirms both that the scroll position is preserved and that the cursor resolves to the heading's source line rather than the pre-scroll location.
+These are real-display, real-input-timing bugs that jsdom/vitest tests cannot exercise (see `tests/frontend/scrollSettleMousedown.test.ts` for the unit-level coverage of the fix's mechanics).
 
 `specs/keyboardShortcuts.e2e.js` covers issue #156's two kinds of shortcut:
 
