@@ -666,8 +666,20 @@ body.cm-minimap-dragging-active * {
 }
 
 .cm-hr {
+  position: relative;
+  /* Keep the rule's visual spacing inside the line box. CodeMirror measures
+     line heights from each `.cm-line` element, not from its margins, so
+     vertical margins make pointer coordinates drift from the lines below. */
+  margin-block: 0;
+  padding-block: 0.6em;
+}
+
+.cm-hr::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 0.6em;
   border-top: 2px solid var(--atrium-border);
-  margin: 0.6em 0;
 }
 
 /* Same specificity problem as `.cm-table-delimiter-line`: `!important` is
