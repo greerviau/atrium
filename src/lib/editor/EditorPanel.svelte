@@ -62,6 +62,13 @@
     return path.split("/").pop() ?? path;
   }
 
+  function onTabListWheel(event: WheelEvent): void {
+    if (event.deltaY === 0) return;
+    const tabList = event.currentTarget as HTMLDivElement;
+    tabList.scrollLeft += event.deltaY;
+    event.preventDefault();
+  }
+
   function onTabPointerDown(event: PointerEvent, path: string): void {
     const target = event.target as HTMLElement;
     if (target.closest(".tab-close, .tab-view-mode")) return; // let those buttons' own onclick handle it
@@ -114,7 +121,7 @@
 
 <div class="editor-panel">
   <div class="tab-strip">
-    <div class="tab-list" role="tablist" bind:this={tabListEl}>
+    <div class="tab-list" role="tablist" bind:this={tabListEl} onwheel={onTabListWheel}>
       {#each tree.tabs as path (path)}
         {@const tab = $tabsState.tabs.find((t) => t.path === path)}
         <div

@@ -201,6 +201,17 @@ describe("EditorPanel", () => {
     expect(container.querySelector(".tab-list")?.getAttribute("role")).toBe("tablist");
   });
 
+  it("scrolling vertically over the tab list scrolls tabs horizontally", async () => {
+    tabsState.set({ tabs: [tab("/a.ts"), tab("/b.ts")], activeTabPath: "/a.ts" });
+    const { container } = render(EditorPanel, { tree: TWO_TABS, ...baseProps });
+    const tabList = container.querySelector(".tab-list") as HTMLDivElement;
+
+    await fireEvent.wheel(tabList, { deltaY: 120 });
+    await fireEvent.wheel(tabList, { deltaY: -50 });
+
+    expect(tabList.scrollLeft).toBe(70);
+  });
+
   it("a pointerdown that never crosses the drag threshold still lets the tab's own click activate it", async () => {
     tabsState.set({ tabs: [tab("/a.ts"), tab("/b.ts")], activeTabPath: "/a.ts" });
     const onSetActiveTab = vi.fn();
