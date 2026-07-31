@@ -31,7 +31,7 @@
   import { showErrorToast, describeError } from "../stores/errorToast";
   import { basename } from "../util/path";
   import { baseExtensions } from "./baseExtensions";
-  import { minimapExtension } from "./minimap";
+  import { isScrollable, minimapExtension } from "./minimap";
   import { markdownExtensions, markdownSourceExtensions } from "./markdown/livePreviewPlugin";
   import {
     findTableContext,
@@ -99,6 +99,9 @@
   let lastAppliedWordWrapEnabled: boolean | undefined;
   let lastAppliedLineNumbersEnabled: boolean | undefined;
   let minimapIdleHandle: number | undefined;
+  let minimapVisibilityTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastAppliedMinimapVisible: boolean | undefined;
+  let minimapResizeObserver: ResizeObserver | undefined;
   // Imperative auto-save timer handle, same treatment as `minimapIdleHandle`
   // above — not `$state`, since nothing in the template reads it.
   let autoSaveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -164,7 +167,24 @@
   function applyMinimap(enabled: boolean): void {
     cancelMinimapIdle();
     lastAppliedMinimapEnabled = enabled;
-    view.dispatch({ effects: minimapCompartment.reconfigure(minimapExtension(enabled)) });
+    const visible = enabled && isScrollable(view.scrollDOM);
+    if (visible === lastAppliedMinimapVisible) {
+      return;
+    }
+    lastAppliedMinimapVisible = visible;
+    view.dispatch({ effects: minimapCompartment.reconfigure(minimapExtension(visible)) });
+  }
+
+  function scheduleMinimapVisibilityCheck(): void {
+    if (minimapVisibilityTimer !== undefined) {
+      clearTimeout(minimapVisibilityTimer);
+    }
+    minimapVisibilityTimer = setTimeout(() => {
+      minimapVisibilityTimer = undefined;
+      if (view) {
+        applyMinimap(effectiveMinimapEnabled);
+      }
+    }, 0);
   }
 
   // `@replit/codemirror-minimap` computes its geometry from one uniform line
@@ -409,6 +429,9 @@
       minimapCompartment.of([]),
       keymap.of(shortcutKeymap),
       EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          scheduleMinimapVisibilityCheck();
+        }
         const isSyncOnly =
           update.docChanged && update.transactions.every((tr) => tr.annotation(syncAnnotation));
         if (update.docChanged && !isSyncOnly) {
@@ -434,6 +457,10 @@
     });
     registerView(filePath, view);
     detachScrollbarAutoHide = attachScrollbarAutoHide(view.scrollDOM);
+    if (typeof ResizeObserver !== "undefined") {
+      minimapResizeObserver = new ResizeObserver(scheduleMinimapVisibilityCheck);
+      minimapResizeObserver.observe(view.scrollDOM);
+    }
 
     if (lastAppliedActive) {
       setCursorPosition(computeCursorPosition(view.state));
@@ -445,16 +472,24 @@
     // responsible for the first real application, so it isn't raced or
     // duplicated by the effect also firing on mount.
     lastAppliedMinimapEnabled = initialEffectiveMinimapEnabled;
+    lastAppliedMinimapVisible = undefined;
     const scheduleIdle = typeof requestIdleCallback !== "undefined" ? requestIdleCallback : (cb: () => void) => setTimeout(cb, 1) as unknown as number;
     minimapIdleHandle = scheduleIdle(() => {
       minimapIdleHandle = undefined;
       if (!view) return;
       applyMinimap(initialEffectiveMinimapEnabled);
+      // The first idle callback can still precede the browser's first layout.
+      // Recheck once the initial DOM measurement is available.
+      scheduleMinimapVisibilityCheck();
     });
   });
 
   onDestroy(() => {
     cancelMinimapIdle();
+    if (minimapVisibilityTimer !== undefined) {
+      clearTimeout(minimapVisibilityTimer);
+    }
+    minimapResizeObserver?.disconnect();
     if (autoSaveTimer !== undefined) {
       clearTimeout(autoSaveTimer);
     }

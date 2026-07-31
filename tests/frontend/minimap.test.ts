@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { minimapExtension } from "../../src/lib/editor/minimap";
+import { isScrollable, minimapExtension } from "../../src/lib/editor/minimap";
 
 let view: EditorView | undefined;
 let mountedContainer: HTMLElement | undefined;
@@ -81,6 +81,26 @@ function fakeGeometry(root: HTMLElement) {
 }
 
 describe("minimapExtension", () => {
+  it("recognizes content that extends beyond the editor viewport", () => {
+    const scrollDOM = document.createElement("div");
+    Object.defineProperties(scrollDOM, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 501 },
+    });
+
+    expect(isScrollable(scrollDOM)).toBe(true);
+  });
+
+  it("recognizes content that fits within the editor viewport", () => {
+    const scrollDOM = document.createElement("div");
+    Object.defineProperties(scrollDOM, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 500 },
+    });
+
+    expect(isScrollable(scrollDOM)).toBe(false);
+  });
+
   it("renders the minimap gutter DOM node when enabled", () => {
     const container = mount(true);
     expect(container.querySelector(".cm-minimap-gutter")).not.toBeNull();
