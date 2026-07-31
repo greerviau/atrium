@@ -6,9 +6,12 @@
   import { basename } from "../util/path";
   import { describeError, showErrorToast } from "../stores/errorToast";
 
-  let open = $state(false);
-  let buttonEl: HTMLButtonElement | undefined = $state();
+  type OpenMenu = "worktree" | "branch" | null;
+
+  let openMenu = $state<OpenMenu>(null);
   let rootEl: HTMLDivElement | undefined = $state();
+  let worktreeButtonEl: HTMLButtonElement | undefined = $state();
+  let branchButtonEl: HTMLButtonElement | undefined = $state();
   let context = $state<GitContext | null>(null);
   let loading = $state(false);
   let requestId = 0;
@@ -31,24 +34,24 @@
 
   $effect(() => {
     const root = $workspace.root;
-    open = false;
+    openMenu = null;
     context = null;
     if (root) void refresh(root);
   });
 
-  function toggleOpen(): void {
-    open = !open;
-    if (open && $workspace.root) void refresh($workspace.root);
+  function toggleMenu(menu: Exclude<OpenMenu, null>): void {
+    openMenu = openMenu === menu ? null : menu;
+    if (openMenu && $workspace.root) void refresh($workspace.root);
   }
 
   async function chooseWorktree(path: string): Promise<void> {
-    open = false;
+    openMenu = null;
     await openWorkspacePath(path);
   }
 
   async function chooseBranch(branch: GitBranch): Promise<void> {
     if (branch.isCurrent) {
-      open = false;
+      openMenu = null;
       return;
     }
     if (branch.worktreePath && context && branch.worktreePath !== context.worktreePath) {
@@ -58,7 +61,7 @@
 
     const root = get(workspace).root;
     if (!root) return;
-    open = false;
+    openMenu = null;
     try {
       await gitSwitchBranch(root, branch.name);
       await refresh(root);
@@ -68,9 +71,9 @@
   }
 
   function onWindowClick(event: MouseEvent): void {
-    if (!open) return;
+    if (!openMenu) return;
     if (rootEl && event.target instanceof Node && rootEl.contains(event.target)) return;
-    open = false;
+    openMenu = null;
   }
 </script>
 
@@ -78,58 +81,79 @@
 
 {#if $workspace.root && context}
   <div class="git-switcher" bind:this={rootEl} data-tauri-drag-region="false">
-    <button
-      class="git-switcher-btn"
-      bind:this={buttonEl}
-      onclick={toggleOpen}
-      aria-haspopup="true"
-      aria-expanded={open}
-      aria-label="Switch worktree or branch"
-      title={`${context.worktreePath} - ${branchLabel}`}
-    >
-      <span class="git-icon" aria-hidden="true">⑂</span>
-      <span class="git-worktree-label">{worktreeLabel}</span>
-      <span class="git-separator" aria-hidden="true">·</span>
-      <span class="git-branch-label">{branchLabel}</span>
-      <span class="git-switcher-chevron" aria-hidden="true">▾</span>
-    </button>
-    {#if open}
-      <ContextMenu anchorEl={buttonEl}>
-        <div class="git-menu" role="none">
-          <div class="menu-heading">Worktrees</div>
-          {#each context.worktrees as worktree (worktree.path)}
-            <button
-              class:current={worktree.isCurrent}
-              role="menuitem"
-              disabled={worktree.isCurrent}
-              onclick={() => void chooseWorktree(worktree.path)}
-            >
-              <span class="row-main">{basename(worktree.path)}</span>
-              <span class="row-detail">{worktree.branch ?? `detached @ ${worktree.head}`}</span>
-            </button>
-          {/each}
-          <div class="menu-separator"></div>
-          <div class="menu-heading">Branches</div>
-          {#if context.branches.length === 0}
-            <p class="empty-state">No local branches</p>
-          {:else}
-            {#each context.branches as branch (branch.name)}
+    <div class="git-control">
+      <button
+        class="git-switcher-btn"
+        bind:this={worktreeButtonEl}
+        onclick={() => toggleMenu("worktree")}
+        aria-haspopup="true"
+        aria-expanded={openMenu === "worktree"}
+        aria-label="Switch worktree"
+        title={context.worktreePath}
+      >
+        <span class="git-icon" aria-hidden="true">⑂</span>
+        <span class="git-label">{worktreeLabel}</span>
+        <span class="git-switcher-chevron" aria-hidden="true">▾</span>
+      </button>
+      {#if openMenu === "worktree"}
+        <ContextMenu anchorEl={worktreeButtonEl}>
+          <div class="git-menu" role="none">
+            <div class="menu-heading">Worktrees</div>
+            {#each context.worktrees as worktree (worktree.path)}
               <button
-                class:current={branch.isCurrent}
+                class:current={worktree.isCurrent}
                 role="menuitem"
-                disabled={branch.isCurrent}
-                onclick={() => void chooseBranch(branch)}
+                disabled={worktree.isCurrent}
+                onclick={() => void chooseWorktree(worktree.path)}
               >
-                <span class="row-main">{branch.name}</span>
-                {#if branch.worktreePath && branch.worktreePath !== context.worktreePath}
-                  <span class="row-detail">in {basename(branch.worktreePath)}</span>
-                {/if}
+                <span class="row-main">{basename(worktree.path)}</span>
+                <span class="row-detail">{worktree.branch ?? `detached @ ${worktree.head}`}</span>
               </button>
             {/each}
-          {/if}
-        </div>
-      </ContextMenu>
-    {/if}
+          </div>
+        </ContextMenu>
+      {/if}
+    </div>
+
+    <div class="git-control">
+      <button
+        class="git-switcher-btn"
+        bind:this={branchButtonEl}
+        onclick={() => toggleMenu("branch")}
+        aria-haspopup="true"
+        aria-expanded={openMenu === "branch"}
+        aria-label="Switch branch"
+        title={branchLabel}
+      >
+        <span class="git-icon" aria-hidden="true">⎇</span>
+        <span class="git-label">{branchLabel}</span>
+        <span class="git-switcher-chevron" aria-hidden="true">▾</span>
+      </button>
+      {#if openMenu === "branch"}
+        <ContextMenu anchorEl={branchButtonEl}>
+          <div class="git-menu" role="none">
+            <div class="menu-heading">Branches</div>
+            {#if context.branches.length === 0}
+              <p class="empty-state">No local branches</p>
+            {:else}
+              {#each context.branches as branch (branch.name)}
+                <button
+                  class:current={branch.isCurrent}
+                  role="menuitem"
+                  disabled={branch.isCurrent}
+                  onclick={() => void chooseBranch(branch)}
+                >
+                  <span class="row-main">{branch.name}</span>
+                  {#if branch.worktreePath && branch.worktreePath !== context.worktreePath}
+                    <span class="row-detail">in {basename(branch.worktreePath)}</span>
+                  {/if}
+                </button>
+              {/each}
+            {/if}
+          </div>
+        </ContextMenu>
+      {/if}
+    </div>
   </div>
 {:else if $workspace.root && loading}
   <div class="git-switcher-placeholder" aria-hidden="true"></div>
@@ -142,16 +166,24 @@
     align-items: center;
   }
 
+  .git-switcher {
+    gap: 2px;
+  }
+
   .git-switcher-placeholder {
-    width: 120px;
+    width: 180px;
     height: 24px;
+  }
+
+  .git-control {
+    display: inline-flex;
   }
 
   .git-switcher-btn {
     display: flex;
     align-items: center;
     gap: 5px;
-    max-width: 260px;
+    max-width: 180px;
     background: none;
     border: none;
     border-radius: 4px;
@@ -172,33 +204,25 @@
   .git-icon {
     color: var(--atrium-text-secondary);
     font-size: 15px;
+    flex-shrink: 0;
   }
 
-  .git-worktree-label,
-  .git-branch-label {
+  .git-label {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .git-branch-label {
-    color: var(--atrium-text-secondary);
-  }
-
-  .git-separator,
   .git-switcher-chevron {
     opacity: 0.6;
-    flex-shrink: 0;
-  }
-
-  .git-switcher-chevron {
     font-size: 0.8em;
+    flex-shrink: 0;
   }
 
   .git-menu {
     display: flex;
     flex-direction: column;
-    min-width: 250px;
+    min-width: 220px;
     max-width: 360px;
     -webkit-user-select: text;
     user-select: text;

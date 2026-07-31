@@ -123,10 +123,11 @@ describe("TitleBar", () => {
     });
 
     const { findByRole } = render(TitleBar);
-    const button = await findByRole("button", { name: "Switch worktree or branch" });
+    const worktreeButton = await findByRole("button", { name: "Switch worktree" });
+    const branchButton = await findByRole("button", { name: "Switch branch" });
 
-    expect(button.textContent).toContain("demo");
-    expect(button.textContent).toContain("main");
+    expect(worktreeButton.textContent).toContain("demo");
+    expect(branchButton.textContent).toContain("main");
   });
 
   it("lists worktrees and branches in the git switcher", async () => {
@@ -148,10 +149,13 @@ describe("TitleBar", () => {
     });
 
     const { findByRole, findByText, findAllByText } = render(TitleBar);
-    await fireEvent.click(await findByRole("button", { name: "Switch worktree or branch" }));
+    await fireEvent.click(await findByRole("button", { name: "Switch worktree" }));
 
     expect(await findByText("feature")).toBeTruthy();
-    expect(await findAllByText("feature/login")).toHaveLength(2);
+    expect(await findByText("feature/login")).toBeTruthy();
+
+    await fireEvent.click(await findByRole("button", { name: "Switch branch" }));
+    expect(await findAllByText("feature/login")).toHaveLength(1);
     expect(await findByText("local-only")).toBeTruthy();
   });
 
@@ -173,7 +177,7 @@ describe("TitleBar", () => {
     });
 
     const { findByRole } = render(TitleBar);
-    await fireEvent.click(await findByRole("button", { name: "Switch worktree or branch" }));
+    await fireEvent.click(await findByRole("button", { name: "Switch branch" }));
     const branchRows = await findByRole("menuitem", { name: "feature/login in feature" });
     await fireEvent.click(branchRows);
 
@@ -196,7 +200,7 @@ describe("TitleBar", () => {
     });
 
     const { findByRole } = render(TitleBar);
-    await fireEvent.click(await findByRole("button", { name: "Switch worktree or branch" }));
+    await fireEvent.click(await findByRole("button", { name: "Switch branch" }));
     await fireEvent.click(await findByRole("menuitem", { name: "local-only" }));
 
     expect(commands.gitSwitchBranch).toHaveBeenCalledWith(current.path, "local-only");
