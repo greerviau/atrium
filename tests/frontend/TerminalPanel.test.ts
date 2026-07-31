@@ -56,6 +56,16 @@ describe("TerminalPanel", () => {
     }
   });
 
+  it("scrolling vertically over the tab list scrolls tabs horizontally", async () => {
+    const { container } = render(TerminalPanel, { tree: TWO_TABS, ...baseProps });
+    const tabList = container.querySelector(".tab-list") as HTMLDivElement;
+
+    await fireEvent.wheel(tabList, { deltaY: 120 });
+    await fireEvent.wheel(tabList, { deltaY: -50 });
+
+    expect(tabList.scrollLeft).toBe(70);
+  });
+
   it("clicking a tab switches which TerminalPane is visible", async () => {
     const onSetActiveTab = vi.fn();
     const { container } = render(TerminalPanel, { tree: TWO_TABS, ...baseProps, onSetActiveTab });

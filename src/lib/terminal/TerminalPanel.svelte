@@ -36,11 +36,18 @@
     onSetActiveTab: (sessionId: string) => void;
     onTitleChange: (sessionId: string, title: string) => void;
   } = $props();
+
+  function onTabListWheel(event: WheelEvent): void {
+    if (event.deltaY === 0) return;
+    const tabList = event.currentTarget as HTMLDivElement;
+    tabList.scrollLeft += event.deltaY;
+    event.preventDefault();
+  }
 </script>
 
 <div class="terminal-panel">
   <div class="tab-strip">
-    <div class="tab-list">
+    <div class="tab-list" onwheel={onTabListWheel}>
       {#each tree.tabs as session (session.id)}
         <div
           class="tab"
