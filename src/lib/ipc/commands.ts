@@ -77,6 +77,36 @@ export function workspaceTakePendingOpen(): Promise<string[]> {
   return invoke("workspace_take_pending_open");
 }
 
+export interface GitWorktree {
+  path: string;
+  branch: string | null;
+  head: string;
+  isCurrent: boolean;
+}
+
+export interface GitBranch {
+  name: string;
+  worktreePath: string | null;
+  isCurrent: boolean;
+}
+
+export interface GitContext {
+  repositoryRoot: string;
+  worktreePath: string;
+  branch: string | null;
+  head: string;
+  worktrees: GitWorktree[];
+  branches: GitBranch[];
+}
+
+export function gitGetContext(path: string): Promise<GitContext | null> {
+  return invoke("git_get_context", { path });
+}
+
+export function gitSwitchBranch(path: string, branch: string): Promise<void> {
+  return invoke("git_switch_branch", { path, branch });
+}
+
 export function fsListDir(workspaceId: string, path: string): Promise<DirEntry[]> {
   return invoke("fs_list_dir", { workspaceId, path });
 }
