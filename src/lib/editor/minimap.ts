@@ -27,6 +27,13 @@ function createMinimapDom(): { dom: HTMLElement } {
   return { dom: document.createElement("div") };
 }
 
+/** Returns whether the scroll container has content extending beyond its viewport. */
+export function isScrollable(scrollDOM: HTMLElement): boolean {
+  // A zero dimension means the view has not been laid out yet (as in jsdom).
+  // Keep the minimap enabled until the browser provides real geometry.
+  return scrollDOM.clientHeight === 0 || scrollDOM.scrollHeight === 0 || scrollDOM.scrollHeight > scrollDOM.clientHeight;
+}
+
 /** Returns the minimap extension when `enabled`, or `[]` to omit it entirely. */
 export function minimapExtension(enabled: boolean): Extension[] {
   if (!enabled) return [];

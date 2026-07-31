@@ -65,6 +65,19 @@ describe("EditorPane: minimap", () => {
     expect(container.querySelector(".cm-minimap-gutter")).not.toBeNull();
   });
 
+  it("hides the minimap when the file fits in the editor viewport", async () => {
+    seedTab(CODE_PATH, "code");
+    const { container } = render(EditorPane, { filePath: CODE_PATH, paneId: PANE_ID });
+    const scroller = container.querySelector(".cm-scroller") as HTMLElement;
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 500 },
+    });
+    await waitForIdle();
+
+    expect(container.querySelector(".cm-minimap-gutter")).toBeNull();
+  });
+
   it("never shows the minimap gutter in a markdown pane in rendered view, even once the deferred build runs", async () => {
     seedTab(MARKDOWN_PATH, "markdown", "rendered");
     const { container } = render(EditorPane, { filePath: MARKDOWN_PATH, paneId: PANE_ID });
