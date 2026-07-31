@@ -62,7 +62,7 @@
       aria-label="SQL query"
       bind:value={query}
       onkeydown={onQueryKeydown}
-      rows="2"
+      rows="1"
       spellcheck="false"
     ></textarea>
     <button type="submit" disabled={running}>{running ? "Running…" : "Run"}</button>
