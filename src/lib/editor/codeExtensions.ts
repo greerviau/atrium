@@ -11,13 +11,22 @@ import { html } from "@codemirror/lang-html";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { extensionOf } from "../util/path";
 
-export type PaneMode = "markdown" | "code";
+export type PaneMode = "markdown" | "code" | "data";
 
 const MARKDOWN_EXTENSIONS = new Set(["md", "markdown"]);
+const DATA_EXTENSIONS = new Set(["csv", "tsv", "parquet"]);
 
-/** Extension (no dot, lowercased) -> mode. `.md` routes to the markdown pane instead of the code pane. */
+/** Extension (no dot, lowercased) -> mode. Markdown and tabular data use dedicated panes. */
 export function modeForPath(path: string): PaneMode {
-  return MARKDOWN_EXTENSIONS.has(extensionOf(path)) ? "markdown" : "code";
+  const extension = extensionOf(path);
+  if (MARKDOWN_EXTENSIONS.has(extension)) return "markdown";
+  if (DATA_EXTENSIONS.has(extension)) return "data";
+  return "code";
+}
+
+/** Whether `path` is backed by a queryable tabular data file. */
+export function isDataPath(path: string): boolean {
+  return DATA_EXTENSIONS.has(extensionOf(path));
 }
 
 /**

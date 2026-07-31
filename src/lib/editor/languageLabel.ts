@@ -25,6 +25,9 @@ const LABELS: Record<string, string> = {
   zsh: "Shell Script",
   md: "Markdown",
   markdown: "Markdown",
+  csv: "CSV",
+  tsv: "TSV",
+  parquet: "Parquet",
 };
 
 /** Human-readable language label for `path`'s extension, falling back to "Plain Text" for anything unrecognized. */

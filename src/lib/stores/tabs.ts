@@ -171,8 +171,10 @@ export async function openFile(
     return;
   }
 
-  const contents = await fsReadFile(workspaceId, path);
   const mode = modeForPath(path);
+  // Data files are read by the data-query backend on demand, so opening a
+  // Parquet file never routes its binary bytes through the UTF-8 editor path.
+  const contents = mode === "data" ? "" : await fsReadFile(workspaceId, path);
   const tab: Tab = {
     path,
     workspaceId,
@@ -367,7 +369,7 @@ export async function saveTab(path: string, contents: string, getLiveContent?: (
 export async function reconcileExternalChange(path: string): Promise<void> {
   const state = get(tabsState);
   const tab = state.tabs.find((t) => t.path === path);
-  if (!tab) {
+  if (!tab || tab.mode === "data") {
     return;
   }
 

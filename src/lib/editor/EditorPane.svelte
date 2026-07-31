@@ -118,7 +118,7 @@
   let menu = $state<ContextMenuState | null>(null);
 
   function viewModeExtensions(
-    mode: "code" | "markdown",
+    mode: "code" | "markdown" | "data",
     viewMode: "rendered" | "source" | undefined,
     showLineNumbers: boolean,
   ): Extension[] {
@@ -139,8 +139,8 @@
     return enabled ? EditorView.lineWrapping : [];
   }
 
-  function wordWrapAllowedFor(mode: "markdown" | "code"): boolean {
-    return mode !== "markdown";
+  function wordWrapAllowedFor(mode: "markdown" | "code" | "data"): boolean {
+    return mode === "code";
   }
 
   // `showMinimap`'s own text/highlight state runs a synchronous full-document
@@ -197,8 +197,8 @@
   // so the minimap's scroll-position overlay and content no longer line up
   // with the pane's real rendered layout. An actively wrong minimap is worse
   // than no minimap, so markdown panes never show one, in either view mode.
-  function minimapAllowedFor(mode: "markdown" | "code"): boolean {
-    return mode !== "markdown";
+  function minimapAllowedFor(mode: "markdown" | "code" | "data"): boolean {
+    return mode === "code";
   }
 
   const tab = $derived($tabsState.tabs.find((t) => t.path === filePath));
