@@ -3,6 +3,7 @@
 
 mod asset_protocol;
 mod commands;
+mod data;
 mod error;
 mod fs_watch;
 mod launch_open;
@@ -430,6 +431,7 @@ fn main() {
             commands::workspace::workspace_take_pending_open,
             commands::fs::fs_list_dir,
             commands::fs::fs_read_file,
+            commands::data::data_query,
             commands::fs::fs_write_file,
             commands::fs::fs_create_file,
             commands::fs::fs_create_dir,

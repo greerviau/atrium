@@ -11,6 +11,7 @@
     closeTab,
   } from "../stores/tabs";
   import EditorPane from "./EditorPane.svelte";
+  import DataPane from "./DataPane.svelte";
   import EditorSplitMenu from "./EditorSplitMenu.svelte";
   import { tooltip } from "../ui/tooltip";
   import { beginTabDrag, draggingTabKey } from "./tabDrag";
@@ -191,7 +192,11 @@
             <button onclick={() => closeTab(path)}>Close</button>
           </div>
         {/if}
-        <EditorPane filePath={path} paneId={tree.id} />
+        {#if tab?.mode === "data"}
+          <DataPane filePath={path} workspaceId={tab.workspaceId} />
+        {:else}
+          <EditorPane filePath={path} paneId={tree.id} />
+        {/if}
       </div>
     {/each}
   </div>

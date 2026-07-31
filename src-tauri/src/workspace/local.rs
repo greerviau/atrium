@@ -1041,6 +1041,24 @@ impl Workspace for LocalWorkspace {
         String::from_utf8(bytes).map_err(|_| AppError::NotUtf8(path.to_string()))
     }
 
+    async fn query_data(
+        &self,
+        path: &str,
+        query: &str,
+        page: usize,
+        page_size: Option<usize>,
+    ) -> Result<crate::data::DataQueryResult, AppError> {
+        let file = self.resolve_read_target(path).await?;
+        let logical_path = path.to_string();
+        let query = query.to_string();
+        tokio::task::spawn_blocking(move || {
+            crate::data::query_file(&file, &logical_path, &query, page, page_size)
+        })
+        .await
+        .map_err(|err| AppError::Other(format!("data query task panicked: {err}")))?
+        .map_err(AppError::Other)
+    }
+
     /// Writes `contents` atomically and durably: the new content lands via a
     /// temp-file-write-fsync-rename sequence (see `atomic_write`), so a crash
     /// or power loss mid-save never leaves the file truncated or partially

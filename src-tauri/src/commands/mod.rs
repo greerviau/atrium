@@ -1,4 +1,5 @@
 pub mod app;
+pub mod data;
 pub mod fs;
 pub mod git;
 pub mod pty;

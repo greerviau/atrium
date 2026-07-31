@@ -2,6 +2,7 @@ pub mod external_grants;
 pub mod local;
 pub mod standalone;
 
+use crate::data::DataQueryResult;
 use crate::error::AppError;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -152,6 +153,15 @@ pub fn is_default_ignored(name: &str) -> bool {
 pub trait Workspace: Send + Sync {
     async fn list_dir(&self, path: &str) -> Result<Vec<DirEntry>, AppError>;
     async fn read_file(&self, path: &str) -> Result<String, AppError>;
+    /// Runs a read-only query against a CSV, TSV, or Parquet file after
+    /// applying the implementation's normal read authorization.
+    async fn query_data(
+        &self,
+        path: &str,
+        query: &str,
+        page: usize,
+        page_size: Option<usize>,
+    ) -> Result<DataQueryResult, AppError>;
     async fn write_file(&self, path: &str, contents: &str) -> Result<(), AppError>;
     async fn create_file(&self, path: &str) -> Result<(), AppError>;
     async fn create_dir(&self, path: &str) -> Result<(), AppError>;

@@ -33,6 +33,9 @@ nucleo-matcher = "0.3"
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 libc = "0.2"
 tempfile = "3"
+csv = "1.3"
+parquet = { version = "59.1.0", default-features = false, features = ["snap", "flate2-rust_backend", "zstd", "lz4"] }
+sqlparser = "0.62.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

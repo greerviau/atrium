@@ -115,6 +115,23 @@ export function fsReadFile(workspaceId: string, path: string): Promise<string> {
   return invoke("fs_read_file", { workspaceId, path });
 }
 
+export interface DataQueryResult {
+  columns: string[];
+  rows: Array<Array<string | null>>;
+  totalRows: number;
+  truncated: boolean;
+}
+
+export function dataQuery(
+  workspaceId: string,
+  path: string,
+  query: string,
+  page: number,
+  pageSize: number | null,
+): Promise<DataQueryResult> {
+  return invoke("data_query", { workspaceId, path, query, page, pageSize });
+}
+
 export function fsWriteFile(
   workspaceId: string,
   path: string,
