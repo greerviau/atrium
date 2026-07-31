@@ -19,21 +19,26 @@ async function openWorkspace(root) {
 }
 
 describe("issue #359 reproduction", () => {
-  it("can move focus to the terminal after placing the cursor at line end", async () => {
+  it("moves focus to the terminal and re-renders a wrapped line with trailing whitespace", async () => {
     await openWorkspace(fixturesDir);
-    const fileNode = await $("//span[@class='name' and text()='note.md']");
+    const fileNode = await $("//span[@class='name' and text()='wrapped.md']");
     await fileNode.waitForExist({ timeout: 10000 });
     await fileNode.click();
 
     const editor = await $(".cm-content");
     await editor.waitForExist({ timeout: 5000 });
-    await editor.click();
+    const heading = await $(".cm-heading-1");
+    await heading.click();
     await browser.keys(["End"]);
 
     const before = await browser.execute(() => ({
       editorActive: document.activeElement?.classList.contains("cm-content") ?? false,
+      lineWrapping: document.querySelector(".cm-content")?.classList.contains("cm-lineWrapping") ?? false,
+      rendered: document.querySelector(".cm-heading-1")?.textContent ?? null,
     }));
     expect(before.editorActive).toBe(true);
+    expect(before.lineWrapping).toBe(true);
+    expect(before.rendered).toContain("# ");
 
     const terminal = await $(".xterm-screen");
     await terminal.waitForExist({ timeout: 5000 });
@@ -45,6 +50,6 @@ describe("issue #359 reproduction", () => {
     }));
     expect(after.editorActive).toBe(false);
     expect(after.terminalActive).toBe(true);
-    expect(after.rendered).toBe("Hello");
+    expect(after.rendered).not.toContain("# ");
   });
 });

@@ -61,8 +61,8 @@ const focusTrackingHandlers = EditorView.domEventHandlers({
  * Recomputes decorations on doc changes, selection changes (cursor-reveal),
  * viewport changes (scrolling reveals previously-unvisited nodes), focus
  * changes (an unfocused editor never reveals raw markup, regardless of
- * where the selection sits), outside mousedown events (a click on a
- * non-focusable surface does not blur a contenteditable by itself), and
+ * where the selection sits), outside pointer or mouse gestures (a gesture on
+ * a non-focusable surface does not blur a contenteditable by itself), and
  * syntax-tree-identity changes (the background parser finishing a chunk outside the initial synchronous parse window).
  * It does not recompute for other state because walking the syntax tree is the main perf risk for large files.
  *
@@ -99,7 +99,7 @@ function livePreviewPlugin(documentPath: string) {
       codeBlockWraps: RangeSet<BlockWrapper>;
       private readonly view: EditorView;
       private readonly ownerDocument: Document;
-      private readonly onDocumentMousedown = (event: MouseEvent): void => {
+      private readonly onDocumentOutsideGesture = (event: Event): void => {
         const target = event.target;
         if (target && this.view.dom.contains(target as Node)) {
           return;
@@ -107,10 +107,10 @@ function livePreviewPlugin(documentPath: string) {
         if (!this.view.hasFocus && !this.view.state.field(editorFocusField)) {
           return;
         }
-        // A click on a non-focusable surface does not move DOM focus away from
-        // a contenteditable element. Blur explicitly so rendered markdown
-        // stops exposing raw markup on the same outside click that visually
-        // leaves the editor, including clicks on another pane's terminal.
+        // A gesture on a non-focusable surface does not move DOM focus away
+        // from a contenteditable element. Blur explicitly so rendered Markdown
+        // stops exposing raw markup on the same outside gesture that visually
+        // leaves the editor, including gestures on another pane's terminal.
         this.view.contentDOM.blur();
         if (this.view.state.field(editorFocusField)) {
           this.view.dispatch({ effects: setEditorFocus.of(false) });
@@ -120,7 +120,8 @@ function livePreviewPlugin(documentPath: string) {
       constructor(view: EditorView) {
         this.view = view;
         this.ownerDocument = view.dom.ownerDocument;
-        this.ownerDocument.addEventListener("mousedown", this.onDocumentMousedown, { capture: true });
+        this.ownerDocument.addEventListener("pointerdown", this.onDocumentOutsideGesture, { capture: true });
+        this.ownerDocument.addEventListener("mousedown", this.onDocumentOutsideGesture, { capture: true });
         this.decorations = buildDecorations(
           view.state,
           view.visibleRanges,
@@ -166,7 +167,8 @@ function livePreviewPlugin(documentPath: string) {
       }
 
       destroy(): void {
-        this.ownerDocument.removeEventListener("mousedown", this.onDocumentMousedown, { capture: true });
+        this.ownerDocument.removeEventListener("pointerdown", this.onDocumentOutsideGesture, { capture: true });
+        this.ownerDocument.removeEventListener("mousedown", this.onDocumentOutsideGesture, { capture: true });
       }
     },
     {

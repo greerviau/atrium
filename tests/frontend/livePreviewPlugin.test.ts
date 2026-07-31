@@ -22,6 +22,7 @@ afterEach(() => {
   view = undefined;
   container?.remove();
   container = undefined;
+  vi.restoreAllMocks();
 });
 
 /**
@@ -75,9 +76,9 @@ describe("live-preview decorations react to background parse completion (issue #
  * being edited to its fully rendered view. CodeMirror's selection is always
  * present and doesn't change on a DOM blur, so this only works if the
  * decoration layer also tracks `EditorView.hasFocus` independently of
- * `EditorState.selection` — driven here through real DOM `focus`/`blur` and
- * outside mousedown events, not synthetic state, on a real `EditorView` built
- * from the app's own `markdownExtensions()`.
+ * `EditorState.selection` - driven here through real DOM `focus`/`blur` and
+ * outside pointer or mouse events, not synthetic state, on a real `EditorView`
+ * built from the app's own `markdownExtensions()`.
  */
 describe("live-preview decorations clear on blur, independent of selection (issue #108)", () => {
   it("re-hides a heading's raw marker once the editor loses focus, with the selection unchanged", () => {
@@ -134,6 +135,73 @@ describe("live-preview decorations clear on blur, independent of selection (issu
     expect(container.querySelector(".cm-heading-1")?.textContent).toBe("Hello world");
     expect(view.hasFocus).toBe(false);
     outsideSurface.remove();
+  });
+
+  it("re-hides a wrapped heading after a pointer-only outside gesture with the cursor after trailing whitespace (issue #359)", () => {
+    const heading = "A long rendered heading that wraps across multiple visual lines in a narrow editor";
+    const doc = `# ${heading}  `;
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    view = new EditorView({
+      state: EditorState.create({
+        doc,
+        extensions: [markdownExtensions("test.md"), EditorView.lineWrapping],
+      }),
+      parent: container,
+    });
+
+    view.focus();
+    view.dispatch({ selection: EditorSelection.cursor(doc.length) });
+    expect(container.querySelector(".cm-heading-1")?.textContent).toContain("# ");
+
+    const outsideSurface = document.createElement("div");
+    container.appendChild(outsideSurface);
+    outsideSurface.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
+
+    expect(container.querySelector(".cm-heading-1")?.textContent).not.toContain("# ");
+    expect(view.hasFocus).toBe(false);
+  });
+
+  it("keeps the active line revealed when the pointer gesture starts inside the same editor", () => {
+    const doc = "# Hello world";
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    view = new EditorView({
+      state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
+      parent: container,
+    });
+
+    view.focus();
+    view.dispatch({ selection: EditorSelection.cursor(3) });
+    view.contentDOM.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
+
+    expect(container.querySelector(".cm-heading-1")?.textContent).toBe("# Hello world");
+    expect(view.hasFocus).toBe(true);
+  });
+
+  it("removes both owner-document outside-gesture listeners when the preview is destroyed", () => {
+    const addEventListener = vi.spyOn(document, "addEventListener");
+    const removeEventListener = vi.spyOn(document, "removeEventListener");
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    view = new EditorView({
+      state: EditorState.create({ doc: "# Hello", extensions: markdownExtensions("test.md") }),
+      parent: container,
+    });
+
+    const pointerRegistration = addEventListener.mock.calls.find(
+      ([type, listener]) =>
+        type === "pointerdown" &&
+        addEventListener.mock.calls.some(([otherType, otherListener]) => otherType === "mousedown" && otherListener === listener),
+    );
+    expect(pointerRegistration).toBeDefined();
+    const outsideGestureHandler = pointerRegistration?.[1];
+
+    view.destroy();
+    view = undefined;
+
+    expect(removeEventListener).toHaveBeenCalledWith("pointerdown", outsideGestureHandler, { capture: true });
+    expect(removeEventListener).toHaveBeenCalledWith("mousedown", outsideGestureHandler, { capture: true });
   });
 });
 
