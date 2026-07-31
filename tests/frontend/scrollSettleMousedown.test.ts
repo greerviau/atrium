@@ -92,6 +92,22 @@ describe("handleScrollSettleMousedown: Part 2 (issue #161)", () => {
     expect(replayResult).toBe(false);
   });
 
+  it("defers a mousedown after the pane reports a scroll even without a wheel event", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const frame = stubAnimationFrame();
+    v.scrollDOM.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    const event = dispatchMousedownOn(target, 5, 5);
+    expect(handleScrollSettleMousedown(event, v)).toBe(true);
+
+    const seen: string[] = [];
+    target.addEventListener("mousedown", (e) => seen.push(e.type));
+    frame.flush();
+
+    expect(seen).toEqual(["mousedown"]);
+  });
+
   it("treats a mousedown at or beyond the settle window as not recent", () => {
     const v = makeView();
     const target = makeTarget();
@@ -99,8 +115,9 @@ describe("handleScrollSettleMousedown: Part 2 (issue #161)", () => {
 
     const tracker = v.plugin(wheelTracker);
     expect(tracker).toBeTruthy();
-    // Simulate the settle window having fully elapsed since the wheel event.
+    // Simulate the settle window having fully elapsed since both scroll signals.
     tracker!.lastWheelTime -= RECENT_SCROLL_WINDOW_MS;
+    tracker!.lastScrollTime -= RECENT_SCROLL_WINDOW_MS;
 
     const event = dispatchMousedownOn(target);
     expect(handleScrollSettleMousedown(event, v)).toBe(false);

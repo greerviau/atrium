@@ -154,16 +154,17 @@ export function movementAwareMouseSelectionStyle(view: EditorView, startEvent: M
 
 // --- Part 2: never resolve a click's position before a very recent scroll has actually landed ---
 //
-// A wheel/trackpad scroll's visible effect (`scrollTop`) lags its own event
-// by tens of milliseconds — generic browser (compositor) behavior, not
-// something application code can speed up. A `mousedown` landing inside
-// that window gets its position resolved against the pre-scroll layout. Part
+// A wheel/trackpad scroll's visible effect (`scrollTop`) can lag its input
+// event by tens of milliseconds — generic browser (compositor) behavior, not
+// something application code can speed up. The scroll event also marks the
+// point at which the pane's viewport has just moved. A `mousedown` landing
+// inside either window can get its position resolved against stale layout. Part
 // 1 above stops that from producing a spurious *range*, but the resolved
-// cursor position itself is still wrong. This tracks the most recent `wheel`
-// event on the pane's scroller and, on a `mousedown` that follows one too
-// closely, defers this click's resolution by one animation frame — by which
-// point the scroll has always caught up — then replays it as a fresh
-// `mousedown` so it runs back through the exact same (movement-aware)
+// cursor position itself is still wrong. This tracks both signals on the
+// pane's scroller and, on a `mousedown` that follows one too closely, defers
+// this click's resolution by one animation frame — by which point CodeMirror
+// has had a chance to measure the newly scrolled layout — then replays it as
+// a fresh `mousedown` so it runs back through the exact same (movement-aware)
 // selection logic as any other click.
 
 /** 3-4x the measured real scroll-settle window (~15-40ms): enough margin to never miss the race, without widening far enough to interfere with an intentional fast double-click. */
@@ -171,18 +172,24 @@ export const RECENT_SCROLL_WINDOW_MS = 120;
 
 class WheelTracker {
   lastWheelTime = -Infinity;
+  lastScrollTime = -Infinity;
   private view: EditorView;
   private onWheel = () => {
     this.lastWheelTime = Date.now();
+  };
+  private onScroll = () => {
+    this.lastScrollTime = Date.now();
   };
 
   constructor(view: EditorView) {
     this.view = view;
     view.scrollDOM.addEventListener("wheel", this.onWheel, { passive: true });
+    view.scrollDOM.addEventListener("scroll", this.onScroll, { passive: true });
   }
 
   destroy() {
     this.view.scrollDOM.removeEventListener("wheel", this.onWheel);
+    this.view.scrollDOM.removeEventListener("scroll", this.onScroll);
   }
 }
 
@@ -210,7 +217,8 @@ function cloneMouseEvent(type: string, source: MouseEvent): MouseEvent {
 
 /**
  * Defers `event` by one animation frame, then replays it as a fresh
- * `mousedown` on `target`. A click that lands inside the *existing*
+ * `mousedown` on `target`. Waiting for the next frame gives CodeMirror time
+ * to measure the newly scrolled rendered layout. A click that lands inside the *existing*
  * selection isn't resolved into a selection at `mousedown` at all (only on
  * the following `mouseup`, per upstream's own ambiguous click-vs-drag
  * handling) — so a real mouseup arriving faster than one animation frame
@@ -250,8 +258,10 @@ export function handleScrollSettleMousedown(event: MouseEvent, view: EditorView)
   if (deferredMouseEvents.has(event)) {
     return false;
   }
-  const sinceWheel = Date.now() - (view.plugin(wheelTracker)?.lastWheelTime ?? -Infinity);
-  if (sinceWheel >= RECENT_SCROLL_WINDOW_MS) {
+  const tracker = view.plugin(wheelTracker);
+  const sinceWheel = Date.now() - (tracker?.lastWheelTime ?? -Infinity);
+  const sinceScroll = Date.now() - (tracker?.lastScrollTime ?? -Infinity);
+  if (sinceWheel >= RECENT_SCROLL_WINDOW_MS && sinceScroll >= RECENT_SCROLL_WINDOW_MS) {
     return false;
   }
   replayMousedownNextFrame(view, event, event.target ?? view.contentDOM);
@@ -295,8 +305,10 @@ export function guardFirstFocusScrollPosition(event: MouseEvent, view: EditorVie
   // click is about to resolve against it, reintroducing issue #161. Skip the
   // capture here; the replayed mousedown re-enters this handler on an
   // already-settled, still-unfocused pane and arms the real guard then.
-  const sinceWheel = Date.now() - (view.plugin(wheelTracker)?.lastWheelTime ?? -Infinity);
-  if (!deferredMouseEvents.has(event) && sinceWheel < RECENT_SCROLL_WINDOW_MS) {
+  const tracker = view.plugin(wheelTracker);
+  const sinceWheel = Date.now() - (tracker?.lastWheelTime ?? -Infinity);
+  const sinceScroll = Date.now() - (tracker?.lastScrollTime ?? -Infinity);
+  if (!deferredMouseEvents.has(event) && (sinceWheel < RECENT_SCROLL_WINDOW_MS || sinceScroll < RECENT_SCROLL_WINDOW_MS)) {
     return false;
   }
   const scroller = view.scrollDOM;
