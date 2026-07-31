@@ -1226,6 +1226,7 @@
                       tree={terminalPaneTree}
                       activePaneId={focusedPaneId ?? ""}
                       workspaceId={$workspace.id}
+                      visible={$terminalVisible}
                       onFocus={setFocusedPane}
                       onSplit={(paneId, direction) => splitPaneAt(paneId, direction)}
                       onNewTab={(paneId) => addTabToPane(paneId)}

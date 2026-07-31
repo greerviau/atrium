@@ -31,11 +31,15 @@
   let {
     cwd,
     workspaceId,
+    visible = true,
+    active = true,
     onExit,
     onTitleChange,
   }: {
     cwd: string;
     workspaceId: string;
+    visible?: boolean;
+    active?: boolean;
     onExit?: (elapsedMs: number) => void;
     onTitleChange?: (title: string) => void;
   } = $props();
@@ -184,6 +188,7 @@
     terminal.loadAddon(new SearchAddon());
     terminal.open(container);
     fitAddon.fit();
+    if (visible && active) terminal.focus();
 
     // Never forward Cmd/Ctrl+B or Cmd/Ctrl+R to the shell: xterm has no
     // native concept of "the menu accelerator already owns this key," so
@@ -284,6 +289,14 @@
       void ptyKill(terminalId);
     }
     terminal?.dispose();
+  });
+
+  // Re-focus the active terminal when its panel becomes visible. TerminalPane
+  // instances stay mounted while the dock is hidden so their PTYs survive a
+  // toggle, which means the initial mount focus above does not cover reopening
+  // an existing panel.
+  $effect(() => {
+    if (terminal && visible && active) terminal.focus();
   });
 
   // xterm.js applies a `theme` option change live, no Terminal recreation needed.
