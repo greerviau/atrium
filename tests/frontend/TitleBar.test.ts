@@ -5,6 +5,7 @@ import { workspace } from "../../src/lib/stores/workspace";
 import { recents } from "../../src/lib/stores/recents";
 import { tabsState, type Tab } from "../../src/lib/stores/tabs";
 import * as workspaceStore from "../../src/lib/stores/workspace";
+import * as commands from "../../src/lib/ipc/commands";
 
 function standaloneTab(path: string): Tab {
   return {
@@ -18,6 +19,15 @@ function standaloneTab(path: string): Tab {
     isDeleted: false,
   };
 }
+
+vi.mock("../../src/lib/ipc/commands", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/lib/ipc/commands")>();
+  return {
+    ...actual,
+    gitGetContext: vi.fn().mockResolvedValue(null),
+    gitSwitchBranch: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 vi.mock("../../src/lib/stores/workspace", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/lib/stores/workspace")>();
@@ -37,6 +47,8 @@ describe("TitleBar", () => {
     workspace.set({ id: "local", root: null });
     recents.set([]);
     tabsState.set({ tabs: [], activeTabPath: null });
+    vi.mocked(commands.gitGetContext).mockResolvedValue(null);
+    vi.mocked(commands.gitSwitchBranch).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -90,6 +102,104 @@ describe("TitleBar", () => {
     await fireEvent.click(await findByText("Open Folder…"));
 
     expect(workspaceStore.openWorkspaceFolder).toHaveBeenCalledOnce();
+  });
+
+  it("shows the current worktree and branch when the project is a git repository", async () => {
+    workspace.set({ id: "local", root: current.path });
+    vi.mocked(commands.gitGetContext).mockResolvedValue({
+      repositoryRoot: "/projects",
+      worktreePath: current.path,
+      branch: "main",
+      head: "abc1234",
+      worktrees: [
+        { path: current.path, branch: "main", head: "abc1234", isCurrent: true },
+        { path: "/projects/feature", branch: "feature/login", head: "def5678", isCurrent: false },
+      ],
+      branches: [
+        { name: "main", worktreePath: current.path, isCurrent: true },
+        { name: "feature/login", worktreePath: "/projects/feature", isCurrent: false },
+        { name: "local-only", worktreePath: null, isCurrent: false },
+      ],
+    });
+
+    const { findByRole } = render(TitleBar);
+    const button = await findByRole("button", { name: "Switch worktree or branch" });
+
+    expect(button.textContent).toContain("demo");
+    expect(button.textContent).toContain("main");
+  });
+
+  it("lists worktrees and branches in the git switcher", async () => {
+    workspace.set({ id: "local", root: current.path });
+    vi.mocked(commands.gitGetContext).mockResolvedValue({
+      repositoryRoot: "/projects",
+      worktreePath: current.path,
+      branch: "main",
+      head: "abc1234",
+      worktrees: [
+        { path: current.path, branch: "main", head: "abc1234", isCurrent: true },
+        { path: "/projects/feature", branch: "feature/login", head: "def5678", isCurrent: false },
+      ],
+      branches: [
+        { name: "main", worktreePath: current.path, isCurrent: true },
+        { name: "feature/login", worktreePath: "/projects/feature", isCurrent: false },
+        { name: "local-only", worktreePath: null, isCurrent: false },
+      ],
+    });
+
+    const { findByRole, findByText, findAllByText } = render(TitleBar);
+    await fireEvent.click(await findByRole("button", { name: "Switch worktree or branch" }));
+
+    expect(await findByText("feature")).toBeTruthy();
+    expect(await findAllByText("feature/login")).toHaveLength(2);
+    expect(await findByText("local-only")).toBeTruthy();
+  });
+
+  it("switches to the worktree that owns a selected branch", async () => {
+    workspace.set({ id: "local", root: current.path });
+    vi.mocked(commands.gitGetContext).mockResolvedValue({
+      repositoryRoot: "/projects",
+      worktreePath: current.path,
+      branch: "main",
+      head: "abc1234",
+      worktrees: [
+        { path: current.path, branch: "main", head: "abc1234", isCurrent: true },
+        { path: "/projects/feature", branch: "feature/login", head: "def5678", isCurrent: false },
+      ],
+      branches: [
+        { name: "main", worktreePath: current.path, isCurrent: true },
+        { name: "feature/login", worktreePath: "/projects/feature", isCurrent: false },
+      ],
+    });
+
+    const { findByRole } = render(TitleBar);
+    await fireEvent.click(await findByRole("button", { name: "Switch worktree or branch" }));
+    const branchRows = await findByRole("menuitem", { name: "feature/login in feature" });
+    await fireEvent.click(branchRows);
+
+    expect(workspaceStore.openWorkspacePath).toHaveBeenCalledWith("/projects/feature");
+    expect(commands.gitSwitchBranch).not.toHaveBeenCalled();
+  });
+
+  it("switches to a branch that is not checked out by another worktree", async () => {
+    workspace.set({ id: "local", root: current.path });
+    vi.mocked(commands.gitGetContext).mockResolvedValue({
+      repositoryRoot: "/projects",
+      worktreePath: current.path,
+      branch: "main",
+      head: "abc1234",
+      worktrees: [{ path: current.path, branch: "main", head: "abc1234", isCurrent: true }],
+      branches: [
+        { name: "main", worktreePath: current.path, isCurrent: true },
+        { name: "local-only", worktreePath: null, isCurrent: false },
+      ],
+    });
+
+    const { findByRole } = render(TitleBar);
+    await fireEvent.click(await findByRole("button", { name: "Switch worktree or branch" }));
+    await fireEvent.click(await findByRole("menuitem", { name: "local-only" }));
+
+    expect(commands.gitSwitchBranch).toHaveBeenCalledWith(current.path, "local-only");
   });
 
   it("shows the empty state when there are no other recent projects", async () => {

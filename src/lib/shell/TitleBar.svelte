@@ -4,6 +4,7 @@
   import { recents } from "../stores/recents";
   import { basename } from "../util/path";
   import ContextMenu from "../ui/ContextMenu.svelte";
+  import GitSwitcher from "./GitSwitcher.svelte";
 
   let open = $state(false);
   let buttonEl: HTMLButtonElement | undefined = $state();
@@ -81,6 +82,7 @@
         </ContextMenu>
       {/if}
     </div>
+    <GitSwitcher />
   {/if}
 </div>
 
