@@ -42,6 +42,8 @@ It also covers issue #250 (a failed save going silently unreported): `chmod`s `n
 
 `specs/scrollThenClick.e2e.js` covers the rendered-markdown scroll-then-click regression (issue #183): open `long.md` (a fixture long enough to scroll), scroll the pane down, click shortly after the scroll on a pane that has never yet been clicked into, and confirm the scroll position is preserved rather than snapping back to the top. This is a real-display, real-input-timing bug that a jsdom/vitest test cannot exercise (see `tests/frontend/scrollSettleMousedown.test.ts` for the unit-level coverage of the fix's mechanics instead) — this spec is the regression guard for the actual user-visible behavior.
 
+`specs/horizontalRuleCursor.e2e.js` covers issue #366: open `horizontal-rule.md`, click rendered text below a horizontal rule, and confirm the cursor position remains on the clicked source line.
+
 `specs/keyboardShortcuts.e2e.js` covers issue #156's two kinds of shortcut:
 
 1. The five file-explorer shortcuts, which are plain DOM `keydown` handlers scoped to whichever tree row holds focus rather than native accelerators (see the plan's safety-constraint note): click a row to focus it, press ⌘N, type a name, and confirm the new file appears in the tree; press F2 on that file's own row and confirm the inline rename opens prefilled with its current name; press ⌘⌫ and confirm the permanent-delete confirmation modal opens (and the entry survives) before actually deleting it via the modal's own button.

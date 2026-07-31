@@ -2145,7 +2145,7 @@ describe("buildDecorations: horizontal rules", () => {
     const state = stateFor(doc, doc.indexOf("---"));
     const decos = collect(state);
     const hrLine = state.doc.line(3);
-    expect(decos.some((d) => d.class === "cm-hr" && d.from === hrLine.from)).toBe(true);
+    expect(decos.some((d) => d.class === "cm-hr" && d.from === hrLine.from)).toBe(false);
     expect(decos.some((d) => d.isReplace && !d.class && d.from === hrLine.from)).toBe(false);
     expect(state.doc.toString()).toContain("---");
   });

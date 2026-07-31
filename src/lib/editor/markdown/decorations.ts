@@ -535,18 +535,17 @@ function decorateBlockquote(state: EditorState, node: SyntaxNode, out: Range<Dec
 
 /**
  * Decorates a `HorizontalRule` node (`---`, `***`, `___` on their own line):
- * always a single physical line. The line always gets `CLASS.horizontalRule`
- * (a `border-top` rule, same container-stays-visible precedent as
- * `decorateCodeBlock`/`decorateBlockquote`), and the raw dash/asterisk text
- * is hidden unless the cursor is on that line, in which case it's left
- * visible so it can be edited.
+ * always a single physical line. With the cursor elsewhere, the line gets
+ * `CLASS.horizontalRule` (a rendered rule), and its raw dash/asterisk text is
+ * hidden. On the cursor's line, no preview decoration is added, so the raw
+ * marker is visible without the rendered rule remaining underneath it.
  */
 function decorateHorizontalRule(state: EditorState, node: SyntaxNode, out: Range<Decoration>[], hasFocus: boolean): void {
-  const line = state.doc.lineAt(node.from);
-  out.push(Decoration.line({ class: CLASS.horizontalRule }).range(line.from));
   if (isUnderCursor(state, node.from, node.to, hasFocus)) {
     return;
   }
+  const line = state.doc.lineAt(node.from);
+  out.push(Decoration.line({ class: CLASS.horizontalRule }).range(line.from));
   out.push(Decoration.replace({}).range(node.from, node.to));
 }
 
