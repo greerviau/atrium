@@ -27,6 +27,7 @@
   import { wordWrapEnabled } from "../stores/wordWrap";
   import { tabSize } from "../stores/tabSize";
   import { lineNumbersEnabled } from "../stores/lineNumbersEnabled";
+  import { zoom } from "../stores/textSize";
   import { autoSaveEnabled, AUTO_SAVE_DELAY_MS, isAutoSaveBlocked, blockAutoSave, unblockAutoSave } from "../stores/autoSave";
   import { showErrorToast, describeError } from "../stores/errorToast";
   import { basename } from "../util/path";
@@ -721,7 +722,7 @@
 <svelte:window onclick={closeMenu} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="editor-pane" bind:this={container} oncontextmenu={onContextMenu}></div>
+<div class="editor-pane" bind:this={container} style={`font-size: ${$zoom * 100}%`} oncontextmenu={onContextMenu}></div>
 
 {#if menu}
   <ContextMenu x={menu.x} y={menu.y}>

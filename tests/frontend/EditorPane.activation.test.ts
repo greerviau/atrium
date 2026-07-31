@@ -5,6 +5,7 @@ import { EditorView } from "@codemirror/view";
 import EditorPane from "../../src/lib/editor/EditorPane.svelte";
 import { tabsState, markDirty, type Tab } from "../../src/lib/stores/tabs";
 import { focusedEditorPaneId } from "../../src/lib/stores/editorPanes";
+import { zoom } from "../../src/lib/stores/textSize";
 
 const ACTIVE_PATH = "/active.md";
 const BACKGROUND_PATH = "/background.md";
@@ -24,7 +25,16 @@ describe("EditorPane: remeasure on tab activation", () => {
     cleanup();
     tabsState.set({ tabs: [], activeTabPath: null });
     focusedEditorPaneId.set(null);
+    zoom.set(1);
     vi.restoreAllMocks();
+  });
+
+  it("scales the editor content at its own layout boundary", async () => {
+    zoom.set(1.5);
+    seedTabs(ACTIVE_PATH);
+    const { container } = render(EditorPane, { filePath: ACTIVE_PATH, paneId: PANE_ID });
+
+    expect(container.querySelector(".editor-pane")?.getAttribute("style")).toContain("font-size: 150%");
   });
 
   it("calls requestMeasure when a background tab's pane becomes active", async () => {

@@ -2,7 +2,6 @@
   import type { EditorPaneNode, SplitDirection } from "./editorPaneTree";
   import { listLeaves } from "./editorPaneTree";
   import { computeRects, computeResizers, type ResizerRect } from "../terminal/paneLayout";
-  import { zoom } from "../stores/textSize";
   import EditorPanel from "./EditorPanel.svelte";
 
   /**
@@ -70,7 +69,7 @@
   }
 </script>
 
-<div class="pane-split-root" bind:this={rootEl} style={`font-size: ${$zoom * 100}%`}>
+<div class="pane-split-root" bind:this={rootEl}>
   {#each leaves as leaf (leaf.id)}
     {@const r = rects.get(leaf.id)!}
     <div
