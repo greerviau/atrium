@@ -75,9 +75,9 @@ describe("live-preview decorations react to background parse completion (issue #
  * being edited to its fully rendered view. CodeMirror's selection is always
  * present and doesn't change on a DOM blur, so this only works if the
  * decoration layer also tracks `EditorView.hasFocus` independently of
- * `EditorState.selection` — driven here through real DOM `focus`/`blur`,
- * not synthetic state, on a real `EditorView` built from the app's own
- * `markdownExtensions()`.
+ * `EditorState.selection` — driven here through real DOM `focus`/`blur` and
+ * outside mousedown events, not synthetic state, on a real `EditorView` built
+ * from the app's own `markdownExtensions()`.
  */
 describe("live-preview decorations clear on blur, independent of selection (issue #108)", () => {
   it("re-hides a heading's raw marker once the editor loses focus, with the selection unchanged", () => {
@@ -112,6 +112,28 @@ describe("live-preview decorations clear on blur, independent of selection (issu
 
     view.contentDOM.blur();
     expect(container.querySelectorAll(".cm-table-cell")).toHaveLength(4); // every cell decorated again
+  });
+
+  it("re-hides the active line when a click lands outside the editor on a non-focusable surface (issue #359)", () => {
+    const doc = "# Hello world\nSecond line";
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    view = new EditorView({
+      state: EditorState.create({ doc, extensions: markdownExtensions("test.md") }),
+      parent: container,
+    });
+
+    view.focus();
+    view.dispatch({ selection: EditorSelection.cursor(3) });
+    expect(container.querySelector(".cm-heading-1")?.textContent).toBe("# Hello world");
+
+    const outsideSurface = document.createElement("div");
+    document.body.appendChild(outsideSurface);
+    outsideSurface.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+
+    expect(container.querySelector(".cm-heading-1")?.textContent).toBe("Hello world");
+    expect(view.hasFocus).toBe(false);
+    outsideSurface.remove();
   });
 });
 

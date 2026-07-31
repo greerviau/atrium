@@ -44,6 +44,8 @@ It also covers issue #250 (a failed save going silently unreported): `chmod`s `n
 
 `specs/horizontalRuleCursor.e2e.js` covers issue #366: open `horizontal-rule.md`, click rendered text below a horizontal rule, and confirm the cursor position remains on the clicked source line.
 
+`specs/issue359.e2e.js` covers issue #359: place the caret at the end of rendered markdown, click the terminal, and confirm focus leaves the editor for the terminal.
+
 `specs/keyboardShortcuts.e2e.js` covers issue #156's two kinds of shortcut:
 
 1. The five file-explorer shortcuts, which are plain DOM `keydown` handlers scoped to whichever tree row holds focus rather than native accelerators (see the plan's safety-constraint note): click a row to focus it, press ⌘N, type a name, and confirm the new file appears in the tree; press F2 on that file's own row and confirm the inline rename opens prefilled with its current name; press ⌘⌫ and confirm the permanent-delete confirmation modal opens (and the entry survives) before actually deleting it via the modal's own button.

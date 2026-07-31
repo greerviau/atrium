@@ -61,10 +61,10 @@ const focusTrackingHandlers = EditorView.domEventHandlers({
  * Recomputes decorations on doc changes, selection changes (cursor-reveal),
  * viewport changes (scrolling reveals previously-unvisited nodes), focus
  * changes (an unfocused editor never reveals raw markup, regardless of
- * where the selection sits), and syntax-tree-identity changes (the
- * background parser finishing a chunk outside the initial synchronous parse
- * window) — never on anything else, since walking the syntax tree is the
- * main perf risk for large files.
+ * where the selection sits), outside mousedown events (a click on a
+ * non-focusable surface does not blur a contenteditable by itself), and
+ * syntax-tree-identity changes (the background parser finishing a chunk outside the initial synchronous parse window).
+ * It does not recompute for other state because walking the syntax tree is the main perf risk for large files.
  *
  * Also provides `EditorView.atomicRanges` over every `tableGap`-tagged
  * range in that same decoration set (`decorations.ts`'s `decorateTableRow`
@@ -97,8 +97,30 @@ function livePreviewPlugin(documentPath: string) {
       decorations: DecorationSet;
       tableWraps: RangeSet<BlockWrapper>;
       codeBlockWraps: RangeSet<BlockWrapper>;
+      private readonly view: EditorView;
+      private readonly ownerDocument: Document;
+      private readonly onDocumentMousedown = (event: MouseEvent): void => {
+        const target = event.target;
+        if (target && this.view.dom.contains(target as Node)) {
+          return;
+        }
+        if (!this.view.hasFocus && !this.view.state.field(editorFocusField)) {
+          return;
+        }
+        // A click on a non-focusable surface does not move DOM focus away from
+        // a contenteditable element. Blur explicitly so rendered markdown
+        // stops exposing raw markup on the same outside click that visually
+        // leaves the editor, including clicks on another pane's terminal.
+        this.view.contentDOM.blur();
+        if (this.view.state.field(editorFocusField)) {
+          this.view.dispatch({ effects: setEditorFocus.of(false) });
+        }
+      };
 
       constructor(view: EditorView) {
+        this.view = view;
+        this.ownerDocument = view.dom.ownerDocument;
+        this.ownerDocument.addEventListener("mousedown", this.onDocumentMousedown, { capture: true });
         this.decorations = buildDecorations(
           view.state,
           view.visibleRanges,
@@ -141,6 +163,10 @@ function livePreviewPlugin(documentPath: string) {
           this.tableWraps = buildTableWrapRanges(update.state);
           this.codeBlockWraps = buildCodeBlockWrapRanges(update.state);
         }
+      }
+
+      destroy(): void {
+        this.ownerDocument.removeEventListener("mousedown", this.onDocumentMousedown, { capture: true });
       }
     },
     {
