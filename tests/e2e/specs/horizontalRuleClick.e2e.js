@@ -12,6 +12,13 @@ async function openWorkspace(root) {
       path: workspacePath,
     });
   }, root);
+  await browser.execute((workspacePath) => {
+    return window.__TAURI_INTERNALS__.invoke("fs_write_file", {
+      workspaceId: "local",
+      path: `${workspacePath}/horizontalRule.md`,
+      contents: "--- \ntext under\nsecond line\n",
+    });
+  }, root);
   await browser.refresh();
 
   const recentRow = await $(`//span[@class='recent-path' and text()='${root}']`);
@@ -26,6 +33,18 @@ describe("rendered markdown horizontal rules", () => {
     const fileNode = await $("//span[@class='name' and text()='horizontalRule.md']");
     await fileNode.waitForExist({ timeout: 10000 });
     await fileNode.click();
+
+    // First place the cursor after the rule's trailing space. This switches
+    // the rule into its raw editing form, matching the failing interaction.
+    const rule = await $(".cm-line.cm-hr");
+    await rule.waitForExist({ timeout: 5000 });
+    const ruleRect = await rule.getRect();
+    await browser
+      .action("pointer")
+      .move({ x: ruleRect.x + ruleRect.width - 10, y: ruleRect.y + ruleRect.height / 2, origin: "viewport" })
+      .down()
+      .up()
+      .perform();
 
     const target = await $("//div[contains(@class, 'cm-line') and normalize-space(.)='text under']");
     await target.waitForExist({ timeout: 5000 });
