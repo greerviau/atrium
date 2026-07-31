@@ -36,6 +36,7 @@ export const CLASS = {
   mermaidDiagram: "cm-mermaid-diagram",
   mermaidError: "cm-mermaid-error",
   horizontalRule: "cm-hr",
+  horizontalRuleEditing: "cm-hr-editing",
   setextUnderline: "cm-setext-underline",
   listBullet: "cm-list-bullet",
   listNumber: "cm-list-number",

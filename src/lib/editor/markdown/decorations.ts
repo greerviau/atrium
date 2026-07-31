@@ -543,8 +543,13 @@ function decorateBlockquote(state: EditorState, node: SyntaxNode, out: Range<Dec
  */
 function decorateHorizontalRule(state: EditorState, node: SyntaxNode, out: Range<Decoration>[], hasFocus: boolean): void {
   const line = state.doc.lineAt(node.from);
-  out.push(Decoration.line({ class: CLASS.horizontalRule }).range(line.from));
-  if (isUnderCursor(state, node.from, node.to, hasFocus)) {
+  const isEditing = isUnderCursor(state, node.from, node.to, hasFocus);
+  out.push(
+    Decoration.line({
+      class: isEditing ? `${CLASS.horizontalRule} ${CLASS.horizontalRuleEditing}` : CLASS.horizontalRule,
+    }).range(line.from),
+  );
+  if (isEditing) {
     return;
   }
   out.push(Decoration.replace({}).range(node.from, node.to));

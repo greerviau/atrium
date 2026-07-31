@@ -2145,7 +2145,8 @@ describe("buildDecorations: horizontal rules", () => {
     const state = stateFor(doc, doc.indexOf("---"));
     const decos = collect(state);
     const hrLine = state.doc.line(3);
-    expect(decos.some((d) => d.class === "cm-hr" && d.from === hrLine.from)).toBe(true);
+    expect(decos.some((d) => d.class?.split(" ").includes("cm-hr") && d.from === hrLine.from)).toBe(true);
+    expect(decos.some((d) => d.class?.split(" ").includes("cm-hr-editing") && d.from === hrLine.from)).toBe(true);
     expect(decos.some((d) => d.isReplace && !d.class && d.from === hrLine.from)).toBe(false);
     expect(state.doc.toString()).toContain("---");
   });
@@ -2156,6 +2157,21 @@ describe("buildDecorations: horizontal rules", () => {
     const decos = collect(state);
     const hrLine = state.doc.line(3);
     expect(decos.some((d) => d.class === "cm-hr" && d.from === hrLine.from)).toBe(true);
+  });
+});
+
+describe("markdown.css: horizontal rule geometry", () => {
+  it("keeps rule spacing inside the CodeMirror line box", () => {
+    const body = ruleBodyFor(".cm-line.cm-hr");
+    expect(body).toMatch(/border-top:\s*0/);
+    expect(body).toMatch(/margin:\s*0/);
+    expect(body).toMatch(/padding-block:\s*0\.6em/);
+    expect(body).not.toMatch(/margin:\s*0\.6em/);
+
+    const markerBody = ruleBodyFor(".cm-line.cm-hr::before");
+    expect(markerBody).toMatch(/border-top:\s*2px solid/);
+    expect(markerBody).toMatch(/top:\s*50%/);
+    expect(ruleBodyFor(".cm-line.cm-hr-editing::before")).toMatch(/display:\s*none/);
   });
 });
 

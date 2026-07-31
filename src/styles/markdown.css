@@ -665,9 +665,27 @@ body.cm-minimap-dragging-active * {
   margin: 0;
 }
 
-.cm-hr {
+/* Vertical margins on a `.cm-line` change where later lines paint without
+   becoming part of the line height CodeMirror uses for coordinate mapping.
+   The rule's spacing lives inside the line box instead, so clicking content
+   after a rendered horizontal rule resolves to the line under the pointer. */
+.cm-line.cm-hr {
+  border-top: 0;
+  margin: 0;
+  padding-block: 0.6em;
+  position: relative;
+}
+
+.cm-line.cm-hr::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 50%;
   border-top: 2px solid var(--atrium-border);
-  margin: 0.6em 0;
+}
+
+.cm-line.cm-hr-editing::before {
+  display: none;
 }
 
 /* Same specificity problem as `.cm-table-delimiter-line`: `!important` is
