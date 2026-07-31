@@ -43,5 +43,13 @@ describe("rendered markdown: horizontal rule cursor placement (issue #366)", () 
       },
     );
     await expect(cursorPosition).toHaveText(expect.stringContaining("Ln 5"));
+
+    await rule.click();
+    await browser.waitUntil(async () => !(await $(".cm-hr").isExisting()), {
+      timeout: 3000,
+      timeoutMsg: "expected the horizontal rule to reveal its raw marker while editing",
+    });
+    const rawRule = await $("//div[contains(@class, 'cm-line') and normalize-space(.)='---']");
+    await expect(rawRule).toHaveText("---");
   });
 });
