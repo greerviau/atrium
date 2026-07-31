@@ -22,8 +22,8 @@ async function openWorkspace(root) {
   await recentRow.click();
 }
 
-describe("rendered markdown: scroll then click preserves scroll position (issue #183)", () => {
-  it("does not snap back to the top when clicking a freshly opened, scrolled pane", async () => {
+describe("rendered markdown: scroll then click resolves against the rendered viewport (issues #183 and #367)", () => {
+  it("preserves scroll position and places the cursor on the clicked heading", async () => {
     await openWorkspace(fixturesDir);
 
     const fileNode = await $("//span[@class='name' and text()='long.md']");
@@ -56,15 +56,37 @@ describe("rendered markdown: scroll then click preserves scroll position (issue 
       { timeout: 5000, timeoutMsg: "expected the wheel scroll to move the pane down before clicking" },
     );
 
-    // Click at that same viewport point via a raw pointer action rather than
-    // `element.click()`, which would auto-scroll its target into view first
-    // and undo the scroll set up above before the click ever lands.
-    await browser.action("pointer").move({ x: point.x, y: point.y, origin: "viewport" }).down().up().perform();
+    // Pick a heading that is already visible and click its coordinates via a
+    // raw pointer action rather than `element.click()`, which would
+    // auto-scroll its target into view before the click ever lands.
+    const clickPoint = await browser.execute((el) => {
+      const pane = el.getBoundingClientRect();
+      const heading = [...el.querySelectorAll(".cm-heading-2")].find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return rect.top >= pane.top + 10 && rect.bottom <= pane.bottom - 10;
+      });
+      if (!heading) return null;
+      const rect = heading.getBoundingClientRect();
+      const match = heading.textContent?.match(/Section (\d+)/);
+      return match ? { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), section: Number(match[1]) } : null;
+    }, scroller);
+    expect(clickPoint).not.toBeNull();
 
-    // The regression reproduces as `scrollTop` collapsing back toward 0 (the
-    // off-screen, document-start caret scrolling into view on focus) —
-    // assert the pane stays close to where it was scrolled to, not merely
-    // "somewhere past the top".
+    await browser.action("pointer").move({ x: clickPoint.x, y: clickPoint.y, origin: "viewport" }).down().up().perform();
+
+    // The cursor must resolve to the source line represented by the rendered
+    // heading, rather than the line that occupied those coordinates before
+    // the pane scrolled. Each fixture section occupies four source lines.
+    const expectedLine = (clickPoint.section - 1) * 4 + 1;
+    const cursor = await $(".status-group.indicators .status-item.mono");
+    await browser.waitUntil(
+      async () => (await cursor.getText()).startsWith(`Ln ${expectedLine},`),
+      { timeout: 3000, timeoutMsg: `expected the clicked heading to resolve to source line ${expectedLine}` },
+    );
+
+    // The regression also reproduces as `scrollTop` collapsing back toward 0
+    // when the first click focuses the pane. Assert that the pane stays close
+    // to where it was scrolled to, not merely somewhere past the top.
     await browser.waitUntil(
       async () => {
         const scrollTop = await browser.execute((el) => el.scrollTop, scroller);
