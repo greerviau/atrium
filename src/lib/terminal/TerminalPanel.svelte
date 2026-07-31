@@ -15,6 +15,7 @@
   let {
     tree,
     workspaceId,
+    visible = true,
     onSplit,
     onNewTab,
     onCloseTab,
@@ -24,6 +25,7 @@
   }: {
     tree: LeafPane;
     workspaceId: string;
+    visible?: boolean;
     onSplit: (direction: SplitDirection) => void;
     onNewTab: () => void;
     // The tab's × button — a deliberate close.
@@ -84,6 +86,8 @@
         <TerminalPane
           cwd={session.cwd}
           {workspaceId}
+          visible={visible}
+          active={session.id === tree.activeTabId}
           onExit={(elapsedMs) => onSessionExit(session.id, elapsedMs)}
           onTitleChange={(title) => onTitleChange(session.id, title)}
         />

@@ -8,6 +8,7 @@
     tree,
     activePaneId,
     workspaceId,
+    visible = true,
     onFocus,
     onSplit,
     onNewTab,
@@ -20,6 +21,7 @@
     tree: PaneNode;
     activePaneId: string;
     workspaceId: string;
+    visible?: boolean;
     onFocus: (paneId: string) => void;
     onSplit: (paneId: string, direction: SplitDirection) => void;
     onNewTab: (paneId: string) => void;
@@ -93,6 +95,7 @@
         <TerminalPanel
           tree={leaf}
           {workspaceId}
+          visible={visible && leaf.id === activePaneId}
           onSplit={(direction) => onSplit(leaf.id, direction)}
           onNewTab={() => onNewTab(leaf.id)}
           onCloseTab={(sessionId) => onCloseTab(leaf.id, sessionId)}
