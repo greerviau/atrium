@@ -44,7 +44,7 @@ It also covers issue #250 (a failed save going silently unreported): `chmod`s `n
 
 `specs/horizontalRuleCursor.e2e.js` covers issue #366: open `horizontal-rule.md`, click rendered text below a horizontal rule, and confirm the cursor position remains on the clicked source line.
 
-`specs/issue359.e2e.js` covers issue #359: place the caret at the end of rendered markdown, click the terminal, and confirm focus leaves the editor for the terminal.
+`specs/issue359.e2e.js` covers issue #359: open a wrapped rendered Markdown heading with trailing whitespace, place the caret at its end, click the terminal, and confirm focus leaves the editor for the terminal.
 
 `specs/keyboardShortcuts.e2e.js` covers issue #156's two kinds of shortcut:
 

@@ -21,7 +21,7 @@ async function openWorkspace(root) {
 describe("issue #359 reproduction", () => {
   it("can move focus to the terminal after placing the cursor at line end", async () => {
     await openWorkspace(fixturesDir);
-    const fileNode = await $("//span[@class='name' and text()='note.md']");
+    const fileNode = await $("//span[@class='name' and text()='wrapped.md']");
     await fileNode.waitForExist({ timeout: 10000 });
     await fileNode.click();
 
@@ -45,6 +45,6 @@ describe("issue #359 reproduction", () => {
     }));
     expect(after.editorActive).toBe(false);
     expect(after.terminalActive).toBe(true);
-    expect(after.rendered).toBe("Hello");
+    expect(after.rendered).not.toContain("# ");
   });
 });

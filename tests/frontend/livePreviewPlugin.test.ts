@@ -76,7 +76,7 @@ describe("live-preview decorations react to background parse completion (issue #
  * present and doesn't change on a DOM blur, so this only works if the
  * decoration layer also tracks `EditorView.hasFocus` independently of
  * `EditorState.selection` — driven here through real DOM `focus`/`blur` and
- * outside mousedown events, not synthetic state, on a real `EditorView` built
+ * outside pointer/mousedown events, not synthetic state, on a real `EditorView` built
  * from the app's own `markdownExtensions()`.
  */
 describe("live-preview decorations clear on blur, independent of selection (issue #108)", () => {
@@ -132,6 +132,28 @@ describe("live-preview decorations clear on blur, independent of selection (issu
     outsideSurface.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
 
     expect(container.querySelector(".cm-heading-1")?.textContent).toBe("Hello world");
+    expect(view.hasFocus).toBe(false);
+    outsideSurface.remove();
+  });
+
+  it("re-hides a wrapped line when the caret is after its trailing space and the outside gesture is pointer-only (issue #359)", () => {
+    const doc = `# ${"wrapped ".repeat(40)}\n`;
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    view = new EditorView({
+      state: EditorState.create({ doc, extensions: [markdownExtensions("test.md"), EditorView.lineWrapping] }),
+      parent: container,
+    });
+
+    view.focus();
+    view.dispatch({ selection: EditorSelection.cursor(doc.length - 1) });
+    expect(container.querySelector(".cm-heading-1")?.textContent).toContain("# wrapped");
+
+    const outsideSurface = document.createElement("div");
+    document.body.appendChild(outsideSurface);
+    outsideSurface.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
+
+    expect(container.querySelector(".cm-heading-1")?.textContent).not.toContain("# ");
     expect(view.hasFocus).toBe(false);
     outsideSurface.remove();
   });
