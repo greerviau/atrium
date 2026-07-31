@@ -7,7 +7,6 @@ use sqlparser::parser::Parser;
 use std::fs::File;
 use std::path::Path;
 
-const MAX_RESULT_ROWS: usize = 1_000;
 const MAX_SOURCE_ROWS: usize = 100_000;
 
 #[derive(Debug, Clone, Serialize)]
@@ -15,6 +14,7 @@ const MAX_SOURCE_ROWS: usize = 100_000;
 pub struct DataQueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Option<String>>>,
+    pub total_rows: usize,
     pub truncated: bool,
 }
 
@@ -47,7 +47,13 @@ struct Filter {
 /// subset used by the data pane: SELECT, WHERE, ORDER BY, and LIMIT.
 /// Queries remain SQL-shaped so the pane is useful without making a full
 /// database engine part of the desktop binary.
-pub fn query_file(path: &Path, logical_path: &str, query: &str) -> Result<DataQueryResult, String> {
+pub fn query_file(
+    path: &Path,
+    logical_path: &str,
+    query: &str,
+    page: usize,
+    page_size: Option<usize>,
+) -> Result<DataQueryResult, String> {
     let statements = Parser::parse_sql(&DuckDbDialect {}, query).map_err(|err| err.to_string())?;
     if statements.len() != 1 || !matches!(statements.first(), Some(Statement::Query(_))) {
         return Err("Only one read-only SELECT query is supported".to_string());
@@ -82,11 +88,13 @@ pub fn query_file(path: &Path, logical_path: &str, query: &str) -> Result<DataQu
         rows.truncate(limit);
     }
 
+    let total_rows = rows.len();
     if parsed.projection.len() == 1 && matches!(parsed.projection[0], Projection::Count) {
         return Ok(DataQueryResult {
             columns: vec!["count".to_string()],
-            rows: vec![vec![Some(rows.len().to_string())]],
-            truncated: false,
+            rows: vec![vec![Some(total_rows.to_string())]],
+            total_rows: 1,
+            truncated: source_truncated,
         });
     }
 
@@ -99,7 +107,14 @@ pub fn query_file(path: &Path, logical_path: &str, query: &str) -> Result<DataQu
             Projection::Count => Vec::new(),
         })
         .collect();
-    let mut projected_rows = rows
+    let start = page_size
+        .map(|size| page.saturating_mul(size).min(total_rows))
+        .unwrap_or(0);
+    let rows_to_return = match page_size {
+        Some(size) => rows.into_iter().skip(start).take(size).collect::<Vec<_>>(),
+        None => rows,
+    };
+    let projected_rows = rows_to_return
         .into_iter()
         .map(|row| {
             parsed
@@ -113,12 +128,11 @@ pub fn query_file(path: &Path, logical_path: &str, query: &str) -> Result<DataQu
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let truncated = source_truncated || projected_rows.len() > MAX_RESULT_ROWS;
-    projected_rows.truncate(MAX_RESULT_ROWS);
     Ok(DataQueryResult {
         columns,
         rows: projected_rows,
-        truncated,
+        total_rows,
+        truncated: source_truncated,
     })
 }
 
@@ -442,18 +456,34 @@ mod tests {
             &path,
             "/workspace/people.csv",
             "SELECT name, age FROM DATA WHERE age > 30 ORDER BY age DESC",
+            0,
+            Some(25),
         )
         .unwrap();
         assert_eq!(result.columns, ["name", "age"]);
         assert_eq!(result.rows, [[Some("Ada".into()), Some("36".into())]]);
+        assert_eq!(result.total_rows, 1);
 
         let count = query_file(
             &path,
             "/workspace/people.csv",
             "SELECT COUNT(*) FROM data WHERE age > 30",
+            0,
+            Some(25),
         )
         .unwrap();
         assert_eq!(count.rows, [[Some("1".into())]]);
+
+        let page = query_file(
+            &path,
+            "/workspace/people.csv",
+            "SELECT name FROM data ORDER BY age DESC",
+            1,
+            Some(1),
+        )
+        .unwrap();
+        assert_eq!(page.rows, [[Some("Grace".into())]]);
+        assert_eq!(page.total_rows, 2);
     }
 
     #[test]
@@ -461,7 +491,14 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("people.csv");
         fs::write(&path, "name\nAda\n").unwrap();
-        let error = query_file(&path, "/workspace/people.csv", "DELETE FROM data").unwrap_err();
+        let error = query_file(
+            &path,
+            "/workspace/people.csv",
+            "DELETE FROM data",
+            0,
+            Some(25),
+        )
+        .unwrap_err();
         assert!(error.contains("read-only"));
     }
 }

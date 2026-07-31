@@ -15,6 +15,7 @@ vi.mock("../../src/lib/ipc/events", () => ({
 const RESULT = {
   columns: ["name", "age"],
   rows: [["Ada", "36"], ["Grace", "28"]],
+  totalRows: 2,
   truncated: false,
 };
 
@@ -31,10 +32,10 @@ describe("DataPane", () => {
       workspaceId: "local",
     });
 
-    expect((getByRole("textbox", { name: "SQL query" }) as HTMLTextAreaElement).value).toBe("SELECT * FROM data LIMIT 100");
+    expect((getByRole("textbox", { name: "SQL query" }) as HTMLTextAreaElement).value).toBe("SELECT * FROM data");
     await findByText("Ada");
     expect(getByRole("columnheader", { name: "name" })).toBeTruthy();
-    expect(commands.dataQuery).toHaveBeenCalledWith("local", "/workspace/people.csv", "SELECT * FROM data LIMIT 100");
+    expect(commands.dataQuery).toHaveBeenCalledWith("local", "/workspace/people.csv", "SELECT * FROM data", 0, 25);
   });
 
   it("runs the edited SQL query from the Run button", async () => {
@@ -51,6 +52,49 @@ describe("DataPane", () => {
       "local",
       "/workspace/people.csv",
       "SELECT name FROM data WHERE age > 30",
+      0,
+      25,
     ));
+  });
+
+  it("changes the page size and loads the first page", async () => {
+    const { findByText, getByRole } = render(DataPane, {
+      filePath: "/workspace/people.csv",
+      workspaceId: "local",
+    });
+    await waitFor(() => expect(commands.dataQuery).toHaveBeenCalledTimes(1));
+    await findByText("Ada");
+
+    await fireEvent.change(getByRole("combobox", { name: "Rows per page" }), { target: { value: "50" } });
+
+    await waitFor(() => expect(commands.dataQuery).toHaveBeenLastCalledWith(
+      "local",
+      "/workspace/people.csv",
+      "SELECT * FROM data",
+      0,
+      50,
+    ));
+  });
+
+  it("loads the next page", async () => {
+    vi.mocked(commands.dataQuery)
+      .mockResolvedValueOnce({ ...RESULT, totalRows: 26 })
+      .mockResolvedValueOnce({ ...RESULT, rows: [["Zoe", "42"]], totalRows: 26 });
+    const { findByText, getByRole } = render(DataPane, {
+      filePath: "/workspace/people.csv",
+      workspaceId: "local",
+    });
+    await findByText("Ada");
+
+    await fireEvent.click(getByRole("button", { name: "Next page" }));
+
+    await findByText("Zoe");
+    expect(commands.dataQuery).toHaveBeenLastCalledWith(
+      "local",
+      "/workspace/people.csv",
+      "SELECT * FROM data",
+      1,
+      25,
+    );
   });
 });

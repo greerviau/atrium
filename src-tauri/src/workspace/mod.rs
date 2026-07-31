@@ -155,7 +155,13 @@ pub trait Workspace: Send + Sync {
     async fn read_file(&self, path: &str) -> Result<String, AppError>;
     /// Runs a read-only query against a CSV, TSV, or Parquet file after
     /// applying the implementation's normal read authorization.
-    async fn query_data(&self, path: &str, query: &str) -> Result<DataQueryResult, AppError>;
+    async fn query_data(
+        &self,
+        path: &str,
+        query: &str,
+        page: usize,
+        page_size: Option<usize>,
+    ) -> Result<DataQueryResult, AppError>;
     async fn write_file(&self, path: &str, contents: &str) -> Result<(), AppError>;
     async fn create_file(&self, path: &str) -> Result<(), AppError>;
     async fn create_dir(&self, path: &str) -> Result<(), AppError>;

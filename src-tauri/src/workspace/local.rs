@@ -1045,14 +1045,18 @@ impl Workspace for LocalWorkspace {
         &self,
         path: &str,
         query: &str,
+        page: usize,
+        page_size: Option<usize>,
     ) -> Result<crate::data::DataQueryResult, AppError> {
         let file = self.resolve_read_target(path).await?;
         let logical_path = path.to_string();
         let query = query.to_string();
-        tokio::task::spawn_blocking(move || crate::data::query_file(&file, &logical_path, &query))
-            .await
-            .map_err(|err| AppError::Other(format!("data query task panicked: {err}")))?
-            .map_err(AppError::Other)
+        tokio::task::spawn_blocking(move || {
+            crate::data::query_file(&file, &logical_path, &query, page, page_size)
+        })
+        .await
+        .map_err(|err| AppError::Other(format!("data query task panicked: {err}")))?
+        .map_err(AppError::Other)
     }
 
     /// Writes `contents` atomically and durably: the new content lands via a

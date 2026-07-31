@@ -11,6 +11,8 @@ pub async fn data_query(
     workspace_id: String,
     path: String,
     query: String,
+    page: usize,
+    page_size: Option<usize>,
 ) -> Result<DataQueryResult, AppError> {
     let workspace = state
         .workspaces
@@ -19,5 +21,5 @@ pub async fn data_query(
         .get(&workspace_id)
         .cloned()
         .ok_or_else(|| AppError::UnknownWorkspace(workspace_id.clone()))?;
-    workspace.query_data(&path, &query).await
+    workspace.query_data(&path, &query, page, page_size).await
 }

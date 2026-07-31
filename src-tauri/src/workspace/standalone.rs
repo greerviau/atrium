@@ -217,6 +217,8 @@ impl Workspace for StandaloneWorkspace {
         &self,
         path: &str,
         query: &str,
+        page: usize,
+        page_size: Option<usize>,
     ) -> Result<crate::data::DataQueryResult, AppError> {
         let Some(file) = self.external_grants.resolve_granted(path).await? else {
             return Err(Self::no_root_error(format!(
@@ -225,10 +227,12 @@ impl Workspace for StandaloneWorkspace {
         };
         let logical_path = path.to_string();
         let query = query.to_string();
-        tokio::task::spawn_blocking(move || crate::data::query_file(&file, &logical_path, &query))
-            .await
-            .map_err(|err| AppError::Other(format!("data query task panicked: {err}")))?
-            .map_err(AppError::Other)
+        tokio::task::spawn_blocking(move || {
+            crate::data::query_file(&file, &logical_path, &query, page, page_size)
+        })
+        .await
+        .map_err(|err| AppError::Other(format!("data query task panicked: {err}")))?
+        .map_err(AppError::Other)
     }
 
     /// Writes `contents` atomically and durably via the same
