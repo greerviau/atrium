@@ -171,7 +171,7 @@
   .pane-leaf.tab-drop-target-down::after {
     left: 2px;
     right: 2px;
-    height: 25%;
+    height: 50%;
     border-color: var(--atrium-accent);
     background: color-mix(in srgb, var(--atrium-accent) 8%, transparent);
   }
@@ -183,7 +183,7 @@
   .pane-leaf.tab-drop-target-right::after {
     top: 2px;
     bottom: 2px;
-    width: 25%;
+    width: 50%;
     border-color: var(--atrium-accent);
     background: color-mix(in srgb, var(--atrium-accent) 8%, transparent);
   }
