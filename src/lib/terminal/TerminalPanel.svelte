@@ -52,6 +52,8 @@
     const target = event.target as HTMLElement;
     if (target.closest(".tab-close")) return;
     if (event.button !== 0 || !tabListEl) return;
+    const session = tree.tabs.find((tab) => tab.id === sessionId);
+    if (!session) return;
     beginTabDrag(
       event.currentTarget as HTMLElement,
       event,
@@ -66,6 +68,7 @@
       {
         surface: "terminal",
         paneId: tree.id,
+        label: session.title,
         onDrop: (target) => onDropTab?.(sessionId, target),
         onDragEnd: (didDrag) => {
           suppressClickSessionId = didDrag ? sessionId : null;
@@ -201,7 +204,7 @@
   }
 
   .tab.dragging {
-    opacity: 0.6;
+    opacity: 0.2;
     cursor: grabbing;
     z-index: 1;
     position: relative;

@@ -6,6 +6,9 @@ export interface ActiveTabDrag {
   surface: TabSurface;
   sourcePaneId: string;
   path: string;
+  label: string;
+  clientX: number;
+  clientY: number;
   target: TabDropTarget | null;
 }
 
@@ -19,6 +22,7 @@ const DRAG_THRESHOLD_PX = 4;
 export interface TabDragOptions {
   surface: TabSurface;
   paneId: string;
+  label?: string;
   onDrop: (target: TabDropTarget) => void;
   onDragEnd?: (didDrag: boolean) => void;
 }
@@ -72,10 +76,17 @@ export function beginTabDrag(
 
     if (options) {
       const target = resolveTabDropTarget(options.surface, e.clientX, e.clientY);
-      if (!sameTarget(currentTarget, target)) {
-        currentTarget = target;
-        activeTabDrag.set({ key, surface: options.surface, sourcePaneId: options.paneId, path, target });
-      }
+      if (!sameTarget(currentTarget, target)) currentTarget = target;
+      activeTabDrag.set({
+        key,
+        surface: options.surface,
+        sourcePaneId: options.paneId,
+        path,
+        label: options.label ?? path,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        target: currentTarget,
+      });
     }
 
     e.preventDefault();

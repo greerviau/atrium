@@ -11,6 +11,7 @@
   import KeyboardShortcutsDialog from "./lib/shell/KeyboardShortcutsDialog.svelte";
   import ErrorToast from "./lib/shell/ErrorToast.svelte";
   import ExplorerDragPreview from "./lib/explorer/ExplorerDragPreview.svelte";
+  import TabDragPreview from "./lib/panes/TabDragPreview.svelte";
   import StatusBar from "./lib/shell/StatusBar.svelte";
   import TitleBar from "./lib/shell/TitleBar.svelte";
   import { workspace, openWorkspacePath } from "./lib/stores/workspace";
@@ -1232,6 +1233,7 @@
 <KeyboardShortcutsDialog />
 <ErrorToast />
 <ExplorerDragPreview />
+<TabDragPreview />
 <!--
   UnsavedChangesDialog is hoisted out here, unconditionally — it used to sit
   inside the root-gated {:else} below, so with no project open (issue #325)

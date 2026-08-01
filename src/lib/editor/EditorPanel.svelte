@@ -92,6 +92,7 @@
       {
         surface: "editor",
         paneId: tree.id,
+        label: basename(path),
         onDrop: (target) => onDropTab(path, target),
         onDragEnd: (didDrag) => {
           suppressClickPath = didDrag ? path : null;
@@ -278,7 +279,7 @@
   }
 
   .tab.dragging {
-    opacity: 0.6;
+    opacity: 0.2;
     cursor: grabbing;
     z-index: 1;
     position: relative;
