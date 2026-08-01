@@ -116,6 +116,16 @@ describe("leaf-local tab operations", () => {
     expect(findLeaf(result, "L2")?.activeTabPath).toBe("a.txt");
   });
 
+  it("keeps the target tabs when a source path is split into a new sibling", () => {
+    let tree = splitPane(leaf("top", ["top.txt"]), "top", "down", leaf("bottom", ["bottom.txt", "moved.txt"]));
+    tree = closeTabInLeaf(tree, "bottom", "moved.txt")!;
+    tree = splitPane(tree, "top", "right", leaf("new", ["moved.txt"]));
+
+    expect(findLeaf(tree, "top")?.tabs).toEqual(["top.txt"]);
+    expect(findLeaf(tree, "bottom")?.tabs).toEqual(["bottom.txt"]);
+    expect(findLeaf(tree, "new")?.tabs).toEqual(["moved.txt"]);
+  });
+
   it("addTabToLeaf is a no-op append when the path is already in this leaf's tabs — it just switches active", () => {
     const tree = leaf("L1", ["a.txt", "b.txt"]);
     const result = addTabToLeaf(tree, "L1", "a.txt");

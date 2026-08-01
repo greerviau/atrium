@@ -275,6 +275,22 @@ describe("leaf-local tab operations", () => {
     expect(findLeaf(tree, "L1")?.activeTabId).toBe("s2");
   });
 
+  it("keeps the target tabs when a source session is split into a new sibling", () => {
+    let tree = splitPane(leaf("top"), "top", "down", leaf("bottom"));
+    tree = addTabToLeaf(tree, "bottom", session("moved"));
+    tree = closeTabInLeaf(tree, "bottom", "moved")!;
+    tree = splitPane(tree, "top", "right", {
+      type: "leaf",
+      id: "new",
+      tabs: [session("moved")],
+      activeTabId: "moved",
+    });
+
+    expect(findLeaf(tree, "top")?.tabs.map((tab) => tab.id)).toEqual(["top-tab"]);
+    expect(findLeaf(tree, "bottom")?.tabs.map((tab) => tab.id)).toEqual(["bottom-tab"]);
+    expect(findLeaf(tree, "new")?.tabs.map((tab) => tab.id)).toEqual(["moved"]);
+  });
+
   it("setActiveTabInLeaf switches which tab is active without touching the tab list", () => {
     let tree = addTabToLeaf(leaf("L1"), "L1", session("s2"));
     tree = setActiveTabInLeaf(tree, "L1", "L1-tab");

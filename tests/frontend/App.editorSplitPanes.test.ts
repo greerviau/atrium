@@ -42,6 +42,17 @@ vi.mock("../../src/lib/ipc/events", () => ({
   onDragDropEvent: vi.fn().mockResolvedValue(() => {}),
 }));
 
+function pointerEvent(type: string, clientX: number, clientY: number): PointerEvent {
+  const event = new Event(type, { bubbles: true, cancelable: true }) as PointerEvent;
+  Object.defineProperties(event, {
+    button: { value: 0 },
+    clientX: { value: clientX },
+    clientY: { value: clientY },
+    pointerId: { value: 1 },
+  });
+  return event;
+}
+
 function resetStores(): void {
   localStorage.clear();
   workspace.set({ id: "local", root: null });
@@ -58,6 +69,7 @@ describe("App editor split panes (issue #158)", () => {
 
   afterEach(() => {
     cleanup();
+    delete (document as unknown as { elementFromPoint?: unknown }).elementFromPoint;
   });
 
   it("scenario 1: splitting a pane with a single open file duplicates that file into a second pane", async () => {
@@ -127,6 +139,47 @@ describe("App editor split panes (issue #158)", () => {
     // ...and the new pane has only the one that was active (c.ts).
     expect(secondPanelTabs).toHaveLength(1);
     expect(secondPanelTabs[0]).toContain("c.ts");
+  });
+
+  it("keeps the target pane's tabs when a bottom tab splits the top pane", async () => {
+    workspace.set({ id: "local", root: "/projects/demo" });
+    const { container } = render(App);
+    await tick();
+
+    await openFile("/top.ts");
+    await tick();
+    const splitButton = container.querySelector('button[aria-label="Split editor"]')!;
+    await fireEvent.click(splitButton);
+    const downItem = [...container.querySelectorAll('[role="menuitem"]')].find((el) => el.textContent?.startsWith("Split Down"))!;
+    await fireEvent.click(downItem);
+    await tick();
+
+    await openFile("/bottom.ts");
+    await tick();
+
+    const panes = [...container.querySelectorAll<HTMLElement>(".pane-leaf")];
+    const topPane = panes[0];
+    const bottomPanel = container.querySelectorAll(".editor-panel")[1];
+    const sourceTab = bottomPanel.querySelector<HTMLElement>('[data-tab-path="/bottom.ts"]')!;
+    Object.defineProperty(topPane, "getBoundingClientRect", {
+      value: () => ({ left: 0, top: 0, right: 400, bottom: 200, width: 400, height: 200 }),
+    });
+    Object.defineProperty(sourceTab, "getBoundingClientRect", {
+      value: () => ({ left: 0, top: 200, right: 100, bottom: 220, width: 100, height: 20 }),
+    });
+    Object.defineProperty(document, "elementFromPoint", { value: () => topPane, configurable: true });
+
+    sourceTab.dispatchEvent(pointerEvent("pointerdown", 10, 210));
+    window.dispatchEvent(pointerEvent("pointermove", 380, 100));
+    window.dispatchEvent(pointerEvent("pointerup", 380, 100));
+    await tick();
+
+    const panelTabs = [...container.querySelectorAll(".editor-panel")].map((panel) =>
+      [...panel.querySelectorAll<HTMLElement>(".tab")].map((tab) => tab.dataset.tabPath),
+    );
+    expect(panelTabs).toContainEqual(["/top.ts"]);
+    expect(panelTabs).toContainEqual(["/bottom.ts"]);
+    expect(panelTabs).toContainEqual(["/top.ts"]);
   });
 
   it("closing a tab that's open in another pane too only removes this pane's view, leaving the file open", async () => {

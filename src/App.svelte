@@ -468,8 +468,12 @@
         terminalPaneTree = closeTabInLeaf(terminalPaneTree, sourcePaneId, sessionId);
       }
     } else {
-      terminalPaneTree = moveTabToLeaf(terminalPaneTree, sourcePaneId, target.paneId, sessionId);
-      terminalPaneTree = splitPane(terminalPaneTree, target.paneId, direction, newLeaf);
+      // The destination pane keeps its existing tabs. Removing the source
+      // tab before splitting avoids adding it to the destination and then
+      // duplicating it into the new sibling.
+      const withoutSource = closeTabInLeaf(terminalPaneTree, sourcePaneId, sessionId);
+      if (!withoutSource) return;
+      terminalPaneTree = splitPane(withoutSource, target.paneId, direction, newLeaf);
     }
     focusedPaneId = newLeaf.id;
   }
@@ -561,8 +565,12 @@
         $editorPaneTree = closeEditorTabInLeaf($editorPaneTree, sourcePaneId, path);
       }
     } else {
-      $editorPaneTree = moveTabToEditorLeaf($editorPaneTree, sourcePaneId, target.paneId, path);
-      $editorPaneTree = splitEditorPane($editorPaneTree, target.paneId, direction, newLeaf);
+      // The destination pane keeps its existing tabs. Removing the source
+      // tab before splitting avoids adding it to the destination and then
+      // duplicating it into the new sibling.
+      const withoutSource = closeEditorTabInLeaf($editorPaneTree, sourcePaneId, path);
+      if (!withoutSource) return;
+      $editorPaneTree = splitEditorPane(withoutSource, target.paneId, direction, newLeaf);
     }
     $focusedEditorPaneId = newLeaf.id;
     syncActiveTabToFocusedPane();
