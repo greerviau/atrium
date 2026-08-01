@@ -73,6 +73,8 @@
     addTabToLeaf,
     closeTabInLeaf,
     setActiveTabInLeaf,
+    moveTabToLeaf,
+    moveTabInLeaf,
     updateSessionInLeaf,
     PANE_MIN_PX,
     type PaneNode,
@@ -89,6 +91,7 @@
     addTabToLeaf as addEditorTabToLeaf,
     closeTabInLeaf as closeEditorTabInLeaf,
     setActiveTabInLeaf as setActiveTabInEditorLeaf,
+    moveTabToLeaf as moveTabToEditorLeaf,
     moveTabInLeaf as moveTabInEditorLeaf,
     pruneMissingTabs,
     renamePathInTree as renamePathInEditorTree,
@@ -96,6 +99,7 @@
     type EditorLeafPane,
   } from "./lib/editor/editorPaneTree";
   import { focusedEditorPaneId, editorPaneTree } from "./lib/stores/editorPanes";
+  import type { TabDropTarget } from "./lib/panes/tabDrag";
 
   const initialLayout = loadTerminalLayout();
 
@@ -433,6 +437,42 @@
     terminalPaneTree = updateSessionInLeaf(terminalPaneTree, paneId, sessionId, { title });
   }
 
+  function reorderTabInTerminalPane(paneId: string, sessionId: string, toIndex: number): void {
+    if (!terminalPaneTree) return;
+    terminalPaneTree = moveTabInLeaf(terminalPaneTree, paneId, sessionId, toIndex);
+  }
+
+  /** Moves a terminal tab into a pane or creates a pane at the hovered edge. */
+  function dropTabInTerminalPane(sourcePaneId: string, sessionId: string, target: TabDropTarget): void {
+    if (!terminalPaneTree) return;
+    const source = findLeaf(terminalPaneTree, sourcePaneId);
+    const targetLeaf = findLeaf(terminalPaneTree, target.paneId);
+    const direction = splitDirectionForDropZone(target.zone);
+    const session = source?.tabs.find((tab) => tab.id === sessionId);
+    if (!source || !targetLeaf || !session) return;
+
+    lastFocusedSurface = "terminal";
+    if (target.zone === "center") {
+      if (sourcePaneId === target.paneId) return;
+      terminalPaneTree = moveTabToLeaf(terminalPaneTree, sourcePaneId, target.paneId, sessionId);
+      focusedPaneId = target.paneId;
+      return;
+    }
+    if (!direction) return;
+
+    const newLeaf: LeafPane = { type: "leaf", id: genId("pane"), tabs: [session], activeTabId: session.id };
+    if (sourcePaneId === target.paneId) {
+      terminalPaneTree = splitPane(terminalPaneTree, target.paneId, direction, newLeaf);
+      if (source.tabs.length > 1) {
+        terminalPaneTree = closeTabInLeaf(terminalPaneTree, sourcePaneId, sessionId);
+      }
+    } else {
+      terminalPaneTree = moveTabToLeaf(terminalPaneTree, sourcePaneId, target.paneId, sessionId);
+      terminalPaneTree = splitPane(terminalPaneTree, target.paneId, direction, newLeaf);
+    }
+    focusedPaneId = newLeaf.id;
+  }
+
   function setFocusedPane(paneId: string): void {
     lastFocusedSurface = "terminal";
     focusedPaneId = paneId;
@@ -487,6 +527,44 @@
   function reorderTabInEditorPane(paneId: string, path: string, toIndex: number): void {
     if (!$editorPaneTree) return;
     $editorPaneTree = moveTabInEditorLeaf($editorPaneTree, paneId, path, toIndex);
+  }
+
+  function splitDirectionForDropZone(zone: TabDropTarget["zone"]): SplitDirection | null {
+    return zone === "up" || zone === "down" || zone === "left" || zone === "right" ? zone : null;
+  }
+
+  /** Moves an editor tab into a pane or creates a pane at the hovered edge. */
+  function dropTabInEditorPane(sourcePaneId: string, path: string, target: TabDropTarget): void {
+    if (!$editorPaneTree) return;
+    const source = findEditorLeaf($editorPaneTree, sourcePaneId);
+    const targetLeaf = findEditorLeaf($editorPaneTree, target.paneId);
+    const direction = splitDirectionForDropZone(target.zone);
+    if (!source || !targetLeaf || !source.tabs.includes(path)) return;
+
+    lastFocusedSurface = "editor";
+    if (target.zone === "center") {
+      if (sourcePaneId === target.paneId) return;
+      $editorPaneTree = moveTabToEditorLeaf($editorPaneTree, sourcePaneId, target.paneId, path);
+      $focusedEditorPaneId = target.paneId;
+      syncActiveTabToFocusedPane();
+      return;
+    }
+    if (!direction) return;
+
+    const newLeaf: EditorLeafPane = { type: "leaf", id: genId("epane"), tabs: [path], activeTabPath: path };
+    if (sourcePaneId === target.paneId) {
+      // Split first so the source pane remains addressable, then remove the
+      // moved tab unless it is the source pane's only tab.
+      $editorPaneTree = splitEditorPane($editorPaneTree, target.paneId, direction, newLeaf);
+      if (source.tabs.length > 1) {
+        $editorPaneTree = closeEditorTabInLeaf($editorPaneTree, sourcePaneId, path);
+      }
+    } else {
+      $editorPaneTree = moveTabToEditorLeaf($editorPaneTree, sourcePaneId, target.paneId, path);
+      $editorPaneTree = splitEditorPane($editorPaneTree, target.paneId, direction, newLeaf);
+    }
+    $focusedEditorPaneId = newLeaf.id;
+    syncActiveTabToFocusedPane();
   }
 
   // Splits `paneId`, duplicating its own currently-active tab into the new
@@ -1196,6 +1274,7 @@
                   onSetActiveTab={(paneId, path) => setActiveTabInEditorPane(paneId, path)}
                   onCloseTab={(paneId, path) => closeTabInEditorPane(paneId, path)}
                   onReorderTab={(paneId, path, toIndex) => reorderTabInEditorPane(paneId, path, toIndex)}
+                  onDropTab={(paneId, path, target) => dropTabInEditorPane(paneId, path, target)}
                   onResizeSplit={(splitId, index, delta, containerSizePx) =>
                     resizeEditorPaneSplit(splitId, index, delta, containerSizePx)}
                 />
@@ -1234,6 +1313,8 @@
                       onSessionExit={(paneId, sessionId, elapsedMs) => exitTabInPane(paneId, sessionId, elapsedMs)}
                       onSetActiveTab={(paneId, sessionId) => setActiveTabInPane(paneId, sessionId)}
                       onTitleChange={(paneId, sessionId, title) => setSessionTitle(paneId, sessionId, title)}
+                      onReorderTab={(paneId, sessionId, toIndex) => reorderTabInTerminalPane(paneId, sessionId, toIndex)}
+                      onDropTab={(paneId, sessionId, target) => dropTabInTerminalPane(paneId, sessionId, target)}
                       onResizeSplit={(splitId, index, delta, containerSizePx) =>
                         resizePaneSplit(splitId, index, delta, containerSizePx)}
                     />

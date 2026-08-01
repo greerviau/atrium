@@ -9,6 +9,8 @@ import {
   closeTabInLeaf,
   setActiveTabInLeaf,
   updateSessionInLeaf,
+  moveTabToLeaf,
+  moveTabInLeaf,
   nextActivePane,
   PANE_MIN_PX,
   type PaneNode,
@@ -251,6 +253,26 @@ describe("leaf-local tab operations", () => {
     expect(target.activeTabId).toBe("s-new");
     // Sibling leaf is untouched.
     expect(findLeaf(result, "L1")).toEqual(findLeaf(tree, "L1"));
+  });
+
+  it("moves a session to another leaf and selects it there", () => {
+    let tree = addTabToLeaf(leaf("L1"), "L1", session("s2"));
+    tree = splitPane(tree, "L1", "right", leaf("L2"));
+    tree = moveTabToLeaf(tree, "L1", "L2", "s2");
+
+    expect(findLeaf(tree, "L1")?.tabs.map((tab) => tab.id)).toEqual(["L1-tab"]);
+    expect(findLeaf(tree, "L2")?.tabs.map((tab) => tab.id)).toEqual(["L2-tab", "s2"]);
+    expect(findLeaf(tree, "L2")?.activeTabId).toBe("s2");
+  });
+
+  it("reorders sessions within a leaf without changing its active tab", () => {
+    let tree = addTabToLeaf(leaf("L1"), "L1", session("s2"));
+    tree = addTabToLeaf(tree, "L1", session("s3"));
+    tree = setActiveTabInLeaf(tree, "L1", "s2");
+    tree = moveTabInLeaf(tree, "L1", "s2", 2);
+
+    expect(findLeaf(tree, "L1")?.tabs.map((tab) => tab.id)).toEqual(["L1-tab", "s3", "s2"]);
+    expect(findLeaf(tree, "L1")?.activeTabId).toBe("s2");
   });
 
   it("setActiveTabInLeaf switches which tab is active without touching the tab list", () => {

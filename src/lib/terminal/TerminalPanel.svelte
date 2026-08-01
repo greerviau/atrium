@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { flip } from "svelte/animate";
   import type { LeafPane, SplitDirection } from "./paneTree";
   import TerminalPane from "./TerminalPane.svelte";
   import SplitMenu from "./SplitMenu.svelte";
   import TerminalIcon from "./icons/TerminalIcon.svelte";
+  import { beginTabDrag, draggingTabKey, type TabDropTarget } from "../panes/tabDrag";
 
   /**
    * One leaf's full top bar (tab strip + controls) and its stack of
@@ -22,6 +24,8 @@
     onSessionExit,
     onSetActiveTab,
     onTitleChange,
+    onReorderTab = () => {},
+    onDropTab = () => {},
   }: {
     tree: LeafPane;
     workspaceId: string;
@@ -37,7 +41,46 @@
     onSessionExit: (sessionId: string, elapsedMs: number) => void;
     onSetActiveTab: (sessionId: string) => void;
     onTitleChange: (sessionId: string, title: string) => void;
+    onReorderTab?: (sessionId: string, toIndex: number) => void;
+    onDropTab?: (sessionId: string, target: TabDropTarget) => void;
   } = $props();
+
+  let tabListEl: HTMLDivElement | undefined = $state();
+  let suppressClickSessionId = $state<string | null>(null);
+
+  function onTabPointerDown(event: PointerEvent, sessionId: string): void {
+    const target = event.target as HTMLElement;
+    if (target.closest(".tab-close")) return;
+    if (event.button !== 0 || !tabListEl) return;
+    beginTabDrag(
+      event.currentTarget as HTMLElement,
+      event,
+      `${tree.id}:${sessionId}`,
+      sessionId,
+      () =>
+        Array.from(tabListEl!.querySelectorAll<HTMLElement>(".tab[data-session-id]")).map((el) => ({
+          path: el.dataset.sessionId!,
+          rect: el.getBoundingClientRect(),
+        })),
+      (draggedSessionId, toIndex) => onReorderTab(draggedSessionId, toIndex),
+      {
+        surface: "terminal",
+        paneId: tree.id,
+        onDrop: (target) => onDropTab?.(sessionId, target),
+        onDragEnd: (didDrag) => {
+          suppressClickSessionId = didDrag ? sessionId : null;
+        },
+      },
+    );
+  }
+
+  function onTabClick(sessionId: string): void {
+    if (suppressClickSessionId === sessionId) {
+      suppressClickSessionId = null;
+      return;
+    }
+    onSetActiveTab(sessionId);
+  }
 
   function onTabListWheel(event: WheelEvent): void {
     if (event.deltaY === 0) return;
@@ -49,16 +92,20 @@
 
 <div class="terminal-panel">
   <div class="tab-strip">
-    <div class="tab-list" onwheel={onTabListWheel}>
+    <div class="tab-list" bind:this={tabListEl} onwheel={onTabListWheel}>
       {#each tree.tabs as session (session.id)}
         <div
           class="tab"
           class:active={session.id === tree.activeTabId}
-          onclick={() => onSetActiveTab(session.id)}
+          class:dragging={$draggingTabKey === `${tree.id}:${session.id}`}
+          data-session-id={session.id}
+          onpointerdown={(e) => onTabPointerDown(e, session.id)}
+          onclick={() => onTabClick(session.id)}
           onkeydown={(e) => e.key === "Enter" && onSetActiveTab(session.id)}
           role="tab"
           tabindex="0"
           aria-selected={session.id === tree.activeTabId}
+          animate:flip={{ duration: $draggingTabKey === `${tree.id}:${session.id}` ? 0 : 150 }}
         >
           <TerminalIcon />
           <span class="tab-name" title={session.title}>{session.title}</span>
@@ -85,6 +132,7 @@
       <div class="terminal-pane-slot" class:hidden={session.id !== tree.activeTabId}>
         <TerminalPane
           cwd={session.cwd}
+          sessionId={session.id}
           {workspaceId}
           visible={visible}
           active={session.id === tree.activeTabId}
@@ -142,10 +190,21 @@
     color: inherit;
     cursor: pointer;
     white-space: nowrap;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-user-drag: none;
+    touch-action: none;
   }
 
   .tab.active {
     background: var(--atrium-bg-active);
+  }
+
+  .tab.dragging {
+    opacity: 0.6;
+    cursor: grabbing;
+    z-index: 1;
+    position: relative;
   }
 
   .tab-name {

@@ -9,6 +9,7 @@ import {
   closeTabInLeaf,
   setActiveTabInLeaf,
   moveTabInLeaf,
+  moveTabToLeaf,
   nextActivePane,
   pruneMissingTabs,
   renamePathInTree,
@@ -95,6 +96,24 @@ describe("leaf-local tab operations", () => {
     expect(target.activeTabPath).toBe("new.txt");
     // Sibling leaf is untouched.
     expect(findLeaf(result, "L1")).toEqual(findLeaf(tree, "L1"));
+  });
+
+  it("moves a path to another leaf and selects it there", () => {
+    const tree = splitPane(leaf("L1", ["a.txt", "b.txt"]), "L1", "right", leaf("L2", ["c.txt"]));
+    const result = moveTabToLeaf(tree, "L1", "L2", "a.txt");
+
+    expect(findLeaf(result, "L1")?.tabs).toEqual(["b.txt"]);
+    expect(findLeaf(result, "L2")?.tabs).toEqual(["c.txt", "a.txt"]);
+    expect(findLeaf(result, "L2")?.activeTabPath).toBe("a.txt");
+  });
+
+  it("moves a path already open in the destination without duplicating it", () => {
+    const tree = splitPane(leaf("L1", ["a.txt"]), "L1", "right", leaf("L2", ["a.txt", "b.txt"]));
+    const result = moveTabToLeaf(tree, "L1", "L2", "a.txt");
+
+    expect(findLeaf(result, "L1")).toBeNull();
+    expect(findLeaf(result, "L2")?.tabs).toEqual(["a.txt", "b.txt"]);
+    expect(findLeaf(result, "L2")?.activeTabPath).toBe("a.txt");
   });
 
   it("addTabToLeaf is a no-op append when the path is already in this leaf's tabs — it just switches active", () => {

@@ -15,7 +15,8 @@ Atrium fixes all that by combining a rendered markdown editor with a simple IDE.
 ## Key Features
 
 - **Editable rendered markdown.** No preview pane, no switching.
-- **A real code editor.** Syntax highlighting, search, split panes.
+- **A real code editor.** Syntax highlighting, search, split panes, and draggable tabs that move between panes or create splits.
+- **Reconfigurable terminal tabs.** Reorder tabs, move them between panes, and drag them to pane edges to split.
 - **Tabular data inspection.** CSV, TSV, and Parquet files open in a queryable data grid with configurable pagination.
 - **Clickable file paths in terminal output.** `spec.md:42` opens right there, so agent output is one click away.
 - **Git worktree and branch switching.** The title bar shows the current worktree and branch and lets you switch between them.

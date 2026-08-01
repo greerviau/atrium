@@ -66,6 +66,30 @@ export function setActiveTabInLeaf(tree: PaneNode, leafId: string, sessionId: st
   return mapLeaf(tree, leafId, (leaf) => ({ ...leaf, activeTabId: sessionId }));
 }
 
+/** Moves a terminal session from one leaf to another and selects it there. */
+export function moveTabToLeaf(tree: PaneNode, sourceLeafId: string, targetLeafId: string, sessionId: string): PaneNode {
+  if (sourceLeafId === targetLeafId) return tree;
+  const source = findLeaf(tree, sourceLeafId);
+  const target = findLeaf(tree, targetLeafId);
+  const session = source?.tabs.find((tab) => tab.id === sessionId);
+  if (!source || !target || !session) return tree;
+  const withoutSource = closeTabInLeaf(tree, sourceLeafId, sessionId);
+  if (!withoutSource) return tree;
+  return addTabToLeaf(withoutSource, targetLeafId, session);
+}
+
+/** Moves a terminal session within its leaf's tab strip. */
+export function moveTabInLeaf(tree: PaneNode, leafId: string, sessionId: string, toIndex: number): PaneNode {
+  return mapLeaf(tree, leafId, (leaf) => {
+    const withoutSession = leaf.tabs.filter((tab) => tab.id !== sessionId);
+    if (withoutSession.length === leaf.tabs.length) return leaf;
+    const clamped = Math.max(0, Math.min(toIndex, withoutSession.length));
+    const tabs = [...withoutSession.slice(0, clamped), leaf.tabs.find((tab) => tab.id === sessionId)!, ...withoutSession.slice(clamped)];
+    const unchanged = tabs.every((tab, index) => tab.id === leaf.tabs[index].id);
+    return unchanged ? leaf : { ...leaf, tabs };
+  });
+}
+
 export function updateSessionInLeaf(
   tree: PaneNode,
   leafId: string,
