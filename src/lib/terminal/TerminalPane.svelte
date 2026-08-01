@@ -15,6 +15,13 @@
   import { handleTerminalKeyEvent } from "./terminalKeyHandling";
   import { shellQuotePaths } from "./shellQuote";
   import { registerTerminalDropTarget, dragOverTerminalPane } from "./terminalDropTargets";
+  import {
+    claimTerminalRuntime,
+    getTerminalRuntime,
+    registerTerminalRuntime,
+    releaseTerminalRuntime,
+    type TerminalRuntime,
+  } from "./terminalRuntime";
   import ContextMenu from "../ui/ContextMenu.svelte";
   import { SHORTCUT_LABELS } from "../shell/shortcutLabels";
 
@@ -31,6 +38,7 @@
   let {
     cwd,
     workspaceId,
+    sessionId,
     visible = true,
     active = true,
     onExit,
@@ -38,6 +46,7 @@
   }: {
     cwd: string;
     workspaceId: string;
+    sessionId?: string;
     visible?: boolean;
     active?: boolean;
     onExit?: (elapsedMs: number) => void;
@@ -51,11 +60,13 @@
   let destroyed = false;
   let resizeObserver: ResizeObserver;
   let titleChangeDisposable: { dispose(): void };
+  const ownerToken = Symbol();
+  let runtime: TerminalRuntime | undefined;
 
   let titleState: TitleState;
   let lastEmittedTitle: string | undefined;
   let linkProviderHandle: LinkProviderHandle | undefined;
-  let dropTargetActive = $derived($dragOverTerminalPane === container && terminalId !== undefined);
+  let dropTargetActive = $derived($dragOverTerminalPane === container && (terminalId ?? runtime?.terminalId) !== undefined);
   let unregisterDropTarget: (() => void) | undefined;
 
   interface ContextMenuState {
@@ -148,7 +159,8 @@
     const title = computeTabTitle(titleState);
     if (title !== lastEmittedTitle) {
       lastEmittedTitle = title;
-      onTitleChange?.(title);
+      if (runtime?.onTitleChange) runtime.onTitleChange(title);
+      else onTitleChange?.(title);
     }
   }
 
@@ -162,7 +174,7 @@
   }
 
   function insertPathsAtCursor(paths: string[]): void {
-    if (!terminalId || paths.length === 0) return;
+    if (!(terminalId ?? runtime?.terminalId) || paths.length === 0) return;
     // terminal.paste() brackets the write only when the foreground program
     // has actually enabled bracketed-paste mode (DECSET 2004) — bracketing
     // unconditionally would leak the raw escape bytes into any program that
@@ -177,20 +189,53 @@
     titleState = { cwd, program: null, explicitTitle: null, explicitTitleIsFresh: false };
     lastEmittedTitle = computeTabTitle(titleState);
 
-    terminal = new Terminal({
-      cursorBlink: true,
-      fontFamily: "Menlo, Monaco, monospace",
-      fontSize: Math.round(BASE_TERMINAL_FONT_SIZE * get(zoom)),
-      theme: buildXtermTheme($themeStore),
-    });
-    fitAddon = new FitAddon();
-    terminal.loadAddon(fitAddon);
-    terminal.loadAddon(new SearchAddon());
-    terminal.open(container);
+    // A session keeps its xterm and PTY runtime when Svelte moves its tab
+    // from one panel's keyed block to another during a drop.
+    runtime = sessionId ? claimTerminalRuntime(sessionId, ownerToken) : undefined;
+    const inheritedRuntime = runtime !== undefined;
+    if (runtime) {
+      terminal = runtime.terminal;
+      fitAddon = runtime.fitAddon;
+      terminalId = runtime.terminalId;
+      if (terminal.element && terminal.element.parentElement !== container) {
+        container.appendChild(terminal.element);
+      }
+    } else {
+      terminal = new Terminal({
+        cursorBlink: true,
+        fontFamily: "Menlo, Monaco, monospace",
+        fontSize: Math.round(BASE_TERMINAL_FONT_SIZE * get(zoom)),
+        theme: buildXtermTheme($themeStore),
+      });
+      fitAddon = new FitAddon();
+      terminal.loadAddon(fitAddon);
+      terminal.loadAddon(new SearchAddon());
+      terminal.open(container);
+      runtime = sessionId
+        ? {
+            terminal,
+            fitAddon,
+            terminalId: undefined,
+            owner: ownerToken,
+          }
+        : undefined;
+      if (sessionId) registerTerminalRuntime(sessionId, runtime!);
+    }
+    if (runtime) {
+      runtime.owner = ownerToken;
+      runtime.onExit = onExit;
+      runtime.onTitleChange = onTitleChange;
+      terminalId = runtime.terminalId;
+      runtime.disposeExtras ??= () => {
+        titleChangeDisposable?.dispose();
+        if (runtime?.terminalId) void ptyKill(runtime.terminalId);
+      };
+    }
     fitAddon.fit();
     if (visible && active) terminal.focus();
 
-    // Never forward Cmd/Ctrl+B or Cmd/Ctrl+R to the shell: xterm has no
+    if (!inheritedRuntime) {
+      // Never forward Cmd/Ctrl+B or Cmd/Ctrl+R to the shell: xterm has no
     // native concept of "the menu accelerator already owns this key," so
     // without this guard a focused terminal would send Ctrl+R straight to
     // the pty as literal input, triggering the shell's reverse-i-search
@@ -233,7 +278,8 @@
       const cols = terminal.cols;
       const rows = terminal.rows;
       const id = await ptySpawn(cwd, cols, rows);
-      if (destroyed) {
+      const currentRuntime = getTerminalRuntime(sessionId) ?? runtime;
+      if (destroyed && (!currentRuntime || currentRuntime.owner === null)) {
         // The pane was torn down while ptySpawn was still in flight —
         // onDestroy ran before terminalId existed to guard on, so it never
         // killed this pty. This is the first and only point where the id is
@@ -244,6 +290,7 @@
         return;
       }
       terminalId = id;
+      if (runtime) runtime.terminalId = id;
       // Captured after ptySpawn resolves (not before) so the elapsed time
       // measures the pty's own lifetime, not this call's IPC round-trip;
       // performance.now() is monotonic, unlike Date.now(), so a backwards
@@ -251,11 +298,12 @@
       const spawnedAt = performance.now();
       try {
         await ptySubscribe(id, (event) => {
-          if (destroyed) return;
+          const current = getTerminalRuntime(sessionId) ?? runtime;
+          if (destroyed && (!current || current.owner === null)) return;
           if (event.type === "data") {
-            terminal.write(base64ToBytes(event.data));
+            (current?.terminal ?? terminal).write(base64ToBytes(event.data));
           } else if (event.type === "exit") {
-            onExit?.(performance.now() - spawnedAt);
+            (current?.onExit ?? onExit)?.(performance.now() - spawnedAt);
           } else if (event.type === "title") {
             dispatch({ type: "backendTitle", cwd: event.cwd, program: event.program });
           }
@@ -267,12 +315,14 @@
         // Otherwise it's a genuine failure and should surface as normal.
         if (!destroyed) throw error;
       }
-    })();
+      })();
+    }
 
     resizeObserver = new ResizeObserver(() => {
       fitAddon.fit();
-      if (terminalId) {
-        void ptyResize(terminalId, terminal.cols, terminal.rows);
+      const currentTerminalId = terminalId ?? runtime?.terminalId;
+      if (currentTerminalId) {
+        void ptyResize(currentTerminalId, terminal.cols, terminal.rows);
       }
     });
     resizeObserver.observe(container);
@@ -284,10 +334,15 @@
     destroyed = true;
     unregisterDropTarget?.();
     resizeObserver?.disconnect();
-    titleChangeDisposable?.dispose();
-    if (terminalId) {
-      void ptyKill(terminalId);
+    if (sessionId && runtime) {
+      releaseTerminalRuntime(sessionId, ownerToken, () => {
+        titleChangeDisposable?.dispose();
+        if (runtime?.terminalId) void ptyKill(runtime.terminalId);
+      });
+      return;
     }
+    titleChangeDisposable?.dispose();
+    if (terminalId) void ptyKill(terminalId);
     terminal?.dispose();
   });
 

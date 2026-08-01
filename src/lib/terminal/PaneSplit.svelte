@@ -3,6 +3,7 @@
   import { listLeaves } from "./paneTree";
   import { computeRects, computeResizers, type ResizerRect } from "./paneLayout";
   import TerminalPanel from "./TerminalPanel.svelte";
+  import { activeTabDrag, type TabDropTarget } from "../panes/tabDrag";
 
   let {
     tree,
@@ -16,6 +17,8 @@
     onSessionExit,
     onSetActiveTab,
     onTitleChange,
+    onReorderTab = () => {},
+    onDropTab = () => {},
     onResizeSplit,
   }: {
     tree: PaneNode;
@@ -29,6 +32,8 @@
     onSessionExit: (paneId: string, sessionId: string, elapsedMs: number) => void;
     onSetActiveTab: (paneId: string, sessionId: string) => void;
     onTitleChange: (paneId: string, sessionId: string, title: string) => void;
+    onReorderTab?: (paneId: string, sessionId: string, toIndex: number) => void;
+    onDropTab?: (paneId: string, sessionId: string, target: TabDropTarget) => void;
     onResizeSplit: (splitId: string, index: number, delta: number, containerSizePx: number) => void;
   } = $props();
 
@@ -88,6 +93,12 @@
     <div
       class="pane-leaf"
       class:active={leaf.id === activePaneId}
+      class:tab-drop-target-center={$activeTabDrag?.surface === "terminal" && $activeTabDrag.target?.paneId === leaf.id && $activeTabDrag.target.zone === "center"}
+      class:tab-drop-target-up={$activeTabDrag?.surface === "terminal" && $activeTabDrag.target?.paneId === leaf.id && $activeTabDrag.target.zone === "up"}
+      class:tab-drop-target-down={$activeTabDrag?.surface === "terminal" && $activeTabDrag.target?.paneId === leaf.id && $activeTabDrag.target.zone === "down"}
+      class:tab-drop-target-left={$activeTabDrag?.surface === "terminal" && $activeTabDrag.target?.paneId === leaf.id && $activeTabDrag.target.zone === "left"}
+      class:tab-drop-target-right={$activeTabDrag?.surface === "terminal" && $activeTabDrag.target?.paneId === leaf.id && $activeTabDrag.target.zone === "right"}
+      data-pane-id={leaf.id}
       style={`top: ${r.top}%; left: ${r.left}%; width: ${r.width}%; height: ${r.height}%`}
       onfocusin={() => onFocus(leaf.id)}
     >
@@ -102,6 +113,8 @@
           onSessionExit={(sessionId, elapsedMs) => onSessionExit(leaf.id, sessionId, elapsedMs)}
           onSetActiveTab={(sessionId) => onSetActiveTab(leaf.id, sessionId)}
           onTitleChange={(sessionId, title) => onTitleChange(leaf.id, sessionId, title)}
+          onReorderTab={(sessionId, toIndex) => onReorderTab(leaf.id, sessionId, toIndex)}
+          onDropTab={(sessionId, target) => onDropTab(leaf.id, sessionId, target)}
         />
       </div>
     </div>
@@ -138,6 +151,45 @@
     display: flex;
     flex-direction: column;
   }
+
+  .pane-leaf::after {
+    content: "";
+    position: absolute;
+    pointer-events: none;
+    z-index: 5;
+    border: 2px solid transparent;
+    background: transparent;
+  }
+
+  .pane-leaf.tab-drop-target-center::after {
+    inset: 2px;
+    border-color: var(--atrium-accent);
+    background: color-mix(in srgb, var(--atrium-accent) 8%, transparent);
+  }
+
+  .pane-leaf.tab-drop-target-up::after,
+  .pane-leaf.tab-drop-target-down::after {
+    left: 2px;
+    right: 2px;
+    height: 50%;
+    border-color: var(--atrium-accent);
+    background: color-mix(in srgb, var(--atrium-accent) 8%, transparent);
+  }
+
+  .pane-leaf.tab-drop-target-up::after { top: 2px; }
+  .pane-leaf.tab-drop-target-down::after { bottom: 2px; }
+
+  .pane-leaf.tab-drop-target-left::after,
+  .pane-leaf.tab-drop-target-right::after {
+    top: 2px;
+    bottom: 2px;
+    width: 50%;
+    border-color: var(--atrium-accent);
+    background: color-mix(in srgb, var(--atrium-accent) 8%, transparent);
+  }
+
+  .pane-leaf.tab-drop-target-left::after { left: 2px; }
+  .pane-leaf.tab-drop-target-right::after { right: 2px; }
 
   .pane-body {
     flex: 1;

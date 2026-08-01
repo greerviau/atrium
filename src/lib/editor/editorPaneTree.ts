@@ -84,6 +84,22 @@ export function moveTabInLeaf(tree: EditorPaneNode, leafId: string, path: string
   });
 }
 
+/** Moves a path from one leaf to another and selects it in the destination. */
+export function moveTabToLeaf(
+  tree: EditorPaneNode,
+  sourceLeafId: string,
+  targetLeafId: string,
+  path: string,
+): EditorPaneNode {
+  if (sourceLeafId === targetLeafId) return tree;
+  const source = findLeaf(tree, sourceLeafId);
+  const target = findLeaf(tree, targetLeafId);
+  if (!source || !target || !source.tabs.includes(path)) return tree;
+  const withoutSource = closeTabInLeaf(tree, sourceLeafId, path);
+  if (!withoutSource) return tree;
+  return addTabToLeaf(withoutSource, targetLeafId, path);
+}
+
 /**
  * Reconciles the tree against the current set of globally open paths
  * (`tabsState.tabs`), for the direction split panes add that a flat tab

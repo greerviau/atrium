@@ -14,7 +14,7 @@
   import DataPane from "./DataPane.svelte";
   import EditorSplitMenu from "./EditorSplitMenu.svelte";
   import { tooltip } from "../ui/tooltip";
-  import { beginTabDrag, draggingTabKey } from "./tabDrag";
+  import { beginTabDrag, draggingTabKey, type TabDropTarget } from "./tabDrag";
 
   /**
    * One leaf's full top bar (tab strip + controls) and its stack of
@@ -32,6 +32,7 @@
     onSetActiveTab,
     onCloseTab,
     onReorderTab,
+    onDropTab = () => {},
   }: {
     tree: EditorLeafPane;
     onSplit: (direction: SplitDirection) => void;
@@ -39,9 +40,11 @@
     // The tab's × button — a deliberate close of this leaf's own view of the path.
     onCloseTab: (path: string) => void;
     onReorderTab: (path: string, toIndex: number) => void;
+    onDropTab?: (path: string, target: TabDropTarget) => void;
   } = $props();
 
   let tabListEl: HTMLDivElement | undefined = $state();
+  let suppressClickPath = $state<string | null>(null);
 
   /**
    * The pane stack's own iteration order — deliberately NOT `tree.tabs` (the
@@ -86,7 +89,24 @@
           rect: el.getBoundingClientRect(),
         })),
       (draggedPath, toIndex) => onReorderTab(draggedPath, toIndex),
+      {
+        surface: "editor",
+        paneId: tree.id,
+        label: basename(path),
+        onDrop: (target) => onDropTab(path, target),
+        onDragEnd: (didDrag) => {
+          suppressClickPath = didDrag ? path : null;
+        },
+      },
     );
+  }
+
+  function onTabClick(path: string): void {
+    if (suppressClickPath === path) {
+      suppressClickPath = null;
+      return;
+    }
+    onSetActiveTab(path);
   }
 
   async function onTabKeyDown(event: KeyboardEvent, path: string): Promise<void> {
@@ -131,7 +151,7 @@
           class:dragging={$draggingTabKey === `${tree.id}:${path}`}
           data-tab-path={path}
           onpointerdown={(e) => onTabPointerDown(e, path)}
-          onclick={() => onSetActiveTab(path)}
+          onclick={() => onTabClick(path)}
           onkeydown={(e) => onTabKeyDown(e, path)}
           role="tab"
           tabindex="0"
@@ -259,7 +279,7 @@
   }
 
   .tab.dragging {
-    opacity: 0.6;
+    opacity: 0.2;
     cursor: grabbing;
     z-index: 1;
     position: relative;
