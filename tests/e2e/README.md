@@ -46,7 +46,7 @@ These are real-display, real-input-timing bugs that jsdom/vitest tests cannot ex
 
 `specs/horizontalRuleCursor.e2e.js` covers issue #366: open `horizontal-rule.md`, click rendered text below a horizontal rule, and confirm the cursor position remains on the clicked source line.
 
-`specs/issue359.e2e.js` covers issue #359: place the caret at the end of rendered markdown, click the terminal, and confirm focus leaves the editor for the terminal.
+`specs/issue359.e2e.js` covers issue #359: place the caret at a rendered Markdown visual wrap boundary, click the terminal, wait through CodeMirror's next measure cycle, and confirm the terminal retains focus while the preview hides its raw marker.
 
 `specs/keyboardShortcuts.e2e.js` covers issue #156's two kinds of shortcut:
 

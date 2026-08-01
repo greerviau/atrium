@@ -1,5 +1,5 @@
 diff --git a/node_modules/@codemirror/view/dist/index.cjs b/node_modules/@codemirror/view/dist/index.cjs
-index 0b15b00..14bd51f 100644
+index 0b15b00..3466821 100644
 --- a/node_modules/@codemirror/view/dist/index.cjs
 +++ b/node_modules/@codemirror/view/dist/index.cjs
 @@ -2981,6 +2981,34 @@ class DocView {
@@ -72,8 +72,19 @@ index 0b15b00..14bd51f 100644
      }
      updateEditContextFormatting(update) {
          this.editContextFormatting = this.editContextFormatting.map(update.changes);
+@@ -3124,7 +3158,9 @@ class DocView {
+             this.posFromDOM(sel.focusNode, sel.focusOffset) == cursor.head;
+     }
+     enforceCursorAssoc() {
+-        if (this.hasComposition)
++        // PATCH (atrium, issue #359): collapsing the DOM selection below focuses
++        // an unfocused contenteditable in WebKit, stealing focus from the terminal.
++        if (this.hasComposition || !this.view.hasFocus)
+             return;
+         let { view } = this, cursor = view.state.selection.main;
+         let sel = getSelection(view.root);
 diff --git a/node_modules/@codemirror/view/dist/index.js b/node_modules/@codemirror/view/dist/index.js
-index 3ca4e26..63abbc3 100644
+index 3ca4e26..549052d 100644
 --- a/node_modules/@codemirror/view/dist/index.js
 +++ b/node_modules/@codemirror/view/dist/index.js
 @@ -2977,6 +2977,34 @@ class DocView {
@@ -146,3 +157,14 @@ index 3ca4e26..63abbc3 100644
      }
      updateEditContextFormatting(update) {
          this.editContextFormatting = this.editContextFormatting.map(update.changes);
+@@ -3120,7 +3154,9 @@ class DocView {
+             this.posFromDOM(sel.focusNode, sel.focusOffset) == cursor.head;
+     }
+     enforceCursorAssoc() {
+-        if (this.hasComposition)
++        // PATCH (atrium, issue #359): collapsing the DOM selection below focuses
++        // an unfocused contenteditable in WebKit, stealing focus from the terminal.
++        if (this.hasComposition || !this.view.hasFocus)
+             return;
+         let { view } = this, cursor = view.state.selection.main;
+         let sel = getSelection(view.root);
