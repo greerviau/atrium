@@ -11,6 +11,7 @@ vi.mock("../../src/lib/terminal/TerminalPane.svelte", async () => {
 
 afterEach(() => {
   cleanup();
+  delete (document as unknown as { elementFromPoint?: unknown }).elementFromPoint;
 });
 
 const TWO_TABS: LeafPane = {
@@ -36,6 +37,17 @@ const baseProps = {
   onSetActiveTab: noop,
   onTitleChange: noop,
 };
+
+function pointerEvent(type: string, clientX: number, pointerId = 1): PointerEvent {
+  const event = new Event(type, { bubbles: true, cancelable: true }) as PointerEvent;
+  Object.defineProperties(event, {
+    button: { value: 0 },
+    clientX: { value: clientX },
+    clientY: { value: 5 },
+    pointerId: { value: pointerId },
+  });
+  return event;
+}
 
 describe("TerminalPanel", () => {
   it("renders one tab per session and shows only the active session's TerminalPane", () => {
@@ -64,6 +76,27 @@ describe("TerminalPanel", () => {
     await fireEvent.wheel(tabList, { deltaY: -50 });
 
     expect(tabList.scrollLeft).toBe(70);
+  });
+
+  it("dragging a tab reorders it after the pointer is released", () => {
+    const onReorderTab = vi.fn();
+    const { container } = render(TerminalPanel, { tree: TWO_TABS, ...baseProps, onReorderTab });
+    container.classList.add("terminal-area", "pane-leaf");
+    container.dataset.paneId = "p1";
+
+    const tabs = [...container.querySelectorAll<HTMLElement>('.tab-list .tab[role="tab"]')];
+    tabs.forEach((tab, index) => {
+      Object.defineProperty(tab, "getBoundingClientRect", {
+        value: () => ({ left: index * 50, right: index * 50 + 50, top: 0, bottom: 20, width: 50, height: 20 }),
+      });
+    });
+    Object.defineProperty(document, "elementFromPoint", { value: () => tabs[0], configurable: true });
+
+    tabs[0].dispatchEvent(pointerEvent("pointerdown", 10));
+    window.dispatchEvent(pointerEvent("pointermove", 80));
+    window.dispatchEvent(pointerEvent("pointerup", 80));
+
+    expect(onReorderTab).toHaveBeenCalledWith("s1", 1);
   });
 
   it("clicking a tab switches which TerminalPane is visible", async () => {

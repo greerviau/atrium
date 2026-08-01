@@ -34,11 +34,11 @@ function sameTarget(a: TabDropTarget | null, b: TabDropTarget | null): boolean {
 /**
  * Starts a pointer-driven tab gesture.
  *
- * A tab reorders live while the pointer is over its own center drop zone.
- * Moving over another pane's center moves it there on release; moving over an
- * edge creates a new split on that edge. The pointer is intentionally not
- * captured because a live keyed tab reorder can relocate the dragged element
- * in the DOM, which ends pointer capture in WebKit.
+ * The original tab stays in place while the pointer moves. Releasing over
+ * its own center drop zone reorders it once; moving over another pane's center
+ * moves it there; moving over an edge creates a new split on that edge. The
+ * pointer is intentionally not captured because the source pane can be
+ * removed by a drop, which ends pointer capture in WebKit.
  */
 export function beginTabDrag(
   tabEl: HTMLElement,
@@ -56,6 +56,7 @@ export function beginTabDrag(
   let dragging = false;
   let lastCommittedIndex: number | null = null;
   let currentTarget: TabDropTarget | null = null;
+  let lastPointerX = event.clientX;
 
   function targetIndex(pointerX: number): number {
     const others = getTabRects().filter((t) => t.path !== path);
@@ -72,7 +73,9 @@ export function beginTabDrag(
       if (Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_THRESHOLD_PX) return;
       dragging = true;
       draggingTabKey.set(key);
+      document.documentElement.classList.add("tab-drag-active");
     }
+    lastPointerX = e.clientX;
 
     if (options) {
       const target = resolveTabDropTarget(options.surface, e.clientX, e.clientY);
@@ -90,14 +93,12 @@ export function beginTabDrag(
     }
 
     e.preventDefault();
-    // Clear, re-measure, reapply because a preceding live reorder may have
-    // moved this keyed element to a new sibling position.
+    if (options) return;
+    // Legacy callers reorder live while dragging. The pane tab components use
+    // the preview-only path above so their source tabs stay stationary.
     tabEl.style.transform = "";
     const rect = tabEl.getBoundingClientRect();
     tabEl.style.transform = `translateX(${e.clientX - grabOffsetX - rect.left}px)`;
-    if (options && (!currentTarget || currentTarget.paneId !== options.paneId || currentTarget.zone !== "center")) {
-      return;
-    }
     const idx = targetIndex(e.clientX);
     if (idx !== lastCommittedIndex) {
       lastCommittedIndex = idx;
@@ -112,9 +113,14 @@ export function beginTabDrag(
     window.removeEventListener("blur", onBlur);
     tabEl.style.transform = "";
 
-    if (commit && dragging && options && currentTarget && !(currentTarget.paneId === options.paneId && currentTarget.zone === "center")) {
-      options.onDrop(currentTarget);
+    if (commit && dragging && options && currentTarget) {
+      if (currentTarget.paneId === options.paneId && currentTarget.zone === "center") {
+        onReorder(path, targetIndex(lastPointerX));
+      } else {
+        options.onDrop(currentTarget);
+      }
     }
+    document.documentElement.classList.remove("tab-drag-active");
     activeTabDrag.set(null);
     draggingTabKey.set(null);
     options?.onDragEnd?.(dragging);
@@ -142,6 +148,7 @@ export function beginTabDrag(
 export function clearTabDrag(): void {
   if (get(activeTabDrag)) activeTabDrag.set(null);
   draggingTabKey.set(null);
+  document.documentElement.classList.remove("tab-drag-active");
 }
 
 export type { TabDropTarget, TabDropZone, TabSurface } from "./tabDropTargets";

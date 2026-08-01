@@ -1,3 +1,8 @@
+html.tab-drag-active,
+html.tab-drag-active * {
+  cursor: pointer !important;
+}
+
 :root {
   /* Default (pre-JS-paint) token values, matching Atrium Dark. `applyThemeToDocument`
      overwrites all of these at runtime once the theme store resolves the active theme. */
