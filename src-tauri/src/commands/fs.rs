@@ -188,10 +188,9 @@ pub async fn fs_resolve_candidates(
     candidates: Vec<PathCandidate>,
 ) -> Result<Vec<Option<String>>, AppError> {
     let root = workspace(&state, &workspace_id)?.root().to_string();
-    Ok(candidates
-        .iter()
-        .map(|c| link_resolve::resolve_candidate(c, &root))
-        .collect())
+    tokio::task::spawn_blocking(move || link_resolve::resolve_candidates(&candidates, &root))
+        .await
+        .map_err(|err| AppError::Other(format!("file-path resolution task failed: {err}")))
 }
 
 /// Classifies each of `paths` as a directory (`true`) or not (`false`),

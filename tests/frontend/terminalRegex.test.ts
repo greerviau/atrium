@@ -30,6 +30,10 @@ describe("FILE_PATH_REGEX", () => {
     ["cat: '~/notes/todo.md': permission denied", ["'~/notes/todo.md'"]],
     ["I couldn't read pkg.json's contents", ["pkg.json"]],
     ["can't open src/main.rs's parent", ["src/main.rs"]],
+    ["run scripts/build:10", ["scripts/build:10"]],
+    ["open /workspace/bin/tool:4:2", ["/workspace/bin/tool:4:2"]],
+    ["failed in 'nested/build script':8", ["'nested/build script':8"]],
+    ["Makefile:10:2 failed", ["Makefile:10:2"]],
   ];
 
   it.each(cases)("matches candidates in %j", (line, expected) => {
