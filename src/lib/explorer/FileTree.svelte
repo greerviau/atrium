@@ -17,6 +17,7 @@
   import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
   import { dirOf } from "../util/path";
   import { SHORTCUT_LABELS } from "../shell/shortcutLabels";
+  import { draggingPath } from "./explorerDrag";
 
   // Mirrors `TerminalPane.svelte`'s own platform check: the file-explorer
   // shortcuts below need the same Cmd-on-Mac/Ctrl-elsewhere branching
@@ -290,6 +291,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="file-tree"
+  class:dragging={$draggingPath !== null}
   bind:this={treeEl}
   oncontextmenu={onEmptyAreaContextMenu}
   onkeydown={onTreeContainerKeydown}
@@ -337,6 +339,9 @@
     padding: 6px 0;
     -webkit-user-select: none;
     user-select: none;
+  }
+  .file-tree.dragging {
+    overflow-x: hidden;
   }
   .file-tree :global(input) {
     -webkit-user-select: text;
