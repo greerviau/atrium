@@ -1255,10 +1255,25 @@ mod tests {
             .unwrap();
 
         // Several backgrounded descendants so `kill_session`'s tree walk and
-        // signal loop have non-trivial work to do.
-        for _ in 0..5 {
-            manager.write(&terminal_a, "sleep 300 &\n").unwrap();
-        }
+        // signal loop have non-trivial work to do. Wait for the shell's own
+        // marker instead of assuming writes issued immediately after spawn
+        // have already been read and executed under concurrent test load.
+        let (channel, chunks) = data_chunks_channel();
+        manager.subscribe(&terminal_a, channel).unwrap();
+        manager
+            .write(
+                &terminal_a,
+                "for i in 1 2 3 4 5; do sleep 300 & done; printf 'atrium-%s\\n' descendants-ready\n",
+            )
+            .unwrap();
+        wait_for(
+            Duration::from_secs(10),
+            "shell never confirmed that background descendants were started",
+            || {
+                let output: Vec<u8> = chunks.lock().unwrap().iter().flatten().copied().collect();
+                String::from_utf8_lossy(&output).contains("atrium-descendants-ready")
+            },
+        );
 
         let shell_pid = manager
             .sessions
