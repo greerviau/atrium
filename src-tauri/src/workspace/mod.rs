@@ -190,8 +190,8 @@ pub trait Workspace: Send + Sync {
     /// browser when opened with nothing typed yet, the way telescope's
     /// `find_files` does.
     async fn find_files(&self, query: &str) -> Result<FileSearchResults, AppError>;
-    /// The workspace root, used by `fs_resolve_candidates`'s third resolution
-    /// step (relative to the workspace root).
+    /// The workspace root, used by `fs_resolve_candidates` for exact
+    /// root-relative resolution and unique workspace-suffix fallback.
     fn root(&self) -> &str;
     /// Resolves `path` (absolute, or relative to this workspace's root)
     /// against the root, rejecting anything that would escape it — the same
