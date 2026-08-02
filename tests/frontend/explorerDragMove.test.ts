@@ -158,6 +158,25 @@ describe("explorer drag-move", () => {
     expect(commands.fsListDir).toHaveBeenCalledWith("local", LIB); // the new parent
   });
 
+  it("disables horizontal explorer scrolling while a row is being dragged and restores it on release", async () => {
+    const { container } = await renderExpandedTree();
+    stubDropTargets(container);
+    const tree = container.querySelector(".file-tree") as HTMLElement;
+
+    expect(getComputedStyle(tree).overflow).toBe("auto");
+
+    dragTo(rowFor(container, SRC), Y.src, Y.lib);
+    await tick();
+
+    expect(getComputedStyle(tree).overflowX).toBe("hidden");
+
+    await pointerUp(Y.lib);
+    await tick();
+
+    expect(getComputedStyle(tree).overflow).toBe("auto");
+    expect(getComputedStyle(tree).overflowX).toBe("");
+  });
+
   it("does not start a drag (or move anything) when the pointer never crosses the threshold, and the row's click still toggles it", async () => {
     const { container } = await renderExpandedTree();
     stubDropTargets(container);
