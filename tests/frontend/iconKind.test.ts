@@ -36,6 +36,7 @@ const EXTENSION_CASES: Array<[string, IconKind]> = [
   ["photo.webp", "image"],
   ["favicon.ico", "image"],
   ["photo.bmp", "image"],
+  ["photo.avif", "image"],
 ];
 
 describe("iconKindFor: file extensions", () => {

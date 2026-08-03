@@ -29,6 +29,7 @@ import { markdownDefaultView, DEFAULT_MARKDOWN_VIEW } from "../../src/lib/stores
 import * as commands from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
+  fsCheckFileAccess: vi.fn(),
   fsReadFile: vi.fn(),
   fsWriteFile: vi.fn(),
   localWorkspaceId: () => "local",
@@ -114,7 +115,8 @@ describe("toggleMarkdownViewMode", () => {
 describe("openFile", () => {
   beforeEach(() => {
     tabsState.set({ tabs: [], activeTabPath: null });
-    vi.mocked(commands.fsReadFile).mockResolvedValue("# Hello");
+    vi.mocked(commands.fsCheckFileAccess).mockReset().mockResolvedValue(undefined);
+    vi.mocked(commands.fsReadFile).mockReset().mockResolvedValue("# Hello");
     markdownDefaultView.set(DEFAULT_MARKDOWN_VIEW);
   });
 
@@ -141,6 +143,18 @@ describe("openFile", () => {
     const tab = get(tabsState).tabs.find((t) => t.path === "/main.rs");
     expect(tab?.mode).toBe("code");
     expect(tab?.viewMode).toBeUndefined();
+  });
+
+  it("opens an image tab without reading binary bytes through the UTF-8 command", async () => {
+    await openFile("/images/photo.PNG");
+
+    expect(get(tabsState).tabs.find((t) => t.path === "/images/photo.PNG")).toMatchObject({
+      mode: "image",
+      savedDoc: "",
+      isDirty: false,
+    });
+    expect(commands.fsCheckFileAccess).toHaveBeenCalledWith("local", "/images/photo.PNG");
+    expect(commands.fsReadFile).not.toHaveBeenCalled();
   });
 
   it("records the opened path in the workspace's recent-files list when a workspace root is set", async () => {
@@ -248,14 +262,24 @@ describe("openFileReportingErrors", () => {
     errorToast.set(null);
   });
 
-  it("shows an error toast when the underlying open rejects", async () => {
-    vi.mocked(commands.fsReadFile).mockRejectedValueOnce(new Error("file is not valid UTF-8: /img.png"));
+  it("shows an error toast when the underlying text-file open rejects", async () => {
+    vi.mocked(commands.fsReadFile).mockRejectedValueOnce(new Error("file is not valid UTF-8: /archive.bin"));
+
+    openFileReportingErrors("/archive.bin");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(get(errorToast)).toBe("Couldn't open file: file is not valid UTF-8: /archive.bin");
+  });
+
+  it("shows an error toast when image access validation rejects", async () => {
+    vi.mocked(commands.fsCheckFileAccess).mockRejectedValueOnce(new Error("image disappeared"));
 
     openFileReportingErrors("/img.png");
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(get(errorToast)).toBe("Couldn't open file: file is not valid UTF-8: /img.png");
+    expect(get(errorToast)).toBe("Couldn't open file: image disappeared");
   });
 
   it("leaves the error toast untouched when the open succeeds", async () => {
@@ -273,6 +297,17 @@ describe("reconcileExternalChange / reloadFromDisk / dismissConflict", () => {
   beforeEach(() => {
     tabsState.set({ tabs: [], activeTabPath: null });
     vi.mocked(commands.fsReadFile).mockReset();
+  });
+
+  it("does not route an image modification through the UTF-8 text reader", async () => {
+    tabsState.set({
+      tabs: [codeTab("/photo.png", { mode: "image" })],
+      activeTabPath: "/photo.png",
+    });
+
+    await reconcileExternalChange("/photo.png");
+
+    expect(commands.fsReadFile).not.toHaveBeenCalled();
   });
 
   it("reconcileExternalChange silently updates savedDoc for a clean tab and never sets hasExternalConflict", async () => {

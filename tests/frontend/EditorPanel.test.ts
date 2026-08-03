@@ -13,6 +13,11 @@ vi.mock("../../src/lib/editor/EditorPane.svelte", async () => {
   return { default: mod.default };
 });
 
+vi.mock("../../src/lib/editor/ImagePane.svelte", async () => {
+  const mod = await import("./ImagePaneStub.svelte");
+  return { default: mod.default };
+});
+
 afterEach(() => {
   cleanup();
   tabsState.set({ tabs: [], activeTabPath: null });
@@ -101,6 +106,17 @@ describe("EditorPanel", () => {
     const { container } = render(EditorPanel, { tree, ...baseProps });
 
     expect(container.querySelectorAll(".tab-view-mode")).toHaveLength(1);
+  });
+
+  it("routes image tabs to ImagePane instead of EditorPane", () => {
+    tabsState.set({ tabs: [tab("/photo.png", { mode: "image" })], activeTabPath: "/photo.png" });
+    const tree: EditorLeafPane = { type: "leaf", id: "p1", tabs: ["/photo.png"], activeTabPath: "/photo.png" };
+    const { container } = render(EditorPanel, { tree, ...baseProps });
+
+    const imagePane = container.querySelector(".image-pane-stub");
+    expect(imagePane?.getAttribute("data-file-path")).toBe("/photo.png");
+    expect(imagePane?.getAttribute("data-workspace-id")).toBe("local");
+    expect(container.querySelector(".editor-pane-stub")).toBeNull();
   });
 
   it("renders the split button inside .tab-strip-controls, with no new-tab button", () => {

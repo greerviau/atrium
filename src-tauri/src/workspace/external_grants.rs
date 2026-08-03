@@ -185,7 +185,7 @@ impl ExternalGrants {
     }
 
     /// The directories of every currently-granted file, for the read-only
-    /// markdown-asset extension (§4.8, MF6) and for the change-detection
+    /// image-asset extension (§4.8, MF6) and for the change-detection
     /// watcher (§5.2, MF5) — both need "which directories currently matter"
     /// without either duplicating `ExternalGrants`' own bookkeeping.
     fn granted_directories(&self) -> Vec<PathBuf> {
@@ -212,7 +212,7 @@ impl ExternalGrants {
             .map(|(key, _)| key.clone())
     }
 
-    /// The read-only markdown-asset extension (§4.8, MF6): whether
+    /// The read-only image-asset extension (§4.8, MF6): whether
     /// `candidate` (already resolved to an absolute path by the frontend,
     /// same as every other `atriumasset://` request) sits at or under the
     /// directory of some currently-granted file, AND has an image
@@ -227,8 +227,9 @@ impl ExternalGrants {
     /// sit directly in a shallow directory made everything below it —
     /// arbitrary file types, arbitrarily deep — resolvable through this
     /// protocol. The extension allowlist and the depth floor below both
-    /// exist specifically to bound that back down to "this markdown file's
-    /// own local images," which is the only thing this mechanism is for.
+    /// exist specifically to bound that back down to image files beneath a
+    /// granted file's own directory, which is the only thing this mechanism
+    /// serves to the renderer.
     pub async fn resolve_asset(&self, candidate: &str) -> Option<PathBuf> {
         // Canonicalize FIRST, then take the extension from the RESOLVED
         // path — never from `candidate` itself. Checking the raw string's
@@ -270,13 +271,13 @@ fn asset_root_permits(candidate: &Path, granted_dirs: &[PathBuf]) -> bool {
         .any(|dir| candidate.starts_with(dir))
 }
 
-/// Extensions this app's markdown image rendering can ever actually
-/// request (`resolveImageSrc`, `markdown/widgets.ts`) — deliberately
-/// narrow, since `resolve_asset`'s whole subtree grant exists only to let
-/// a granted markdown file's own local `<img>` references resolve, never
-/// as a general "read anything under this directory" allowance (MF-C).
-const ASSET_EXTENSION_ALLOWLIST: &[&str] =
-    &["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif"];
+/// Extensions the image pane and rendered Markdown can request through the
+/// asset protocol. Deliberately narrow: `resolve_asset` permits only image
+/// files below a granted file's directory, never general reads from that
+/// subtree (MF-C).
+const ASSET_EXTENSION_ALLOWLIST: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif", "ico",
+];
 
 /// A granted directory must have more path components than this to be used
 /// as an asset-resolution root — refuses the degenerate case where a
@@ -669,6 +670,18 @@ mod tests {
 
         let resolved = grants.resolve_asset(img.to_str().unwrap()).await;
         assert_eq!(resolved, Some(std::fs::canonicalize(&img).unwrap()));
+    }
+
+    #[tokio::test]
+    async fn resolve_asset_authorizes_a_granted_ico_file_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let icon = dir.path().join("favicon.ico");
+        write(&icon, "ico bytes");
+        let grants = ExternalGrants::new();
+        grants.grant(icon.to_str().unwrap()).await.unwrap();
+
+        let resolved = grants.resolve_asset(icon.to_str().unwrap()).await;
+        assert_eq!(resolved, Some(std::fs::canonicalize(&icon).unwrap()));
     }
 
     #[tokio::test]

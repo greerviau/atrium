@@ -115,6 +115,11 @@ export function fsReadFile(workspaceId: string, path: string): Promise<string> {
   return invoke("fs_read_file", { workspaceId, path });
 }
 
+/** Checks that `path` is an existing regular file readable through `workspaceId`, without transferring its contents. */
+export function fsCheckFileAccess(workspaceId: string, path: string): Promise<void> {
+  return invoke("fs_check_file_access", { workspaceId, path });
+}
+
 export interface DataQueryResult {
   columns: string[];
   rows: Array<Array<string | null>>;

@@ -57,6 +57,24 @@ describe("markdown live preview", () => {
   });
 });
 
+describe("image viewer", () => {
+  it("opens an image file in a dedicated pane", async () => {
+    await openWorkspace(fixturesDir);
+
+    const fileNode = await $("//span[@class='name' and text()='pixel.png']");
+    await fileNode.waitForExist({ timeout: 10000 });
+    await fileNode.click();
+
+    const image = await $(".image-pane img");
+    await image.waitForExist({ timeout: 5000 });
+    await browser.waitUntil(
+      async () => (await image.getProperty("naturalWidth")) > 0,
+      { timeout: 5000, timeoutMsg: "expected pixel.png to load through the Atrium asset protocol" },
+    );
+    await expect($(".tab.active .tab-name")).toHaveText("pixel.png");
+  });
+});
+
 describe("terminal", () => {
   it("runs a command and renders its output", async () => {
     const newTerminalButton = await $(".new-tab");

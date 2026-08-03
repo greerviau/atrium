@@ -1020,6 +1020,19 @@ impl Workspace for LocalWorkspace {
         Ok(entries)
     }
 
+    async fn check_file_access(&self, path: &str) -> Result<(), AppError> {
+        let file = self.resolve_read_target(path).await?;
+        let metadata = tokio::fs::metadata(&file)
+            .await
+            .map_err(|e| map_io_err(e, path))?;
+        if !metadata.is_file() {
+            return Err(AppError::InvalidPath(format!(
+                "'{path}' is not a regular file"
+            )));
+        }
+        Ok(())
+    }
+
     /// Reads `path`'s entire contents as UTF-8. Rejects files over
     /// `MAX_READABLE_FILE_SIZE_BYTES` with `AppError::FileTooLarge`, checked
     /// via a cheap `stat` before the read rather than reading-then-discarding.
@@ -1424,6 +1437,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(ws.read_file("link.txt").await.unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn check_file_access_accepts_a_binary_file_without_decoding_it() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("photo.png"), [0xff, 0x00, 0x80]).unwrap();
+        let ws = workspace(dir.path());
+
+        ws.check_file_access("photo.png").await.unwrap();
     }
 
     #[tokio::test]

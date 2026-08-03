@@ -17,6 +17,7 @@ Atrium fixes all that by combining a rendered markdown editor with a simple IDE.
 - **Editable rendered markdown.** No preview pane, no switching.
 - **A real code editor.** Syntax highlighting, search, split panes, and draggable tabs that move between panes or create splits.
 - **Tabular data inspection.** CSV, TSV, and Parquet files open in a queryable data grid with configurable pagination.
+- **Built-in image viewing.** Common image formats open directly in centered, fit-to-pane previews.
 - **Clickable file paths in terminal output.** `nested/spec.md:42` opens at that line even when it is only a uniquely matching suffix of the workspace path.
 - **Git worktree and branch switching.** The title bar shows the current worktree and branch and lets you switch between them.
 

@@ -55,8 +55,8 @@ async fn resolve_from_workspaces(
 /// `percent-encoding` crate). Hand-rolled here instead of depending on that
 /// crate directly: it's only reachable transitively through `tauri`/`url`
 /// and isn't re-exported by either, so using it would mean a new Cargo.toml
-/// dependency. `convertFileSrc` (the frontend's only caller) percent-encodes
-/// the path via `encodeURIComponent`, so this must undo exactly that or any
+/// dependency. The frontend's `convertFileSrc` calls percent-encode the path
+/// via `encodeURIComponent`, so this must undo exactly that or any
 /// workspace/file path containing a space or non-ASCII character would fail
 /// to resolve.
 fn percent_decode(encoded: &str) -> String {

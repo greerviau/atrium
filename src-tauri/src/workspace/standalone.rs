@@ -186,6 +186,23 @@ impl Workspace for StandaloneWorkspace {
         )))
     }
 
+    async fn check_file_access(&self, path: &str) -> Result<(), AppError> {
+        let Some(target) = self.external_grants.resolve_granted(path).await? else {
+            return Err(Self::no_root_error(format!(
+                "'{path}' is not a granted external file"
+            )));
+        };
+        let metadata = tokio::fs::metadata(&target)
+            .await
+            .map_err(|e| map_io_err(e, path))?;
+        if !metadata.is_file() {
+            return Err(AppError::InvalidPath(format!(
+                "'{path}' is not a regular file"
+            )));
+        }
+        Ok(())
+    }
+
     /// Reads `path`'s entire contents as UTF-8, authorized only via an
     /// explicit `ExternalGrants` entry — there is no root to fall back to.
     /// Applies the same `MAX_READABLE_FILE_SIZE_BYTES` guard `LocalWorkspace`
@@ -390,6 +407,19 @@ mod tests {
         assert_eq!(ws.read_file(&key).await.unwrap(), "original");
         ws.write_file(&key, "updated").await.unwrap();
         assert_eq!(ws.read_file(&key).await.unwrap(), "updated");
+    }
+
+    #[tokio::test]
+    async fn check_file_access_accepts_a_granted_binary_file_without_decoding_it() {
+        let outside = tempfile::tempdir().unwrap();
+        let file = outside.path().join("photo.png");
+        std::fs::write(&file, [0xff, 0x00, 0x80]).unwrap();
+
+        let ws = StandaloneWorkspace::new();
+        let key = file.to_str().unwrap().to_string();
+        ws.grant_external_file(&key).await.unwrap();
+
+        ws.check_file_access(&key).await.unwrap();
     }
 
     // Test 2(b) — a real watcher test against `StandaloneWorkspace` directly:

@@ -47,7 +47,7 @@
     type TableEditContext,
   } from "./markdown/tableEdit";
   import { tableContextFromHandleElement } from "./markdown/tableHandles";
-  import { codeExtensions } from "./codeExtensions";
+  import { codeExtensions, type PaneMode } from "./codeExtensions";
   import { setCursorPosition, clearCursorPosition, type CursorPosition } from "../stores/editorStatus";
   import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
   import { revealInFinder } from "../ipc/reveal";
@@ -118,7 +118,7 @@
   let menu = $state<ContextMenuState | null>(null);
 
   function viewModeExtensions(
-    mode: "code" | "markdown" | "data",
+    mode: PaneMode,
     viewMode: "rendered" | "source" | undefined,
     showLineNumbers: boolean,
   ): Extension[] {
@@ -139,7 +139,7 @@
     return enabled ? EditorView.lineWrapping : [];
   }
 
-  function wordWrapAllowedFor(mode: "markdown" | "code" | "data"): boolean {
+  function wordWrapAllowedFor(mode: PaneMode): boolean {
     return mode === "code";
   }
 
@@ -197,7 +197,7 @@
   // so the minimap's scroll-position overlay and content no longer line up
   // with the pane's real rendered layout. An actively wrong minimap is worse
   // than no minimap, so markdown panes never show one, in either view mode.
-  function minimapAllowedFor(mode: "markdown" | "code" | "data"): boolean {
+  function minimapAllowedFor(mode: PaneMode): boolean {
     return mode === "code";
   }
 

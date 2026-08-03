@@ -1,4 +1,5 @@
 import { extensionOf } from "../../util/path";
+import { isImagePath } from "../../editor/imageFormats";
 
 export type IconKind =
   | "folder-closed"
@@ -23,6 +24,7 @@ export function iconKindFor(entry: { isDir: boolean; name: string }, expanded: b
   if (entry.isDir) {
     return expanded ? "folder-open" : "folder-closed";
   }
+  if (isImagePath(entry.name)) return "image";
   switch (extensionOf(entry.name)) {
     case "md":
     case "markdown":
@@ -58,15 +60,6 @@ export function iconKindFor(entry: { isDir: boolean; name: string }, expanded: b
       return "shell";
     case "toml":
       return "toml";
-    case "png":
-    case "jpg":
-    case "jpeg":
-    case "gif":
-    case "svg":
-    case "webp":
-    case "ico":
-    case "bmp":
-      return "image";
     default:
       return "generic";
   }

@@ -45,19 +45,19 @@ describe("FileTreeNode: recent-files write path", () => {
     expect(getRecentFiles(ROOT)).toEqual([`${ROOT}/a.txt`]);
   });
 
-  it("shows an error toast when clicking a file that fails to open (e.g. a binary file), instead of failing silently", async () => {
+  it("shows an error toast when clicking an unsupported binary file that fails to open, instead of failing silently", async () => {
     vi.mocked(commands.fsListDir).mockResolvedValueOnce([
-      { name: "image.png", path: `${ROOT}/image.png`, isDir: false, isSymlink: false },
+      { name: "archive.bin", path: `${ROOT}/archive.bin`, isDir: false, isSymlink: false },
     ]);
     vi.mocked(commands.fsReadFile).mockRejectedValueOnce({
       code: "NOT_UTF8",
-      message: `file is not valid UTF-8: ${ROOT}/image.png`,
+      message: `file is not valid UTF-8: ${ROOT}/archive.bin`,
     });
 
     const { findByText } = render(FileTree);
-    await fireEvent.click(await findByText("image.png"));
+    await fireEvent.click(await findByText("archive.bin"));
     await vi.waitFor(() => expect(get(errorToast)).not.toBeNull());
 
-    expect(get(errorToast)).toContain(`file is not valid UTF-8: ${ROOT}/image.png`);
+    expect(get(errorToast)).toContain(`file is not valid UTF-8: ${ROOT}/archive.bin`);
   });
 });

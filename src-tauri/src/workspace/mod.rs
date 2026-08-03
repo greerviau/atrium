@@ -152,6 +152,11 @@ pub fn is_default_ignored(name: &str) -> bool {
 #[async_trait]
 pub trait Workspace: Send + Sync {
     async fn list_dir(&self, path: &str) -> Result<Vec<DirEntry>, AppError>;
+    /// Checks that `path` resolves to an existing regular file under this
+    /// workspace's normal read-authorization boundary without reading its
+    /// contents. Binary-backed panes use this before loading through their
+    /// dedicated query or asset path.
+    async fn check_file_access(&self, path: &str) -> Result<(), AppError>;
     async fn read_file(&self, path: &str) -> Result<String, AppError>;
     /// Runs a read-only query against a CSV, TSV, or Parquet file after
     /// applying the implementation's normal read authorization.

@@ -12,13 +12,14 @@
   } from "../stores/tabs";
   import EditorPane from "./EditorPane.svelte";
   import DataPane from "./DataPane.svelte";
+  import ImagePane from "./ImagePane.svelte";
   import EditorSplitMenu from "./EditorSplitMenu.svelte";
   import { tooltip } from "../ui/tooltip";
   import { beginTabDrag, draggingTabKey, type TabDropTarget } from "./tabDrag";
 
   /**
-   * One leaf's full top bar (tab strip + controls) and its stack of
-   * `EditorPane` instances, one per open path in this leaf — `hidden`
+   * One leaf's full top bar (tab strip + controls) and its stack of editor,
+   * data, or image panes, one per open path in this leaf; `hidden`
    * toggled by `tree.activeTabPath` so switching tabs within this panel
    * never destroys/recreates an `EditorView`. Modeled on the terminal's own
    * `TerminalPanel.svelte`; every callback here is scoped to this leaf, the
@@ -214,6 +215,8 @@
         {/if}
         {#if tab?.mode === "data"}
           <DataPane filePath={path} workspaceId={tab.workspaceId} />
+        {:else if tab?.mode === "image"}
+          <ImagePane filePath={path} workspaceId={tab.workspaceId} />
         {:else}
           <EditorPane filePath={path} paneId={tree.id} />
         {/if}

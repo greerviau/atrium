@@ -118,6 +118,17 @@ pub async fn fs_read_file(
 }
 
 #[tauri::command]
+pub async fn fs_check_file_access(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    path: String,
+) -> Result<(), AppError> {
+    workspace(&state, &workspace_id)?
+        .check_file_access(&path)
+        .await
+}
+
+#[tauri::command]
 pub async fn fs_write_file(
     state: State<'_, AppState>,
     workspace_id: String,
