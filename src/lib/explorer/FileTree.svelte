@@ -18,6 +18,7 @@
   import { dirOf } from "../util/path";
   import { SHORTCUT_LABELS } from "../shell/shortcutLabels";
   import { draggingPath } from "./explorerDrag";
+  import { contiguousPathSelection } from "./rangeSelection";
 
   // Mirrors `TerminalPane.svelte`'s own platform check: the file-explorer
   // shortcuts below need the same Cmd-on-Mac/Ctrl-elsewhere branching
@@ -76,9 +77,9 @@
 
   // `focusedPath` can go stale: the row it names can stop existing (deleted,
   // renamed, refreshed out from under it) without anything reconciling it,
-  // and since a row's own `tabindex`/`aria-selected` are keyed off whichever
-  // path this resolves to, a dangling `focusedPath` would otherwise drop the
-  // entire explorer out of the tab sequence (every row would read `-1`, and
+  // and since a row's own `tabindex` is keyed off whichever path this
+  // resolves to, a dangling `focusedPath` would otherwise drop the entire
+  // explorer out of the tab sequence (every row would read `-1`, and
   // `.file-tree` itself is `tabindex="-1"`). Rendering always goes through
   // this derived, guaranteed-valid projection instead — falling back to the
   // first visible row (the root) whenever the stored path isn't currently
@@ -87,13 +88,39 @@
   let activePath = $derived(
     visibleRows.some((row) => row.path === focusedPath) ? focusedPath : (visibleRows[0]?.path ?? null),
   );
+  // Range selection follows the rendered, expansion-aware row order. Arrow
+  // navigation and unmodified clicks collapse the selection to one row.
+  let selectionAnchorPath = $state<string | null>(null);
+  let explicitSelectedPaths = $state<Set<string>>(new Set());
+  let selectedPaths = $derived.by(() => {
+    const visiblePaths = new Set(visibleRows.map((row) => row.path));
+    const selected = new Set([...explicitSelectedPaths].filter((path) => visiblePaths.has(path)));
+    if (selected.size > 0) return selected;
+    return activePath === null ? new Set<string>() : new Set([activePath]);
+  });
 
   function onFocusRow(path: string): void {
     focusedPath = path;
   }
 
+  function onSelectRow(path: string, extendSelection: boolean): void {
+    const anchorPath = selectionAnchorPath ?? activePath;
+    focusedPath = path;
+    if (!extendSelection) {
+      selectionAnchorPath = path;
+      explicitSelectedPaths = new Set([path]);
+      return;
+    }
+
+    const visiblePaths = visibleRows.map((row) => row.path);
+    explicitSelectedPaths = contiguousPathSelection(visiblePaths, anchorPath, path);
+    selectionAnchorPath = anchorPath !== null && visiblePaths.includes(anchorPath) ? anchorPath : path;
+  }
+
   async function moveFocusTo(path: string): Promise<void> {
     focusedPath = path;
+    selectionAnchorPath = path;
+    explicitSelectedPaths = new Set([path]);
     await tick();
     Array.from(treeEl.querySelectorAll<HTMLElement>(".row[data-path]")).find(
       (row) => row.dataset.path === path,
@@ -298,8 +325,8 @@
   tabindex="-1"
 >
   {#if $fileTree.root}
-    <div role="tree" aria-label="File Explorer">
-      <FileTreeNode node={$fileTree.root} focusedPath={activePath} {onFocusRow} />
+    <div role="tree" aria-label="File Explorer" aria-multiselectable="true">
+      <FileTreeNode node={$fileTree.root} focusedPath={activePath} {selectedPaths} {onFocusRow} {onSelectRow} />
     </div>
   {/if}
 </div>

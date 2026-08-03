@@ -14,12 +14,16 @@
     node,
     depth = 0,
     focusedPath = null,
+    selectedPaths = new Set<string>(),
     onFocusRow = () => {},
+    onSelectRow = () => {},
   }: {
     node: TreeNode;
     depth?: number;
     focusedPath?: string | null;
+    selectedPaths?: Set<string>;
     onFocusRow?: (path: string) => void;
+    onSelectRow?: (path: string, extendSelection: boolean) => void;
   } = $props();
 
   // Mirrors `TerminalPane.svelte`'s own platform check: the file-explorer
@@ -33,16 +37,21 @@
   let rowEl: HTMLDivElement;
   let justDragged = false;
 
-  function onClick(): void {
-    if (justDragged) {
-      justDragged = false;
-      return;
-    }
+  function activate(): void {
     if (node.entry.isDir) {
       void toggleExpanded(node);
     } else {
       openFileReportingErrors(node.entry.path);
     }
+  }
+
+  function onClick(event: MouseEvent): void {
+    if (justDragged) {
+      justDragged = false;
+      return;
+    }
+    onSelectRow(node.entry.path, event.shiftKey);
+    if (!event.shiftKey) activate();
   }
 
   function onContextMenu(event: MouseEvent): void {
@@ -63,7 +72,7 @@
   function onKeydown(event: KeyboardEvent): void {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      onClick();
+      activate();
       return;
     }
     const hasModifier = isMacPlatform ? event.metaKey : event.ctrlKey && !event.metaKey;
@@ -120,7 +129,7 @@
     onpointerdown={isEditing ? undefined : onRowPointerDown}
     onfocus={() => onFocusRow(node.entry.path)}
     role="treeitem"
-    aria-selected={focusedPath === node.entry.path}
+    aria-selected={selectedPaths.has(node.entry.path)}
     aria-expanded={node.entry.isDir ? node.expanded : undefined}
     aria-level={depth + 1}
     tabindex={focusedPath === node.entry.path ? 0 : -1}
@@ -150,7 +159,7 @@
         />
       {/if}
       {#each node.children.slice(0, dirEnd) as child (child.entry.path)}
-        <FileTreeNode node={child} depth={depth + 1} {focusedPath} {onFocusRow} />
+        <FileTreeNode node={child} depth={depth + 1} {focusedPath} {selectedPaths} {onFocusRow} {onSelectRow} />
       {/each}
       {#if $pendingCreate?.parentPath === node.entry.path && !$pendingCreate.isDir}
         <NewEntryRow
@@ -161,7 +170,7 @@
         />
       {/if}
       {#each node.children.slice(dirEnd) as child (child.entry.path)}
-        <FileTreeNode node={child} depth={depth + 1} {focusedPath} {onFocusRow} />
+        <FileTreeNode node={child} depth={depth + 1} {focusedPath} {selectedPaths} {onFocusRow} {onSelectRow} />
       {/each}
     </div>
   {/if}
@@ -187,6 +196,9 @@
   .row:hover {
     background: var(--atrium-bg-hover);
   }
+  .row[aria-selected="true"] {
+    background: var(--atrium-selection-bg);
+  }
   /* Plain `:focus`, not `:focus-visible` — this row is a keyboard-shortcut
      target (New/Rename/Delete/Reveal act on whichever row holds focus), so
      it must paint regardless of whether focus arrived via click or Tab.
@@ -197,7 +209,7 @@
   .row:focus {
     outline: 1px solid var(--atrium-accent);
     outline-offset: -1px;
-    background: var(--atrium-bg-hover);
+    background: var(--atrium-selection-bg);
   }
   .row.drop-target-active {
     outline: 2px solid var(--atrium-accent);
