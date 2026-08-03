@@ -190,6 +190,28 @@ describe("FileTree: keyboard navigation and ARIA tree semantics (issue #266)", (
     });
   });
 
+  it("shift-click selects every visible row between the anchor and target without activating the target", async () => {
+    const { container } = await renderTree();
+    const tree = container.querySelector('[role="tree"]');
+
+    await fireEvent.click(rowFor(container, SRC));
+    await vi.waitFor(() => expect(container.querySelector(`.row[data-path="${INDEX_TS}"]`)).toBeTruthy());
+    await fireEvent.click(rowFor(container, A_TXT), { shiftKey: true });
+
+    expect(tree?.getAttribute("aria-multiselectable")).toBe("true");
+    expect(rowFor(container, ROOT).getAttribute("aria-selected")).toBe("false");
+    expect(rowFor(container, SRC).getAttribute("aria-selected")).toBe("true");
+    expect(rowFor(container, INDEX_TS).getAttribute("aria-selected")).toBe("true");
+    expect(rowFor(container, A_TXT).getAttribute("aria-selected")).toBe("true");
+    expect(commands.fsReadFile).not.toHaveBeenCalled();
+
+    await fireEvent.click(rowFor(container, SRC));
+
+    expect(rowFor(container, ROOT).getAttribute("aria-selected")).toBe("false");
+    expect(rowFor(container, SRC).getAttribute("aria-selected")).toBe("true");
+    expect(rowFor(container, A_TXT).getAttribute("aria-selected")).toBe("false");
+  });
+
   it("sets aria-level to nesting depth (1-based) and wraps a directory's children in role=group", async () => {
     const { container } = await renderTree();
 

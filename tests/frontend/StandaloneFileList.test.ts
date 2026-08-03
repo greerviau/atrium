@@ -122,6 +122,31 @@ describe("StandaloneFileList (issue #325)", () => {
     expect(activeTabPath()).toBe(OTHER);
   });
 
+  it("shift-click selects the contiguous row range without activating the target", async () => {
+    const third = "/tmp/third.md";
+    tabsState.set({
+      tabs: [standaloneTab(NOTE), standaloneTab(OTHER), standaloneTab(third)],
+      activeTabPath: NOTE,
+    });
+    const { container } = render(StandaloneFileList);
+
+    await fireEvent.click(rowFor(container, NOTE));
+    await fireEvent.click(rowFor(container, third), { shiftKey: true });
+
+    expect(container.querySelector('[role="tree"]')?.getAttribute("aria-multiselectable")).toBe("true");
+    expect(rowFor(container, NOTE).getAttribute("aria-selected")).toBe("true");
+    expect(rowFor(container, OTHER).getAttribute("aria-selected")).toBe("true");
+    expect(rowFor(container, third).getAttribute("aria-selected")).toBe("true");
+    expect(activeTabPath()).toBe(NOTE);
+
+    await fireEvent.click(rowFor(container, OTHER));
+
+    expect(rowFor(container, NOTE).getAttribute("aria-selected")).toBe("false");
+    expect(rowFor(container, OTHER).getAttribute("aria-selected")).toBe("true");
+    expect(rowFor(container, third).getAttribute("aria-selected")).toBe("false");
+    expect(activeTabPath()).toBe(OTHER);
+  });
+
   // Test 17 (§9.3) — keyboard/ARIA parity with the single-level subset of
   // FileTree's own semantics (#333): role="tree"/"treeitem", roving
   // tabindex starting at the first row, Up/Down/Home/End movement, no
