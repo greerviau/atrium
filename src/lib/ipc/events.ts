@@ -49,10 +49,10 @@ export function onMenuEvent(
 }
 
 /**
- * A path the OS resolved while the app was already running: a macOS
- * Dock-menu pick (always a folder), or `RunEvent::Opened` — a system-level
- * "Open Recent" pick or a real "Open With Atrium" (issue #325), either of
- * which may now be a file, not a folder. The handler classifies which
+ * A path the OS resolved while the app was already running: a macOS Dock
+ * menu or `RunEvent::Opened` request, or a Linux/Windows launch argument
+ * forwarded by the secondary process. The path may be a file or folder;
+ * the handler classifies which
  * before deciding what to do with it (`App.svelte`'s `doHandleOsOpenPath`).
  */
 export function onDockOpenPath(handler: (path: string) => void): Promise<UnlistenFn> {

@@ -23,8 +23,9 @@ const RECENT_DROP_WINDOW: Duration = Duration::from_secs(10);
 /// an arbitrary path, with nothing enforcing that a human actually dragged
 /// that file in or the OS was actually asked to open it. `AppState.recent_drop`
 /// is written only by `main.rs`'s own `WindowEvent::DragDrop` handler, and
-/// the OS-open provenance record only by `macos_dock::open_paths` via
-/// `launch_open::record_os_open`, both on the Rust side, which no
+/// the OS-open provenance record only by the macOS open event or a verified
+/// process launch path via `launch_open::record_os_open`, all on the Rust
+/// side, which no
 /// renderer-side bug alone can fabricate.
 ///
 /// Deliberately not single-use/consumed-on-check: the most recent real
@@ -44,8 +45,9 @@ const RECENT_DROP_WINDOW: Duration = Duration::from_secs(10);
 /// from EITHER trusted origin. The two origins are NOT equally strong —
 /// `recent_drop` requires a physical drag gesture on this window; the
 /// OS-open origin (`launch_open::recently_os_opened`) requires only that
-/// some local process ask the OS to open `path` with Atrium (no human
-/// gesture at all), and this app's own PTY commands already let a
+/// some local process ask the OS to open `path` with Atrium, including by
+/// spawning it with that existing path as an argument (no human gesture at
+/// all), and this app's own PTY commands already let a
 /// compromised renderer induce that state directly. Accepted: a compromised
 /// renderer already has arbitrary local execution via the PTY, so nothing
 /// new becomes reachable. If the PTY commands are ever scoped down, the
@@ -255,6 +257,7 @@ pub async fn fs_grant_external_file(
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn fs_external_paths_are_dirs_classifies_each_kind() {
         let dir = tempfile::tempdir().unwrap();

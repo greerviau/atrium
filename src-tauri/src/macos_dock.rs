@@ -12,6 +12,7 @@
 //! `class_addMethod` mechanism Objective-C categories use), leaving every
 //! other method tao already installed untouched.
 
+use crate::launch_open::OPEN_PATH_EVENT;
 use crate::recents;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
@@ -20,11 +21,6 @@ use objc2_app_kit::{NSApplication, NSDocumentController, NSMenu, NSMenuItem};
 use objc2_foundation::{MainThreadMarker, NSString, NSURL};
 use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter, Wry};
-
-/// Emitted on the webview whenever a Dock menu pick (or `RunEvent::Opened`)
-/// resolves to a path the frontend should open; see `onDockOpenPath` in
-/// `src/lib/ipc/events.ts`.
-pub const OPEN_PATH_EVENT: &str = "dock:open-path";
 
 static APP_HANDLE: OnceLock<AppHandle<Wry>> = OnceLock::new();
 

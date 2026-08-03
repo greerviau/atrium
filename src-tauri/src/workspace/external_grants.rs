@@ -1,29 +1,27 @@
 use crate::error::AppError;
 use std::collections::HashMap;
-use std::os::unix::fs::MetadataExt; // dev()/ino() — see §4.6 for the Windows equivalent
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Identity captured at grant time and re-verified on every later access.
 /// **The invariant this type exists to enforce: a granted key authorizes
-/// exactly one inode at exactly one canonical path, and any divergence in
-/// EITHER field revokes it.** Comparing only `(dev, ino)` is not enough —
-/// a directory-symlink swap combined with a hard link can hold `(dev,
-/// ino)` stable while changing what the path resolves to (§4.4c);
+/// exactly one filesystem identity at exactly one canonical path, and any
+/// divergence in EITHER field revokes it.** Comparing only the platform file
+/// ID (device/inode on Unix, volume/file ID on Windows) is not enough; a
+/// directory-symlink swap combined with a hard link can hold that ID stable
+/// while changing what the path resolves to (§4.4c);
 /// comparing `canonical_path` too closes that.
 #[derive(Clone)]
 struct GrantedIdentity {
     canonical_path: PathBuf,
-    dev: u64,
-    ino: u64,
+    file_id: file_id::FileId,
     /// The granted file's *parent directory's* own identity at the moment
     /// this was captured (grant time, or the most recent legitimate
     /// refresh). Exists solely so `resolve_granted_for_write`'s
     /// deleted-file recreation arm can confirm the parent it's about to
     /// recreate into is still the exact directory that was granted, not
     /// wherever a swapped symlink now resolves it to (MF-B, round 2).
-    parent_dev: u64,
-    parent_ino: u64,
+    parent_file_id: file_id::FileId,
 }
 
 /// Per-workspace-instance allowlist of externally-opened files, created
@@ -62,8 +60,8 @@ impl ExternalGrants {
     }
 
     /// Read authorization: `Ok(Some(realpath))` if `path` was granted and
-    /// its current identity — `dev`, `ino`, *and* `canonical_path`, all
-    /// three — matches what was recorded at grant time. `Ok(None)` if
+    /// its current platform file ID and `canonical_path` both match what was
+    /// recorded at grant time. `Ok(None)` if
     /// `path` was never granted at all (the fast, common path for every
     /// ordinary in-workspace read, which never touches the filesystem
     /// here). `Err(ExternalFileChanged)` otherwise, including if the file
@@ -140,9 +138,9 @@ impl ExternalGrants {
     /// have had the grant **permanently** re-pointed at whatever the
     /// symlink resolves to, re-attempted on every single save (not a
     /// one-shot race — a race retried indefinitely until won). The guard
-    /// below closes it: only `dev`/`ino` may legitimately drift between one
-    /// call and the next (that's the entire reason this function exists —
-    /// a legitimate `atomic_write` save changes only the inode, never the
+    /// below closes it: only the platform file ID may legitimately drift
+    /// between one call and the next. That is why this function exists:
+    /// a legitimate `atomic_write` save changes only the file identity, never the
     /// canonical path); a `canonical_path` mismatch means the location
     /// moved, and the old, still-correct identity is left in place so the
     /// very next access (via `resolve_granted`/`resolve_granted_for_write`)
@@ -153,7 +151,7 @@ impl ExternalGrants {
     /// between the read and the insert) and confirmed the lock genuinely
     /// closes it rather than merely narrowing it: nothing can observe or
     /// act on a stale `recorded` between the compare and the write, so
-    /// `canonical_path` provably cannot change here, only `dev`/`ino` can.
+    /// `canonical_path` provably cannot change here, only the file ID can.
     ///
     /// (`canonical_path` immutability is an invariant of *this function*,
     /// not of the underlying map — `grant()` itself re-points a key
@@ -288,9 +286,7 @@ const ASSET_EXTENSION_ALLOWLIST: &[&str] = &[
 const MIN_ASSET_ROOT_COMPONENTS: usize = 1;
 
 fn identity_matches(current: &GrantedIdentity, recorded: &GrantedIdentity) -> bool {
-    current.dev == recorded.dev
-        && current.ino == recorded.ino
-        && current.canonical_path == recorded.canonical_path
+    current.file_id == recorded.file_id && current.canonical_path == recorded.canonical_path
 }
 
 /// Re-verifies, live, that a granted file's recorded parent directory is
@@ -321,10 +317,9 @@ async fn verify_parent(recorded: &GrantedIdentity) -> bool {
     let Some(parent) = recorded.canonical_path.parent() else {
         return false;
     };
-    let Ok(metadata) = tokio::fs::metadata(parent).await else {
-        return false;
-    };
-    metadata.dev() == recorded.parent_dev && metadata.ino() == recorded.parent_ino
+    file_id::get_file_id(parent)
+        .map(|current| current == recorded.parent_file_id)
+        .unwrap_or(false)
 }
 
 async fn capture_identity(path: &str) -> Result<GrantedIdentity, AppError> {
@@ -342,15 +337,14 @@ async fn capture_identity(path: &str) -> Result<GrantedIdentity, AppError> {
     let parent = canonical_path
         .parent()
         .ok_or_else(|| AppError::InvalidPath(format!("'{path}' has no parent directory")))?;
-    let parent_metadata = tokio::fs::metadata(parent)
-        .await
+    let file_id = file_id::get_file_id(&canonical_path)
         .map_err(|e| crate::workspace::local::map_io_err(e, path))?;
+    let parent_file_id =
+        file_id::get_file_id(parent).map_err(|e| crate::workspace::local::map_io_err(e, path))?;
     Ok(GrantedIdentity {
         canonical_path,
-        dev: metadata.dev(),
-        ino: metadata.ino(),
-        parent_dev: parent_metadata.dev(),
-        parent_ino: parent_metadata.ino(),
+        file_id,
+        parent_file_id,
     })
 }
 
@@ -399,6 +393,7 @@ mod tests {
         assert!(matches!(err, AppError::InvalidPath(_)));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn granting_a_dangling_symlink_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
@@ -409,6 +404,7 @@ mod tests {
         assert!(!err.to_string().is_empty()); // NotFound or InvalidPath, either fails closed
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn grant_a_symlink_then_swap_its_target_file_fails_closed() {
         let dir = tempfile::tempdir().unwrap();
@@ -526,6 +522,7 @@ mod tests {
     }
 
     // MF3 — the parent-symlink + hard-link redirect.
+    #[cfg(unix)]
     #[tokio::test]
     async fn parent_symlink_plus_hard_link_redirect_fails_closed_and_does_not_write() {
         let base = tempfile::tempdir().unwrap();
@@ -564,6 +561,7 @@ mod tests {
     }
 
     // MF-A (round 2) — winning the post-write refresh race must not re-point the grant.
+    #[cfg(unix)]
     #[tokio::test]
     async fn refresh_if_granted_rejects_a_swapped_parent_and_leaves_the_old_identity_intact() {
         let base = tempfile::tempdir().unwrap();
@@ -616,6 +614,7 @@ mod tests {
     }
 
     // MF-B (round 2) — the deleted-file recreate arm must not follow a swapped parent.
+    #[cfg(unix)]
     #[tokio::test]
     async fn resolve_granted_for_write_does_not_follow_a_swapped_parent_into_recreating_there() {
         let base = tempfile::tempdir().unwrap();
@@ -776,6 +775,7 @@ mod tests {
     // were deleted, the resolved "pem" extension would sail through
     // unfiltered and this would also wrongly resolve. Either mutation turns
     // this red.
+    #[cfg(unix)]
     #[tokio::test]
     async fn resolve_asset_rejects_a_symlink_named_with_an_image_extension_pointing_at_a_secret() {
         let dir = tempfile::tempdir().unwrap();
@@ -802,6 +802,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn resolve_asset_still_serves_a_legitimately_symlinked_image() {
         let dir = tempfile::tempdir().unwrap();

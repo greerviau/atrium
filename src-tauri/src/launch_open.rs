@@ -1,24 +1,22 @@
-//! Process-lifetime storage for paths the OS asks Atrium to open
-//! (`RunEvent::Opened`, `main.rs`), split out of `AppState` because the
-//! whole reason this queue exists is to hold data that can arrive before
-//! `AppState` does. On macOS, Finder's launch open-document event reaches
-//! the app's `run` callback *before* Tauri's `.setup()` closure has
-//! executed — but the managed `AppState` and the `macos_dock::APP_HANDLE`
-//! static are both created inside that same closure. A path recorded
-//! against either of those is therefore silently discarded on a cold
-//! launch, which is the whole bug (issue #325's cold-launch plan, §5). The
-//! statics below exist from the first instruction of `main`, so a path can
-//! be recorded at any point in the process's life regardless of when (or
-//! whether) `.setup()` has run.
+//! Process-lifetime storage and delivery for paths the OS asks Atrium to
+//! open. macOS supplies paths through `RunEvent::Opened`; Linux and Windows
+//! file associations supply them as launch arguments. Both origins converge
+//! here before the frontend drains the queue.
 //!
-//! Deliberately platform-neutral, not `cfg`-gated: only `macos_dock.rs`
-//! (macOS-only) writes into this today, but the Linux/Windows argv-launch
-//! gap (issue #362, out of scope for this change) would read paths on
-//! every platform, and this is its obvious home if it's ever implemented.
+//! This is separate from `AppState` because a launch path can arrive before
+//! Tauri runs `.setup()`. The statics exist from the first instruction of
+//! `main`, so a path can be recorded at any point in the process's life.
 
 use std::collections::HashSet;
+use std::ffi::OsString;
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tauri::{AppHandle, Emitter, Manager, Wry};
+
+/// Emitted whenever an OS-open request arrives after the frontend has
+/// drained the startup queue and installed its live listener.
+pub const OPEN_PATH_EVENT: &str = "dock:open-path";
 
 /// How long a recorded path stays authorized for `fs_grant_external_file`
 /// (`commands/fs.rs`) — mirrors `RECENT_DROP_WINDOW` there for the drag-drop
@@ -52,6 +50,45 @@ impl LaunchOpenState {
 }
 
 static STATE: Mutex<LaunchOpenState> = Mutex::new(LaunchOpenState::new());
+
+/// Extracts existing file or directory paths from a process argument list.
+/// The first argument is the executable. Relative paths are resolved against
+/// the originating process's current directory, which the single-instance
+/// plugin forwards alongside a second launch's arguments.
+pub fn paths_from_args(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> Vec<String> {
+    args.into_iter()
+        .skip(1)
+        .filter_map(|arg| {
+            let path = Path::new(&arg);
+            let resolved = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                cwd.join(path)
+            };
+            resolved
+                .exists()
+                .then(|| resolved.to_string_lossy().into_owned())
+        })
+        .collect()
+}
+
+/// Routes paths received by an already-running instance into the same queue
+/// and provenance record used during cold launch. Once the frontend is ready,
+/// each path is emitted live. The existing main window is then restored and
+/// focused so opening a file also surfaces Atrium.
+pub fn open_paths(app: &AppHandle<Wry>, paths: Vec<String>) {
+    if !paths.is_empty() && record_os_open(&paths) {
+        for path in paths {
+            let _ = app.emit(OPEN_PATH_EVENT, path);
+        }
+    }
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
 
 /// Always stamps `recent` fresh for `paths`. If the frontend is already
 /// ready, returns `true` (the caller should emit each path live — it will
@@ -93,8 +130,8 @@ fn recently_opened(state: &LaunchOpenState, path: &str, window: Duration) -> boo
     )
 }
 
-/// Records `paths` as observed from the OS (`RunEvent::Opened`, routed
-/// through `macos_dock::open_paths`). Returns `true` if the frontend has
+/// Records `paths` as observed from the OS through `RunEvent::Opened` or a
+/// launch argument. Returns `true` if the frontend has
 /// already declared itself ready — the caller should emit each path live —
 /// or `false` if they were queued for the frontend's own startup drain.
 ///
@@ -123,6 +160,36 @@ pub fn recently_os_opened(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_argument_is_resolved_and_queued_before_the_frontend_is_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("launch.md");
+        std::fs::write(&file, "# launched").unwrap();
+        let args = ["atrium", "launch.md"].map(std::ffi::OsString::from);
+
+        let paths = paths_from_args(args, dir.path());
+        let mut state = LaunchOpenState::new();
+        assert!(!record(&mut state, &paths));
+        assert_eq!(take(&mut state), vec![file.to_string_lossy().into_owned()]);
+    }
+
+    #[test]
+    fn launch_arguments_ignore_the_executable_and_non_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("notes.md");
+        std::fs::write(&file, "# notes").unwrap();
+        let args = [
+            std::ffi::OsString::from("/opt/Atrium/atrium"),
+            std::ffi::OsString::from("--some-runtime-flag"),
+            file.clone().into_os_string(),
+        ];
+
+        assert_eq!(
+            paths_from_args(args, dir.path()),
+            vec![file.to_string_lossy().into_owned()]
+        );
+    }
 
     // Test 1 (§9.2) — the regression test for issue #325 itself: a path
     // recorded with no `AppHandle`/`AppState` in existence at all (nothing

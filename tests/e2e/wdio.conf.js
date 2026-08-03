@@ -30,8 +30,8 @@ export const config = {
   },
 
   // Builds the debug binary once before the suite runs. Requires the Rust
-  // toolchain and the Tauri v2 Linux/macOS system dependencies (webkit2gtk
-  // + friends on Linux, or Xcode command line tools on macOS) to already be
+  // toolchain and the Tauri v2 Linux/Windows system dependencies (webkit2gtk
+  // + friends on Linux, or WebView2 and C++ Build Tools on Windows) to already be
   // installed — see tests/e2e/README.md.
   onPrepare: () => {
     const result = spawnSync("cargo", ["build"], {

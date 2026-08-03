@@ -1106,8 +1106,8 @@
   }
 
   // Serializes handling of paths arriving from the OS (Dock-menu picks,
-  // `RunEvent::Opened` cold-launch/already-running opens, a real "Open With
-  // Atrium") so a burst of them (a multi-file "Open With Atrium") is handled
+  // `RunEvent::Opened`, or Linux/Windows launch arguments) so a burst of them
+  // (a multi-file "Open With Atrium") is handled
   // one at a time in arrival order — a deterministic-ordering nicety, not a
   // data-loss guard: standalone mode never mutates `$workspace.root`, so
   // there is no session-restore race to serialize against here.
@@ -1173,7 +1173,7 @@
       void refreshDirectoryContaining(event.path);
     });
     // Rust's `launch_open` module (issue #325's cold-launch plan) delivers
-    // each OS-opened path exactly once, via exactly one of two mechanisms:
+    // each OS-opened or launch-argument path exactly once, via one of two mechanisms:
     // the live `dock:open-path` emit below, once the frontend is
     // considered "ready," or the one-shot `workspaceTakePendingOpen` drain,
     // for anything that arrived before then — including a cold launch,

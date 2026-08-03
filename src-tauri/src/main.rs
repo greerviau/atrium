@@ -314,7 +314,29 @@ fn build_context() -> tauri::Context<tauri::Wry> {
 }
 
 fn main() {
+    // Linux and Windows file associations pass an opened path as argv to a
+    // new process. Capture the primary process's paths before `build()` runs
+    // setup so a cold launch cannot outrun the frontend's pending-open drain.
+    // Existing-path filtering prevents Tauri/runtime switches from being
+    // mistaken for files while retaining both files and folders.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let launch_paths = launch_open::paths_from_args(std::env::args_os(), &cwd);
+    if !launch_paths.is_empty() {
+        launch_open::record_os_open(&launch_paths);
+    }
+
     let app = tauri::Builder::default()
+        // This must remain the first plugin: a secondary process has to stop
+        // before any other plugin or app setup can create duplicate state.
+        // The callback runs in the primary process with the secondary
+        // process's complete argv and cwd.
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            let paths = launch_open::paths_from_args(
+                args.into_iter().map(std::ffi::OsString::from),
+                std::path::Path::new(&cwd),
+            );
+            launch_open::open_paths(app, paths);
+        }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -458,10 +480,10 @@ fn main() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
-        // `RunEvent::Opened` fires both when a Dock-menu pick (or a real "Open
-        // With Atrium") reaches an already-running app, and — on a cold
-        // launch — before `.setup()` has run and before the frontend's event
-        // listeners exist (issue #325's cold-launch plan, §5).
+        // On macOS, `RunEvent::Opened` fires both when a Dock-menu pick (or a
+        // real "Open With Atrium") reaches an already-running app, and on a
+        // cold launch before `.setup()` has run and before the frontend's
+        // event listeners exist (issue #325's cold-launch plan, §5).
         // `macos_dock::open_paths` routes both cases through `launch_open`,
         // whose statics exist from the first instruction of `main` for
         // exactly that reason. Every url in this event is batched into one
