@@ -19,7 +19,7 @@ export type IconKind =
   | "image"
   | "generic";
 
-/** Icon kind for a tree entry, mirroring the extension groups in `codeExtensions()` plus `markdown`/`toml`/`image`. */
+/** Icon kind for a tree entry. Languages without a dedicated explorer icon use the generic file icon. */
 export function iconKindFor(entry: { isDir: boolean; name: string }, expanded: boolean): IconKind {
   if (entry.isDir) {
     return expanded ? "folder-open" : "folder-closed";

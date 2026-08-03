@@ -19,7 +19,27 @@ describe("languageLabel", () => {
     ["/a/b.sh", "Shell Script"],
     ["/a/b.bash", "Shell Script"],
     ["/a/b.zsh", "Shell Script"],
+    ["/a/b.toml", "TOML"],
+    ["/a/b.tf", "Terraform"],
+    ["/a/b.tfvars", "Terraform"],
+    ["/a/b.hcl", "HCL"],
+    ["/a/b.c", "C"],
+    ["/a/b.cpp", "C++"],
+    ["/a/b.cs", "C#"],
+    ["/a/b.java", "Java"],
+    ["/a/b.kt", "Kotlin"],
+    ["/a/b.swift", "Swift"],
+    ["/a/b.rb", "Ruby"],
+    ["/a/b.php", "PHP"],
+    ["/a/b.sql", "SQL"],
+    ["/a/b.xml", "XML"],
+    ["/a/b.scss", "SCSS"],
+    ["/a/b.less", "LESS"],
+    ["/a/b.lua", "Lua"],
+    ["/a/b.ps1", "PowerShell"],
+    ["/a/b.proto", "ProtoBuf"],
     ["/a/b.md", "Markdown"],
+    ["/a/Dockerfile", "Dockerfile"],
     ["/a/b.markdown", "Markdown"],
   ];
 
@@ -31,6 +51,7 @@ describe("languageLabel", () => {
 
   it("is case-insensitive on the extension", () => {
     expect(languageLabel("/a/B.TS")).toBe("TypeScript");
+    expect(languageLabel("/a/config.TOML")).toBe("TOML");
   });
 
   it("falls back to Plain Text for an unrecognized extension", () => {

@@ -47,7 +47,7 @@
     type TableEditContext,
   } from "./markdown/tableEdit";
   import { tableContextFromHandleElement } from "./markdown/tableHandles";
-  import { codeExtensions, type PaneMode } from "./codeExtensions";
+  import { loadCodeExtensions, type PaneMode } from "./codeExtensions";
   import { setCursorPosition, clearCursorPosition, type CursorPosition } from "../stores/editorStatus";
   import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
   import { revealInFinder } from "../ipc/reveal";
@@ -88,9 +88,11 @@
   // update being missed here for svelte-check to warn about.
   // svelte-ignore non_reactive_update
   let view: EditorView;
+  let destroyed = false;
   let detachScrollbarAutoHide: (() => void) | undefined;
   const themeCompartment = new Compartment();
   const viewModeCompartment = new Compartment();
+  const codeLanguageCompartment = new Compartment();
   const minimapCompartment = new Compartment();
   const wordWrapCompartment = new Compartment();
   const tabSizeCompartment = new Compartment();
@@ -123,7 +125,7 @@
     showLineNumbers: boolean,
   ): Extension[] {
     if (mode !== "markdown") {
-      return [...(showLineNumbers ? [lineNumbers()] : []), ...codeExtensions(filePath)];
+      return showLineNumbers ? [lineNumbers()] : [];
     }
     return viewMode === "source" ? markdownSourceExtensions(filePath, showLineNumbers) : markdownExtensions(filePath);
   }
@@ -424,6 +426,7 @@
       tabSizeCompartment.of(indentUnit.of(" ".repeat($tabSize))),
       themeCompartment.of(themeExtensions()),
       viewModeCompartment.of(viewModeExtensions(mode, initialTab?.viewMode, $lineNumbersEnabled)),
+      codeLanguageCompartment.of([]),
       // Starts empty regardless of the setting — see `applyMinimap`'s doc
       // comment. The idle callback scheduled below performs the actual first
       // application.
@@ -457,6 +460,18 @@
       dispatchTransactions: createSyncDispatch(filePath),
     });
     registerView(filePath, view);
+    if (mode === "code") {
+      const mountedView = view;
+      void loadCodeExtensions(filePath)
+        .then((languageExtensions) => {
+          if (destroyed || view !== mountedView) return;
+          mountedView.dispatch({ effects: codeLanguageCompartment.reconfigure(languageExtensions) });
+        })
+        .catch((err) => {
+          if (destroyed || view !== mountedView) return;
+          showErrorToast(`Failed to load syntax highlighting for ${basename(filePath)}: ${describeError(err)}`);
+        });
+    }
     detachScrollbarAutoHide = attachScrollbarAutoHide(view.scrollDOM);
     if (typeof ResizeObserver !== "undefined") {
       minimapResizeObserver = new ResizeObserver(scheduleMinimapVisibilityCheck);
@@ -486,6 +501,7 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
     cancelMinimapIdle();
     if (minimapVisibilityTimer !== undefined) {
       clearTimeout(minimapVisibilityTimer);

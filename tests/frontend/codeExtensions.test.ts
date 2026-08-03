@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isDataPath, isTextPaneMode, modeForPath } from "../../src/lib/editor/codeExtensions";
+import { isDataPath, isTextPaneMode, loadCodeExtensions, modeForPath } from "../../src/lib/editor/codeExtensions";
 import { languageLabel } from "../../src/lib/editor/languageLabel";
 
 describe("pane modes", () => {
@@ -8,6 +8,10 @@ describe("pane modes", () => {
     expect(isTextPaneMode("markdown")).toBe(true);
     expect(isTextPaneMode("data")).toBe(false);
     expect(isTextPaneMode("image")).toBe(false);
+  });
+
+  it("leaves unrecognized code files in plain-text mode", async () => {
+    expect(await loadCodeExtensions("notes.unknown-language")).toEqual([]);
   });
 });
 

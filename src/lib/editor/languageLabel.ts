@@ -1,11 +1,11 @@
 import { extensionOf } from "../util/path";
+import { codeLanguageForPath } from "./codeLanguages";
 import { isImagePath } from "./imageFormats";
 
 /**
  * Extension (no dot, lowercased) -> human-readable language label for the
- * status bar's language indicator. Mirrors the extension set
- * `codeExtensions.ts` already switches on, mapped to display names instead
- * of CodeMirror language extensions.
+ * status bar's language indicator. These preserve Atrium's established names
+ * when they differ from the corresponding CodeMirror language description.
  */
 const LABELS: Record<string, string> = {
   js: "JavaScript",
@@ -31,8 +31,8 @@ const LABELS: Record<string, string> = {
   parquet: "Parquet",
 };
 
-/** Human-readable file-type label for `path`'s extension, falling back to "Plain Text" for anything unrecognized. */
+/** Human-readable file-type label for `path`, falling back to "Plain Text" for anything unrecognized. */
 export function languageLabel(path: string): string {
   if (isImagePath(path)) return "Image";
-  return LABELS[extensionOf(path)] ?? "Plain Text";
+  return LABELS[extensionOf(path)] ?? codeLanguageForPath(path)?.name ?? "Plain Text";
 }
