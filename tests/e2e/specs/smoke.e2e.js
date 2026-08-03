@@ -57,6 +57,27 @@ describe("markdown live preview", () => {
   });
 });
 
+describe("code syntax highlighting", () => {
+  for (const [filename, language] of [
+    ["config.toml", "TOML"],
+    ["main.tf", "Terraform"],
+  ]) {
+    it(`highlights ${filename} and identifies it as ${language}`, async () => {
+      await openWorkspace(fixturesDir);
+
+      const fileNode = await $(`//span[@class='name' and text()='${filename}']`);
+      await fileNode.waitForExist({ timeout: 10000 });
+      await fileNode.click();
+
+      await browser.waitUntil(
+        async () => (await $$(".cm-content .cm-line span[class]")).length > 0,
+        { timeout: 5000, timeoutMsg: `expected ${filename} to render syntax-highlighted tokens` },
+      );
+      await expect($(".status-group.indicators .status-item:first-child")).toHaveText(language);
+    });
+  }
+});
+
 describe("image viewer", () => {
   it("opens an image file in a dedicated pane", async () => {
     await openWorkspace(fixturesDir);
