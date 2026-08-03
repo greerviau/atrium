@@ -2,8 +2,11 @@ use crate::workspace::{FsChangeEvent, FsChangeKind};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use notify::event::{ModifyKind, RenameMode};
 use notify::{EventKind, RecursiveMode, Watcher};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, FileIdMap};
+use notify_debouncer_full::file_id::{get_file_id, FileId};
+use notify_debouncer_full::{new_debouncer_opt, DebounceEventResult, Debouncer, NoCache};
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -106,6 +109,163 @@ fn is_ignored(
         .is_ignore()
 }
 
+/// Tracks stable filesystem identities independently of backend event kinds.
+/// This turns an existing destination plus one uniquely missing path with the
+/// same identity into a rename even when FSEvents coalesces away the source
+/// event, and lets an event for a known path that no longer exists become a
+/// removal regardless of the backend's label.
+#[derive(Default)]
+struct FileIdentityIndex {
+    by_path: HashMap<PathBuf, FileId>,
+    by_id: HashMap<FileId, HashSet<PathBuf>>,
+}
+
+impl FileIdentityIndex {
+    fn insert(&mut self, path: PathBuf, file_id: FileId) {
+        let stale_aliases: Vec<_> = self
+            .by_id
+            .get(&file_id)
+            .into_iter()
+            .flatten()
+            .filter(|candidate| candidate.as_path() != path && !candidate.exists())
+            .cloned()
+            .collect();
+        for stale in stale_aliases {
+            self.remove_tree(&stale);
+        }
+        if let Some(previous_id) = self.by_path.insert(path.clone(), file_id) {
+            if previous_id != file_id {
+                self.remove_reverse(&path, previous_id);
+            }
+        }
+        self.by_id.entry(file_id).or_default().insert(path);
+    }
+
+    fn remove_reverse(&mut self, path: &Path, file_id: FileId) {
+        if let Some(paths) = self.by_id.get_mut(&file_id) {
+            paths.remove(path);
+            if paths.is_empty() {
+                self.by_id.remove(&file_id);
+            }
+        }
+    }
+
+    fn record_tree(&mut self, path: &Path) {
+        let Ok(metadata) = std::fs::symlink_metadata(path) else {
+            return;
+        };
+        if let Ok(file_id) = get_file_id(path) {
+            self.insert(path.to_path_buf(), file_id);
+        }
+        if !metadata.is_dir() {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(path) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            self.record_tree(&entry.path());
+        }
+    }
+
+    fn remove_tree(&mut self, path: &Path) {
+        let removed: Vec<_> = self
+            .by_path
+            .keys()
+            .filter(|candidate| candidate.starts_with(path))
+            .cloned()
+            .collect();
+        for removed_path in removed {
+            if let Some(file_id) = self.by_path.remove(&removed_path) {
+                self.remove_reverse(&removed_path, file_id);
+            }
+        }
+    }
+
+    fn move_tree(&mut self, from: &Path, to: &Path) {
+        let moved: Vec<_> = self
+            .by_path
+            .iter()
+            .filter_map(|(path, file_id)| {
+                path.strip_prefix(from)
+                    .ok()
+                    .map(|suffix| (to.join(suffix), *file_id))
+            })
+            .collect();
+        self.remove_tree(from);
+        self.remove_tree(to);
+        for (path, file_id) in moved {
+            self.insert(path, file_id);
+        }
+        self.record_tree(to);
+    }
+
+    fn infer_rename_source(&self, destination: &Path) -> Option<PathBuf> {
+        let destination_id = get_file_id(destination).ok()?;
+        if self
+            .by_path
+            .get(destination)
+            .is_some_and(|indexed_id| *indexed_id != destination_id)
+        {
+            return None;
+        }
+        let mut missing = self
+            .by_id
+            .get(&destination_id)?
+            .iter()
+            .filter(|source| source.as_path() != destination && !source.exists());
+        let source = missing.next()?.clone();
+        if missing.next().is_some() {
+            return None;
+        }
+        Some(source)
+    }
+
+    fn contains(&self, path: &Path) -> bool {
+        self.by_path.contains_key(path)
+    }
+}
+
+fn send_paired_rename(
+    from: &Path,
+    to: &Path,
+    workspace_id: &str,
+    tx: &UnboundedSender<FsChangeEvent>,
+    raw_root: &Path,
+    canonical_root: &Path,
+    gitignore: &Gitignore,
+) {
+    let to_ignored = is_ignored(raw_root, canonical_root, gitignore, to, None);
+    let from_ignored = is_ignored(raw_root, canonical_root, gitignore, from, None);
+    if to_ignored && from_ignored {
+        return;
+    }
+    if to_ignored {
+        let _ = tx.send(FsChangeEvent {
+            workspace_id: workspace_id.to_string(),
+            path: reported_path(raw_root, canonical_root, from),
+            kind: FsChangeKind::Remove,
+            from_path: None,
+        });
+        return;
+    }
+    if from_ignored {
+        let _ = tx.send(FsChangeEvent {
+            workspace_id: workspace_id.to_string(),
+            path: reported_path(raw_root, canonical_root, to),
+            kind: FsChangeKind::Create,
+            from_path: None,
+        });
+        return;
+    }
+    let _ = tx.send(FsChangeEvent {
+        workspace_id: workspace_id.to_string(),
+        path: reported_path(raw_root, canonical_root, to),
+        kind: FsChangeKind::Rename,
+        from_path: Some(reported_path(raw_root, canonical_root, from)),
+    });
+}
+
 /// Starts a recursive `notify` watcher rooted at `root`, debounced 150ms
 /// (coalescing bursts and duplicate paths within the window, handled by
 /// `notify-debouncer-full`), forwarding each surviving change as an
@@ -142,87 +302,80 @@ fn is_ignored(
 /// for it, so the OS watcher registration below still produces the same
 /// "root does not exist" error it always did.
 ///
+/// A file-identity index is initialized alongside the OS watcher so both
+/// preexisting files and fresh changes remain available for rename
+/// correlation when a backend omits one rename half. The index root uses the
+/// event-path form for each platform: canonical on macOS, where FSEvents
+/// canonicalizes paths, and raw elsewhere.
+///
 /// The debouncer and its underlying OS watcher are kept alive for the
 /// lifetime of the returned guard; the caller (`LocalWorkspace`) holds this
 /// for as long as the workspace itself is registered.
-pub fn watch(
+pub(crate) type WorkspaceDebouncer = Debouncer<notify::RecommendedWatcher, NoCache>;
+
+pub(crate) fn watch(
     root: String,
     workspace_id: String,
     tx: UnboundedSender<FsChangeEvent>,
-) -> notify::Result<notify_debouncer_full::Debouncer<notify::RecommendedWatcher, FileIdMap>> {
+) -> notify::Result<WorkspaceDebouncer> {
     let raw_root = PathBuf::from(&root);
     let canonical_root = std::fs::canonicalize(&root).unwrap_or_else(|_| raw_root.clone());
     let gitignore = build_gitignore(&canonical_root);
+    #[cfg(target_os = "macos")]
+    let file_id_root = canonical_root.clone();
+    #[cfg(not(target_os = "macos"))]
+    let file_id_root = raw_root.clone();
 
-    let mut debouncer = new_debouncer(
+    let identities = Arc::new(Mutex::new(FileIdentityIndex::default()));
+    let callback_identities = identities.clone();
+    let mut debouncer = new_debouncer_opt::<_, notify::RecommendedWatcher, NoCache>(
         Duration::from_millis(150),
         None,
         move |result: DebounceEventResult| match result {
             Ok(events) => {
+                let mut identities = callback_identities.lock().unwrap();
+                let inferred_renames: HashMap<_, _> = events
+                    .iter()
+                    .filter(|event| {
+                        matches!(
+                            event.event.kind,
+                            EventKind::Create(_)
+                                | EventKind::Modify(ModifyKind::Name(
+                                    RenameMode::To | RenameMode::Any
+                                ))
+                        )
+                    })
+                    .flat_map(|event| event.event.paths.iter())
+                    .filter_map(|to| {
+                        identities
+                            .infer_rename_source(to)
+                            .map(|from| (to.clone(), from))
+                    })
+                    .collect();
+                let inferred_sources: HashSet<_> = inferred_renames.values().cloned().collect();
+                let mut emitted_renames = HashSet::new();
+                let mut emitted_removals = HashSet::new();
+
                 for event in events {
-                    // `notify-debouncer-full`'s own file-id/rename-cookie
-                    // tracking already correlates a rename's `From`/`To`
-                    // halves within the debounce window when it can,
-                    // producing a single `Modify(Name(Both))` event with
-                    // `paths: [from, to]`. That's the only case emitted as
-                    // `Rename` with a `from_path` — an unpaired half (the
-                    // move crossed outside the watched root, or the
-                    // platform couldn't correlate it) is demoted instead of
-                    // guessed: `From` to a plain `Remove`, `To`/`Any` to a
-                    // plain `Create`.
+                    // `notify-debouncer-full` correlates rename halves when
+                    // the backend supplies enough information. The identity
+                    // index above covers FSEvents' coalesced fresh-file case,
+                    // where only a destination `Create` survives.
                     if event.event.kind == EventKind::Modify(ModifyKind::Name(RenameMode::Both)) {
                         if let [from, to] = event.event.paths.as_slice() {
-                            let to_ignored =
-                                is_ignored(&raw_root, &canonical_root, &gitignore, to, None);
-                            let from_ignored =
-                                is_ignored(&raw_root, &canonical_root, &gitignore, from, None);
-                            if to_ignored && from_ignored {
-                                // Neither side is anything the frontend
-                                // tracks; nothing to report.
-                            } else if to_ignored {
-                                // Moved into an ignored location: not a
-                                // rename anyone downstream should follow,
-                                // but the source still needs to be reported
-                                // gone — otherwise a tab open on `from`
-                                // (or an explorer row for it) stays stuck
-                                // pointing at a path that no longer exists.
-                                let _ = tx.send(FsChangeEvent {
-                                    workspace_id: workspace_id.clone(),
-                                    path: reported_path(&raw_root, &canonical_root, from),
-                                    kind: FsChangeKind::Remove,
-                                    from_path: None,
-                                });
-                            } else if from_ignored {
-                                // Moved out of an ignored location into a
-                                // tracked one: nothing downstream has ever
-                                // seen `from`, so this is a fresh arrival
-                                // for `to`, not a rename with a from_path
-                                // nobody can look up.
-                                let _ = tx.send(FsChangeEvent {
-                                    workspace_id: workspace_id.clone(),
-                                    path: reported_path(&raw_root, &canonical_root, to),
-                                    kind: FsChangeKind::Create,
-                                    from_path: None,
-                                });
-                            } else {
-                                let _ = tx.send(FsChangeEvent {
-                                    workspace_id: workspace_id.clone(),
-                                    path: reported_path(&raw_root, &canonical_root, to),
-                                    kind: FsChangeKind::Rename,
-                                    from_path: Some(reported_path(
-                                        &raw_root,
-                                        &canonical_root,
-                                        from,
-                                    )),
-                                });
-                            }
+                            send_paired_rename(
+                                from,
+                                to,
+                                &workspace_id,
+                                &tx,
+                                &raw_root,
+                                &canonical_root,
+                                &gitignore,
+                            );
+                            identities.move_tree(from, to);
                         } else {
-                            // A `Both`-kind event should always carry exactly
-                            // two paths; if it somehow doesn't, fall back the
-                            // same way an unpaired rename half does — a plain
-                            // `Remove` per path, never a guessed rename —
-                            // rather than dropping the event on the floor.
                             for path in &event.event.paths {
+                                identities.remove_tree(path);
                                 if is_ignored(&raw_root, &canonical_root, &gitignore, path, None) {
                                     continue;
                                 }
@@ -237,19 +390,60 @@ pub fn watch(
                         continue;
                     }
 
-                    let kind = match event.event.kind {
-                        EventKind::Create(_) => FsChangeKind::Create,
-                        EventKind::Remove(_) => FsChangeKind::Remove,
-                        EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
-                            FsChangeKind::Remove
-                        }
-                        EventKind::Modify(ModifyKind::Name(RenameMode::To))
-                        | EventKind::Modify(ModifyKind::Name(RenameMode::Any)) => {
-                            FsChangeKind::Create
-                        }
-                        _ => FsChangeKind::Modify,
-                    };
                     for path in &event.event.paths {
+                        if inferred_sources.contains(path) {
+                            continue;
+                        }
+                        if let Some(from) = inferred_renames.get(path) {
+                            if emitted_renames.insert(path.clone()) {
+                                send_paired_rename(
+                                    from,
+                                    path,
+                                    &workspace_id,
+                                    &tx,
+                                    &raw_root,
+                                    &canonical_root,
+                                    &gitignore,
+                                );
+                                identities.move_tree(from, path);
+                            }
+                            continue;
+                        }
+                        if emitted_removals.contains(path) {
+                            continue;
+                        }
+
+                        let kind = match event.event.kind {
+                            EventKind::Create(_) => FsChangeKind::Create,
+                            EventKind::Remove(_)
+                            | EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
+                                FsChangeKind::Remove
+                            }
+                            EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {
+                                FsChangeKind::Create
+                            }
+                            EventKind::Modify(ModifyKind::Name(RenameMode::Any)) => {
+                                if path.exists() {
+                                    FsChangeKind::Create
+                                } else {
+                                    FsChangeKind::Remove
+                                }
+                            }
+                            _ if !path.exists() && identities.contains(path) => {
+                                FsChangeKind::Remove
+                            }
+                            _ => FsChangeKind::Modify,
+                        };
+
+                        match kind {
+                            FsChangeKind::Create => identities.record_tree(path),
+                            FsChangeKind::Remove => {
+                                identities.remove_tree(path);
+                                emitted_removals.insert(path.clone());
+                            }
+                            FsChangeKind::Modify => identities.record_tree(path),
+                            FsChangeKind::Rename => unreachable!(),
+                        }
                         if is_ignored(&raw_root, &canonical_root, &gitignore, path, None) {
                             continue;
                         }
@@ -278,11 +472,16 @@ pub fn watch(
                 // simply stops receiving live updates until re-opened.
             }
         },
+        NoCache,
+        notify::Config::default(),
     )?;
 
+    let mut identities_guard = identities.lock().unwrap();
     debouncer
         .watcher()
         .watch(Path::new(&root), RecursiveMode::Recursive)?;
+    identities_guard.record_tree(&file_id_root);
+    drop(identities_guard);
 
     Ok(debouncer)
 }
@@ -393,19 +592,9 @@ mod tests {
     const SETTLE_MS: u64 = 2000;
 
     /// Blocks until `rx` produces a `Create` event for exactly `path` (or
-    /// panics on timeout). A test that needs a file to exist before its
-    /// real mutation must create it *after* the watcher is already running
-    /// and wait for that creation to round-trip through here before
-    /// mutating it — not because of debouncer-level coalescing (already
-    /// handled by keeping operations in separate 150ms windows), but
-    /// because macOS's FSEvents itself coalesces multiple flags for the
-    /// *same path* into one summarized event when they're still in flight
-    /// on the OS side; a setup create landing in the same OS-level window
-    /// as the mutation under test can get folded into it (e.g. a create
-    /// immediately followed by a rename summarizing as a single plain
-    /// create for the destination, or a create-then-remove summarizing as
-    /// a single `Modify`). Waiting for the create to have already been
-    /// observed guarantees no such window remains open.
+    /// panics on timeout). This separates setup from the mutation under test
+    /// at the debouncer boundary while deliberately leaving macOS's longer
+    /// FSEvents coalescing window active.
     async fn wait_until_seen(
         rx: &mut tokio::sync::mpsc::UnboundedReceiver<FsChangeEvent>,
         path: &Path,
@@ -441,10 +630,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "macOS: notify's FSEvents backend does not report this same-directory rename as any Rename-kind event, even with the setup file's own Create observed beforehand — the destination arrives as a plain Create and the source produces no event at all. See #313."
-    )]
     async fn a_same_directory_rename_arrives_as_one_paired_rename_event() {
         let dir = tempfile::tempdir().unwrap();
         let root = canonical_root(&dir);
@@ -479,10 +664,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "macOS: notify's FSEvents backend reports this deletion as Modify(Data(Content)), not a Remove-kind event, even with the file's own Create observed beforehand. See #313."
-    )]
     async fn a_delete_still_emits_a_plain_remove_with_no_from_path() {
         let dir = tempfile::tempdir().unwrap();
         let root = canonical_root(&dir);
@@ -543,6 +724,67 @@ mod tests {
         assert!(!events
             .iter()
             .any(|e| matches!(e.kind, FsChangeKind::Rename)));
+    }
+
+    #[tokio::test]
+    async fn a_long_lived_preexisting_file_rename_is_correlated() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = canonical_root(&dir);
+        let from = root.join("existing.txt");
+        let to = root.join("moved.txt");
+        std::fs::write(&from, "existing").unwrap();
+        // FSEvents may retain a file's flags for roughly 30 seconds. Keeping
+        // this fixture outside that window proves the index is initialized
+        // from the preexisting tree rather than from its Create event.
+        #[cfg(target_os = "macos")]
+        tokio::time::sleep(TokioDuration::from_secs(35)).await;
+        let (tx, mut rx) = unbounded_channel();
+        let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
+        let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
+
+        std::fs::rename(&from, &to).unwrap();
+
+        let events = drain_events(&mut rx, SETTLE_MS).await;
+        assert!(
+            events.iter().any(|event| {
+                matches!(event.kind, FsChangeKind::Rename)
+                    && event.path == to.to_string_lossy()
+                    && event.from_path.as_deref() == Some(from.to_string_lossy().as_ref())
+            }),
+            "expected a paired rename for a preexisting file, got {events:?}"
+        );
+    }
+
+    #[test]
+    fn an_atomic_replacement_is_not_misclassified_as_a_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = canonical_root(&dir);
+        let target = root.join("target.txt");
+        let temporary = root.join("temporary.txt");
+        std::fs::write(&target, "old").unwrap();
+        std::fs::write(&temporary, "new").unwrap();
+        let mut identities = FileIdentityIndex::default();
+        identities.record_tree(&root);
+
+        std::fs::remove_file(&target).unwrap();
+        std::fs::rename(&temporary, &target).unwrap();
+
+        assert_eq!(identities.infer_rename_source(&target), None);
+    }
+
+    #[test]
+    fn a_new_hard_link_is_not_misclassified_as_a_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = canonical_root(&dir);
+        let source = root.join("source.txt");
+        let link = root.join("link.txt");
+        std::fs::write(&source, "shared").unwrap();
+        let mut identities = FileIdentityIndex::default();
+        identities.record_tree(&root);
+
+        std::fs::hard_link(&source, &link).unwrap();
+
+        assert_eq!(identities.infer_rename_source(&link), None);
     }
 
     #[tokio::test]
@@ -812,14 +1054,8 @@ mod tests {
     // M3 regression: a rename whose destination lands in an ignored
     // directory must not drop the event outright — the source still needs
     // to be reported gone, or a tab/explorer row for it is stuck pointing
-    // at a path that no longer exists. macOS is excluded for the same
-    // reason `a_same_directory_rename_arrives_as_one_paired_rename_event`
-    // is: FSEvents doesn't report this as a `Rename`-kind event at all.
+    // at a path that no longer exists.
     #[tokio::test]
-    #[cfg_attr(
-        target_os = "macos",
-        ignore = "macOS: notify's FSEvents backend does not report this same-directory rename as any Rename-kind event, even with the setup file's own Create observed beforehand. See #313."
-    )]
     async fn a_rename_into_an_ignored_destination_reports_only_a_remove_for_the_source() {
         let dir = tempfile::tempdir().unwrap();
         let root = canonical_root(&dir);

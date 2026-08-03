@@ -452,7 +452,7 @@ fn display_path(root: &Path, path: &str) -> String {
 pub struct LocalWorkspace {
     root: PathBuf,
     workspace_id: String,
-    watcher: Mutex<Option<Debouncer<notify::RecommendedWatcher, FileIdMap>>>,
+    watcher: Mutex<Option<fs_watch::WorkspaceDebouncer>>,
     /// Bumped on every `search()` call; lets `search_root` notice mid-walk
     /// that a newer search has superseded it (see `search_root`'s doc
     /// comment) and stop early instead of finishing a search whose result

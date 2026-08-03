@@ -36,10 +36,10 @@ pub struct FsChangeEvent {
     pub path: String,
     pub kind: FsChangeKind,
     /// Only set when `kind == Rename`: the path this entry was renamed
-    /// from. Populated only when `notify-debouncer-full`'s own file-id /
-    /// rename-cookie tracking paired the rename's two halves within its
-    /// debounce window; a rename that can't be paired is surfaced as a
-    /// plain `Remove` instead (see `fs_watch.rs`), never as a guess.
+    /// from. Populated when the backend pairs both halves or `fs_watch` finds
+    /// one uniquely missing path with the destination's filesystem identity;
+    /// a rename that cannot be paired is surfaced as a plain `Remove` or
+    /// `Create`, never as a path-only guess.
     pub from_path: Option<String>,
 }
 
