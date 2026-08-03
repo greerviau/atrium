@@ -602,20 +602,30 @@ impl PtyManager {
         last_foreign_pid: &Mutex<Option<u32>>,
         system: &mut System,
     ) -> Option<TitleSnapshot> {
-        // Re-lock just long enough for `tcgetpgrp` (a single syscall on the
-        // pty's own fd) — the actual OS-inspection work below (targeted
-        // `sysinfo` refreshes) runs with no lock held at all, so it never
-        // blocks this session's own spawn/write/resize/kill calls.
+        // Re-lock just long enough for `tcgetpgrp` on Unix. ConPTY does not
+        // expose a foreground process group, so Windows reports the shell
+        // itself and still receives cwd updates from `sysinfo` below.
+        #[cfg(unix)]
         let fg_pid = {
             let sessions = sessions.lock().unwrap();
-            sessions.get(terminal_id)?.master.process_group_leader()
+            sessions
+                .get(terminal_id)?
+                .master
+                .process_group_leader()
+                .map(|pid| pid as u32)
+        };
+        #[cfg(windows)]
+        let fg_pid = {
+            let sessions = sessions.lock().unwrap();
+            sessions.get(terminal_id)?;
+            None
         };
 
         // A foreign foreground process is only "foreign" if its pid differs
         // from the shell's own — a builtin (`cd`, a shell function) never
         // forks, so `tcgetpgrp` correctly keeps reporting the shell's own
         // pid for those.
-        let foreign_pid = fg_pid.map(|pid| pid as u32).filter(|&pid| pid != shell_pid);
+        let foreign_pid = fg_pid.filter(|&pid| pid != shell_pid);
 
         let mut pids = vec![Pid::from_u32(shell_pid)];
         if let Some(pid) = foreign_pid {

@@ -9,19 +9,21 @@ use std::sync::Mutex;
 /// divergence in EITHER field revokes it.** Comparing only the platform file
 /// ID (device/inode on Unix, volume/file ID on Windows) is not enough; a
 /// directory-symlink swap combined with a hard link can hold that ID stable
-/// while changing what the path resolves to (§4.4c);
-/// comparing `canonical_path` too closes that.
+/// while changing what the path resolves to (§4.4c); comparing
+/// `canonical_path` too closes that. The identity handles remain open for the
+/// grant's lifetime, preventing the OS from reusing a deleted file or
+/// directory's ID while the grant still refers to it.
 #[derive(Clone)]
 struct GrantedIdentity {
     canonical_path: PathBuf,
-    file_id: file_id::FileId,
+    file_handle: std::sync::Arc<same_file::Handle>,
     /// The granted file's *parent directory's* own identity at the moment
     /// this was captured (grant time, or the most recent legitimate
     /// refresh). Exists solely so `resolve_granted_for_write`'s
     /// deleted-file recreation arm can confirm the parent it's about to
     /// recreate into is still the exact directory that was granted, not
     /// wherever a swapped symlink now resolves it to (MF-B, round 2).
-    parent_file_id: file_id::FileId,
+    parent_handle: std::sync::Arc<same_file::Handle>,
 }
 
 /// Per-workspace-instance allowlist of externally-opened files, created
@@ -286,7 +288,7 @@ const ASSET_EXTENSION_ALLOWLIST: &[&str] = &[
 const MIN_ASSET_ROOT_COMPONENTS: usize = 1;
 
 fn identity_matches(current: &GrantedIdentity, recorded: &GrantedIdentity) -> bool {
-    current.file_id == recorded.file_id && current.canonical_path == recorded.canonical_path
+    current.file_handle == recorded.file_handle && current.canonical_path == recorded.canonical_path
 }
 
 /// Re-verifies, live, that a granted file's recorded parent directory is
@@ -317,8 +319,8 @@ async fn verify_parent(recorded: &GrantedIdentity) -> bool {
     let Some(parent) = recorded.canonical_path.parent() else {
         return false;
     };
-    file_id::get_file_id(parent)
-        .map(|current| current == recorded.parent_file_id)
+    same_file::Handle::from_path(parent)
+        .map(|current| current == *recorded.parent_handle)
         .unwrap_or(false)
 }
 
@@ -337,14 +339,14 @@ async fn capture_identity(path: &str) -> Result<GrantedIdentity, AppError> {
     let parent = canonical_path
         .parent()
         .ok_or_else(|| AppError::InvalidPath(format!("'{path}' has no parent directory")))?;
-    let file_id = file_id::get_file_id(&canonical_path)
+    let file_handle = same_file::Handle::from_path(&canonical_path)
         .map_err(|e| crate::workspace::local::map_io_err(e, path))?;
-    let parent_file_id =
-        file_id::get_file_id(parent).map_err(|e| crate::workspace::local::map_io_err(e, path))?;
+    let parent_handle = same_file::Handle::from_path(parent)
+        .map_err(|e| crate::workspace::local::map_io_err(e, path))?;
     Ok(GrantedIdentity {
         canonical_path,
-        file_id,
-        parent_file_id,
+        file_handle: std::sync::Arc::new(file_handle),
+        parent_handle: std::sync::Arc::new(parent_handle),
     })
 }
 
