@@ -12,6 +12,7 @@ import { markdownDefaultView, DEFAULT_MARKDOWN_VIEW } from "../../src/lib/stores
 import * as commands from "../../src/lib/ipc/commands";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
+  fsCheckFileAccess: vi.fn(),
   fsReadFile: vi.fn(),
   localWorkspaceId: () => "local",
   isAppError: (value: unknown): value is { code: string; message: string } =>
@@ -187,6 +188,23 @@ describe("reconcileRestoredSession", () => {
     });
   });
 
+  it("rebuilds an image tab without text contents", () => {
+    const session: PersistedEditorSession = {
+      paneTree: leaf("L1", ["/proj/photo.webp"], "/proj/photo.webp"),
+      focusedPaneId: "L1",
+    };
+    const readable = new Map([["/proj/photo.webp", ""]]);
+
+    const result = reconcileRestoredSession(session, readable);
+
+    expect(result.tabs[0]).toMatchObject({
+      path: "/proj/photo.webp",
+      mode: "image",
+      savedDoc: "",
+      isDirty: false,
+    });
+  });
+
   it("restores a markdown tab honoring the current markdownDefaultView setting, not a hardcoded default", () => {
     markdownDefaultView.set("source");
     const session: PersistedEditorSession = {
@@ -258,6 +276,7 @@ describe("reconcileRestoredSession", () => {
 describe("restoreEditorSession", () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.mocked(commands.fsCheckFileAccess).mockReset().mockResolvedValue(undefined);
     vi.mocked(commands.fsReadFile).mockReset();
   });
 
@@ -282,6 +301,19 @@ describe("restoreEditorSession", () => {
     expect(result?.paneTree).toEqual(leaf("L1", ["/proj/a.txt"], "/proj/a.txt"));
     expect(result?.focusedPaneId).toBe("L1");
     expect(commands.fsReadFile).toHaveBeenCalledWith("local", "/proj/a.txt");
+  });
+
+  it("validates a persisted image without reading it as UTF-8", async () => {
+    localStorage.setItem(
+      "atrium.editorSession./proj",
+      JSON.stringify({ paneTree: leaf("L1", ["/proj/photo.avif"], "/proj/photo.avif"), focusedPaneId: "L1" }),
+    );
+
+    const result = await restoreEditorSession("/proj");
+
+    expect(result?.tabs[0]).toMatchObject({ path: "/proj/photo.avif", mode: "image", savedDoc: "" });
+    expect(commands.fsCheckFileAccess).toHaveBeenCalledWith("local", "/proj/photo.avif");
+    expect(commands.fsReadFile).not.toHaveBeenCalled();
   });
 
   it("silently drops a path whose read fails with NOT_FOUND", async () => {

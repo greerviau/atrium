@@ -1,6 +1,6 @@
 import { get, writable } from "svelte/store";
-import { fsReadFile, fsWriteFile, isAppError, localWorkspaceId } from "../ipc/commands";
-import { modeForPath, type PaneMode } from "../editor/codeExtensions";
+import { fsCheckFileAccess, fsReadFile, fsWriteFile, isAppError, localWorkspaceId } from "../ipc/commands";
+import { isTextPaneMode, modeForPath, type PaneMode } from "../editor/codeExtensions";
 import { closePrompt } from "./closePrompt";
 import { workspace } from "./workspace";
 import { recordFileOpened } from "./recentFiles";
@@ -172,9 +172,15 @@ export async function openFile(
   }
 
   const mode = modeForPath(path);
-  // Data files are read by the data-query backend on demand, so opening a
-  // Parquet file never routes its binary bytes through the UTF-8 editor path.
-  const contents = mode === "data" ? "" : await fsReadFile(workspaceId, path);
+  // Binary-backed panes load on demand through their own backend/protocol,
+  // so opening them validates access without routing bytes through the UTF-8
+  // editor path.
+  let contents = "";
+  if (isTextPaneMode(mode)) {
+    contents = await fsReadFile(workspaceId, path);
+  } else {
+    await fsCheckFileAccess(workspaceId, path);
+  }
   const tab: Tab = {
     path,
     workspaceId,
@@ -369,7 +375,7 @@ export async function saveTab(path: string, contents: string, getLiveContent?: (
 export async function reconcileExternalChange(path: string): Promise<void> {
   const state = get(tabsState);
   const tab = state.tabs.find((t) => t.path === path);
-  if (!tab || tab.mode === "data") {
+  if (!tab || !isTextPaneMode(tab.mode)) {
     return;
   }
 

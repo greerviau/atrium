@@ -1,6 +1,6 @@
 import { get } from "svelte/store";
-import { fsReadFile, isAppError, localWorkspaceId } from "../ipc/commands";
-import { modeForPath } from "../editor/codeExtensions";
+import { fsCheckFileAccess, fsReadFile, isAppError, localWorkspaceId } from "../ipc/commands";
+import { isTextPaneMode, modeForPath } from "../editor/codeExtensions";
 import { findLeaf, listLeaves, pruneMissingTabs, type EditorLeafPane, type EditorPaneNode } from "../editor/editorPaneTree";
 import { markdownDefaultView } from "./markdownDefaultView";
 import type { Tab } from "./tabs";
@@ -131,15 +131,15 @@ export interface RestoredEditorSession {
 }
 
 /**
- * Pure reconciliation step: given the persisted pane tree and a map of which
- * of its referenced paths were actually readable off disk (path -> file
- * contents; a path missing from `readable` is treated as gone — most
- * commonly deleted while the app was closed), prunes the tree down to just
- * the surviving paths — reusing `pruneMissingTabs`'s own tree-surgery (drop
- * the path from its leaf, collapse an emptied leaf, fall back that leaf's
- * `activeTabPath`) rather than duplicating it — and reconstructs the flat
- * `tabsState` tab list from the survivors. Kept free of IPC calls so
- * restore-time pruning is testable without mocking `fsReadFile`.
+ * Pure reconciliation step. Given the persisted pane tree and a map of
+ * accessible paths, it prunes the tree and reconstructs the flat `tabsState`
+ * tab list from the survivors. Map values contain text contents or an empty
+ * value for a binary-backed pane. A missing map entry means the path is gone,
+ * most commonly because it was deleted while the app was closed.
+ *
+ * Reuses `pruneMissingTabs` to drop paths, collapse empty leaves, and choose
+ * each leaf's fallback `activeTabPath`. Kept free of IPC calls so restore-time
+ * pruning is testable without mocking `fsReadFile`.
  */
 export function reconcileRestoredSession(
   session: PersistedEditorSession,
@@ -185,7 +185,8 @@ export function reconcileRestoredSession(
 
 /**
  * Computes the restored editor session for `root`: loads it, re-reads every
- * distinct referenced path fresh off disk, and drops any path whose read
+ * distinct text path fresh off disk, validates binary-backed paths without
+ * transferring their contents, and drops any path whose access
  * fails with `NOT_FOUND` (the file was deleted while the app was closed) or
  * `INVALID_PATH` (a persisted external tab — its grant is in-memory-only and
  * never survives a relaunch, so it falls straight through to the unmodified
@@ -222,7 +223,13 @@ export async function restoreEditorSession(root: string): Promise<RestoredEditor
     await Promise.all(
       paths.map(async (path) => {
         try {
-          readable.set(path, await fsReadFile(localWorkspaceId(), path));
+          const mode = modeForPath(path);
+          if (isTextPaneMode(mode)) {
+            readable.set(path, await fsReadFile(localWorkspaceId(), path));
+          } else {
+            await fsCheckFileAccess(localWorkspaceId(), path);
+            readable.set(path, "");
+          }
         } catch (err) {
           if (!isAppError(err) || (err.code !== "NOT_FOUND" && err.code !== "INVALID_PATH")) throw err;
         }

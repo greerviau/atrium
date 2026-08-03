@@ -10,12 +10,14 @@ import { openExternalLink } from "../ipc/commands";
 import { showErrorToast, describeError } from "../stores/errorToast";
 import { get } from "svelte/store";
 import type { SplitDirection } from "../terminal/paneTree";
+import { isTextPaneMode } from "../editor/codeExtensions";
 
 /**
  * Wires the native menu bar (built in `main.rs`) to frontend behavior. Menu
- * items have no notion of "the active editor," so `menu:save` goes through
- * the same `saveRequest` store an `EditorPane` would react to for a
- * synthetic Cmd+S; `menu:open-folder`, `menu:new-terminal-tab`, and
+ * items have no notion of "the active editor," so `menu:save` checks that
+ * the active tab is editable and then goes through the same `saveRequest`
+ * store an `EditorPane` reacts to for a synthetic Cmd+S;
+ * `menu:open-folder`, `menu:new-terminal-tab`, and
  * `menu:split-terminal` call the same functions their in-app buttons would;
  * `menu:find-in-files` opens the search overlay in content mode, guarded on
  * a workspace being open the same way `menu:save` is guarded on an active
@@ -47,9 +49,10 @@ export async function initMenuBar(
   await onMenuEvent("menu:open-folder", () => void openWorkspaceFolder());
   await onMenuEvent("menu:settings", () => openSettings());
   await onMenuEvent("menu:save", () => {
-    const active = get(tabsState).activeTabPath;
-    if (active) {
-      requestSaveReportingErrors(active);
+    const state = get(tabsState);
+    const active = state.tabs.find((tab) => tab.path === state.activeTabPath);
+    if (active && isTextPaneMode(active.mode)) {
+      requestSaveReportingErrors(active.path);
     }
   });
   await onMenuEvent("menu:new-terminal-tab", onNewTerminalTab);

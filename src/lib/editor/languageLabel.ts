@@ -1,4 +1,5 @@
 import { extensionOf } from "../util/path";
+import { isImagePath } from "./imageFormats";
 
 /**
  * Extension (no dot, lowercased) -> human-readable language label for the
@@ -30,7 +31,8 @@ const LABELS: Record<string, string> = {
   parquet: "Parquet",
 };
 
-/** Human-readable language label for `path`'s extension, falling back to "Plain Text" for anything unrecognized. */
+/** Human-readable file-type label for `path`'s extension, falling back to "Plain Text" for anything unrecognized. */
 export function languageLabel(path: string): string {
+  if (isImagePath(path)) return "Image";
   return LABELS[extensionOf(path)] ?? "Plain Text";
 }
