@@ -148,15 +148,19 @@ describe("TitleBar", () => {
       ],
     });
 
-    const { findByRole, findByText, findAllByText } = render(TitleBar);
+    const { container, findByRole, findByText, findAllByText } = render(TitleBar);
     await fireEvent.click(await findByRole("button", { name: "Switch worktree" }));
 
     expect(await findByText("feature")).toBeTruthy();
     expect(await findByText("feature/login")).toBeTruthy();
+    expect(window.getComputedStyle(container.querySelector(".git-menu")!).height).toBe("300px");
+    expect(window.getComputedStyle(container.querySelector(".git-menu-list")!).overflowY).toBe("auto");
 
     await fireEvent.click(await findByRole("button", { name: "Switch branch" }));
     expect(await findAllByText("feature/login")).toHaveLength(1);
     expect(await findByText("local-only")).toBeTruthy();
+    expect(window.getComputedStyle(container.querySelector(".git-menu")!).height).toBe("300px");
+    expect(window.getComputedStyle(container.querySelector(".git-menu-list")!).overflowY).toBe("auto");
   });
 
   it("switches to the worktree that owns a selected branch", async () => {

@@ -99,17 +99,19 @@
         <ContextMenu anchorEl={worktreeButtonEl}>
           <div class="git-menu" role="none">
             <div class="menu-heading">Worktrees</div>
-            {#each context.worktrees as worktree (worktree.path)}
-              <button
-                class:current={worktree.isCurrent}
-                role="menuitem"
-                disabled={worktree.isCurrent}
-                onclick={() => void chooseWorktree(worktree.path)}
-              >
-                <span class="row-main">{basename(worktree.path)}</span>
-                <span class="row-detail">{worktree.branch ?? `detached @ ${worktree.head}`}</span>
-              </button>
-            {/each}
+            <div class="git-menu-list scrollbar-autohide" role="none">
+              {#each context.worktrees as worktree (worktree.path)}
+                <button
+                  class:current={worktree.isCurrent}
+                  role="menuitem"
+                  disabled={worktree.isCurrent}
+                  onclick={() => void chooseWorktree(worktree.path)}
+                >
+                  <span class="row-main">{basename(worktree.path)}</span>
+                  <span class="row-detail">{worktree.branch ?? `detached @ ${worktree.head}`}</span>
+                </button>
+              {/each}
+            </div>
           </div>
         </ContextMenu>
       {/if}
@@ -135,23 +137,25 @@
         <ContextMenu anchorEl={branchButtonEl}>
           <div class="git-menu" role="none">
             <div class="menu-heading">Branches</div>
-            {#if context.branches.length === 0}
-              <p class="empty-state">No local branches</p>
-            {:else}
-              {#each context.branches as branch (branch.name)}
-                <button
-                  class:current={branch.isCurrent}
-                  role="menuitem"
-                  disabled={branch.isCurrent}
-                  onclick={() => void chooseBranch(branch)}
-                >
-                  <span class="row-main">{branch.name}</span>
-                  {#if branch.worktreePath && branch.worktreePath !== context.worktreePath}
-                    <span class="row-detail">in {basename(branch.worktreePath)}</span>
-                  {/if}
-                </button>
-              {/each}
-            {/if}
+            <div class="git-menu-list scrollbar-autohide" role="none">
+              {#if context.branches.length === 0}
+                <p class="empty-state">No local branches</p>
+              {:else}
+                {#each context.branches as branch (branch.name)}
+                  <button
+                    class:current={branch.isCurrent}
+                    role="menuitem"
+                    disabled={branch.isCurrent}
+                    onclick={() => void chooseBranch(branch)}
+                  >
+                    <span class="row-main">{branch.name}</span>
+                    {#if branch.worktreePath && branch.worktreePath !== context.worktreePath}
+                      <span class="row-detail">in {basename(branch.worktreePath)}</span>
+                    {/if}
+                  </button>
+                {/each}
+              {/if}
+            </div>
           </div>
         </ContextMenu>
       {/if}
@@ -225,8 +229,17 @@
     flex-direction: column;
     min-width: 220px;
     max-width: 360px;
+    height: 300px;
     -webkit-user-select: text;
     user-select: text;
+  }
+
+  .git-menu-list {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   .menu-heading {
