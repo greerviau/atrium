@@ -9,6 +9,9 @@ const launchPath = path.join(__dirname, "../fixtures/launch-open.md");
 
 describe("file-manager launch argument", () => {
   it("opens the requested file in the existing app instead of the welcome screen", async () => {
+    const welcome = await $(".welcome");
+    await welcome.waitForExist({ timeout: 10000 });
+
     const secondInstance = spawnSync(appBinary, [launchPath], {
       encoding: "utf8",
       timeout: 10000,
