@@ -187,12 +187,10 @@ pub struct PtyManager {
     /// any individual tick took to actually run under CI scheduling
     /// contention. See the regression history on
     /// `output_after_idle_period_arrives_within_roughly_one_flush_interval`.
-    /// Only read by `#[cfg(test)]` code today, so a plain (non-test) build
-    /// never reads it — `cfg_attr` scopes the allowance to exactly that
-    /// build, rather than gating the field itself behind `cfg(test)` and
-    /// letting the struct's shape differ between test and production
-    /// compiles.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Only read by Unix `#[cfg(test)]` code today, so other builds allow the
+    /// field to remain write-only rather than changing the production struct's
+    /// shape by platform or test mode.
+    #[cfg_attr(any(not(test), windows), allow(dead_code))]
     flush_ticks: Arc<AtomicU64>,
 }
 
