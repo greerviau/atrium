@@ -20,7 +20,7 @@ npm run test:launch-open
 ```
 
 `wdio.conf.js` builds the debug binary (`cargo build` in `src-tauri/`), starts `tauri-driver`, and runs the specs in `specs/`.
-The `test:launch-open` command uses a focused configuration that passes `fixtures/launch-open.md` as a real process argument and verifies that Atrium opens it instead of showing the welcome screen.
+The `test:launch-open` command starts Atrium under WebDriver, launches a second native process with `fixtures/launch-open.md` as a real argument, and verifies that the existing app opens it instead of showing the welcome screen.
 
 ## Coverage
 
@@ -52,7 +52,7 @@ These are real-display, real-input-timing bugs that jsdom/vitest tests cannot ex
 
 `specs/issue359.e2e.js` covers issue #359: place the caret at a rendered Markdown visual wrap boundary, click the terminal, wait through CodeMirror's next measure cycle, and confirm the terminal retains focus while the preview hides its raw marker.
 
-`specs/launchOpen.e2e.js` covers issue #362 by launching the native application process with a file path argument, then verifying that the requested file is open in the editor and the welcome screen is absent.
+`specs/launchOpen.e2e.js` covers issue #362 by launching a second native application process with a file path argument, then verifying that the single-instance handoff opens the requested file in the existing editor and removes the welcome screen.
 This focused spec runs under Xvfb in Linux CI.
 
 `specs/keyboardShortcuts.e2e.js` covers issue #156's two kinds of shortcut:

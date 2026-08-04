@@ -1,10 +1,10 @@
 use crate::error::AppError;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 #[cfg(unix)]
-type StableFileIdentity = Arc<same_file::Handle>;
+type StableFileIdentity = std::sync::Arc<same_file::Handle>;
 
 #[cfg(windows)]
 #[derive(Clone, PartialEq, Eq)]
@@ -15,7 +15,7 @@ struct StableFileIdentity {
 
 #[cfg(unix)]
 fn stable_file_identity(path: &Path) -> std::io::Result<StableFileIdentity> {
-    same_file::Handle::from_path(path).map(Arc::new)
+    same_file::Handle::from_path(path).map(std::sync::Arc::new)
 }
 
 #[cfg(windows)]
