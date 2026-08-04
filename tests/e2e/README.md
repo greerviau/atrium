@@ -19,7 +19,7 @@ npm test
 npm run test:launch-open
 ```
 
-`wdio.conf.js` builds the debug binary (`cargo build` in `src-tauri/`), starts `tauri-driver`, and runs the specs in `specs/`.
+`wdio.conf.js` starts the Vite server used by Tauri's debug build, builds the binary (`cargo build` in `src-tauri/`), starts `tauri-driver`, and runs the specs in `specs/`. It stops both child processes when the suite finishes.
 The `test:launch-open` command starts Atrium under WebDriver, launches a second native process with `fixtures/launch-open.md` as a real argument, and verifies that the existing app opens it instead of showing the welcome screen.
 
 ## Coverage
