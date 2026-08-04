@@ -28,7 +28,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
+    "targets": "all",
     "fileAssociations": [
       {
         "ext": ["md", "markdown"],

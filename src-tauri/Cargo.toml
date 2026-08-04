@@ -1,7 +1,7 @@
 [package]
 name = "atrium"
 version = "0.1.0"
-description = "Atrium: a unified markdown editor, code editor, file explorer, and terminal for macOS"
+description = "Atrium: a cross-platform markdown editor, code editor, file explorer, and terminal"
 authors = ["Atrium contributors"]
 edition = "2021"
 
@@ -36,11 +36,18 @@ tempfile = "3"
 csv = "1.3"
 parquet = { version = "59.1.0", default-features = false, features = ["snap", "flate2-rust_backend", "zstd", "lz4"] }
 sqlparser = "0.62.0"
+tauri-plugin-single-instance = "2.4.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSDocumentController", "NSGraphics", "NSMenu", "NSMenuItem", "NSResponder", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3", features = ["NSURL"] }
 tauri-utils = "2"
+
+[target."cfg(unix)".dependencies]
+same-file = "1.0.6"
+
+[target."cfg(windows)".dependencies]
+file-id = "0.2.3"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

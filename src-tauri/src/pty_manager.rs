@@ -52,6 +52,16 @@ const PENDING_CAP: usize = 256 * 1024;
 /// tick that finds nothing has actually changed can skip sending an event.
 type TitleSnapshot = (String, Option<String>);
 
+#[cfg(unix)]
+fn default_shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
+}
+
+#[cfg(windows)]
+fn default_shell() -> String {
+    std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+}
+
 /// One session's poll-tick inputs: its id, shell pid, event channel,
 /// last-reported title, and last-seen foreign foreground pid, snapshotted
 /// together while the sessions map is briefly locked (see
@@ -177,12 +187,10 @@ pub struct PtyManager {
     /// any individual tick took to actually run under CI scheduling
     /// contention. See the regression history on
     /// `output_after_idle_period_arrives_within_roughly_one_flush_interval`.
-    /// Only read by `#[cfg(test)]` code today, so a plain (non-test) build
-    /// never reads it — `cfg_attr` scopes the allowance to exactly that
-    /// build, rather than gating the field itself behind `cfg(test)` and
-    /// letting the struct's shape differ between test and production
-    /// compiles.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Only read by Unix `#[cfg(test)]` code today, so other builds allow the
+    /// field to remain write-only rather than changing the production struct's
+    /// shape by platform or test mode.
+    #[cfg_attr(any(not(test), windows), allow(dead_code))]
     flush_ticks: Arc<AtomicU64>,
 }
 
@@ -231,9 +239,7 @@ impl PtyManager {
             })
             .map_err(|e| AppError::Other(format!("failed to open pty: {e}")))?;
 
-        let shell = shell_override
-            .or_else(|| std::env::var("SHELL").ok())
-            .unwrap_or_else(|| "/bin/zsh".to_string());
+        let shell = shell_override.unwrap_or_else(default_shell);
         let mut cmd = CommandBuilder::new(shell);
         // A login shell, the same as every other terminal emulator opens. The
         // built app is launched by `launchd` and inherits its bare `PATH`, so
@@ -243,6 +249,7 @@ impl PtyManager {
         // only. `portable_pty` applies the conventional `-zsh` argv0 itself,
         // but only for `new_default_prog`, which can't honour
         // `shell_override`; passing `-l` gets the same behaviour for both.
+        #[cfg(unix)]
         cmd.arg("-l");
         cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");
@@ -440,7 +447,10 @@ impl PtyManager {
         );
         let descendants = Self::collect_descendants(system, shell_pid);
 
-        // Best-effort: a descendant may have already exited on its own.
+        // Best-effort Unix grace signal: a descendant may have already
+        // exited on its own. Windows has no SIGHUP equivalent, so its
+        // descendants proceed directly to the force-termination pass.
+        #[cfg(unix)]
         for &pid in &descendants {
             unsafe {
                 libc::kill(pid as libc::pid_t, libc::SIGHUP);
@@ -466,10 +476,8 @@ impl PtyManager {
                 ProcessRefreshKind::nothing(),
             );
             for &pid in &descendants {
-                if system.process(Pid::from_u32(pid)).is_some() {
-                    unsafe {
-                        libc::kill(pid as libc::pid_t, libc::SIGKILL);
-                    }
+                if let Some(process) = system.process(Pid::from_u32(pid)) {
+                    let _ = process.kill();
                 }
             }
         }
@@ -592,20 +600,30 @@ impl PtyManager {
         last_foreign_pid: &Mutex<Option<u32>>,
         system: &mut System,
     ) -> Option<TitleSnapshot> {
-        // Re-lock just long enough for `tcgetpgrp` (a single syscall on the
-        // pty's own fd) — the actual OS-inspection work below (targeted
-        // `sysinfo` refreshes) runs with no lock held at all, so it never
-        // blocks this session's own spawn/write/resize/kill calls.
+        // Re-lock just long enough for `tcgetpgrp` on Unix. ConPTY does not
+        // expose a foreground process group, so Windows reports the shell
+        // itself and still receives cwd updates from `sysinfo` below.
+        #[cfg(unix)]
         let fg_pid = {
             let sessions = sessions.lock().unwrap();
-            sessions.get(terminal_id)?.master.process_group_leader()
+            sessions
+                .get(terminal_id)?
+                .master
+                .process_group_leader()
+                .map(|pid| pid as u32)
+        };
+        #[cfg(windows)]
+        let fg_pid = {
+            let sessions = sessions.lock().unwrap();
+            sessions.get(terminal_id)?;
+            None
         };
 
         // A foreign foreground process is only "foreign" if its pid differs
         // from the shell's own — a builtin (`cd`, a shell function) never
         // forks, so `tcgetpgrp` correctly keeps reporting the shell's own
         // pid for those.
-        let foreign_pid = fg_pid.map(|pid| pid as u32).filter(|&pid| pid != shell_pid);
+        let foreign_pid = fg_pid.filter(|&pid| pid != shell_pid);
 
         let mut pids = vec![Pid::from_u32(shell_pid)];
         if let Some(pid) = foreign_pid {
@@ -653,7 +671,7 @@ impl PtyManager {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;

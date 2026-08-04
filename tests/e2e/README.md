@@ -6,8 +6,8 @@ WebDriver-based smoke tests via `tauri-driver`, per the plan's testing strategy 
 
 These tests drive the actual compiled app through its native WebView, so they need a machine with a display and the full Tauri build toolchain — they cannot run in a headless CI container or a sandbox without system WebView libraries.
 
-- macOS or Linux with a display.
-- Rust toolchain, plus the Tauri v2 system dependencies for your platform ([webkit2gtk etc. on Linux](https://v2.tauri.app/start/prerequisites/), Xcode command line tools on macOS).
+- Linux or Windows with a display. `tauri-driver` does not support macOS.
+- Rust toolchain, plus the Tauri v2 system dependencies for your platform ([webkit2gtk etc. on Linux](https://v2.tauri.app/start/prerequisites/), Microsoft C++ Build Tools and WebView2 on Windows).
 - `cargo install tauri-driver` (once).
 
 ## Running
@@ -16,9 +16,11 @@ These tests drive the actual compiled app through its native WebView, so they ne
 cd tests/e2e
 npm install
 npm test
+npm run test:launch-open
 ```
 
-`wdio.conf.js` builds the debug binary (`cargo build` in `src-tauri/`), starts `tauri-driver`, and runs the specs in `specs/`.
+`wdio.conf.js` starts the Vite server used by Tauri's debug build, builds the binary (`cargo build` in `src-tauri/`), starts `tauri-driver`, and runs the specs in `specs/`. It stops both child processes when the suite finishes.
+The `test:launch-open` command starts Atrium under WebDriver, launches a second native process with `fixtures/launch-open.md` as a real argument, and verifies that the existing app opens it instead of showing the welcome screen.
 
 ## Coverage
 
@@ -50,6 +52,9 @@ These are real-display, real-input-timing bugs that jsdom/vitest tests cannot ex
 
 `specs/issue359.e2e.js` covers issue #359: place the caret at a rendered Markdown visual wrap boundary, click the terminal, wait through CodeMirror's next measure cycle, and confirm the terminal retains focus while the preview hides its raw marker.
 
+`specs/launchOpen.e2e.js` covers issue #362 by launching a second native application process with a file path argument, then verifying that the single-instance handoff opens the requested file in the existing editor and removes the welcome screen.
+This focused spec runs under Xvfb in Linux CI.
+
 `specs/keyboardShortcuts.e2e.js` covers issue #156's two kinds of shortcut:
 
 1. The five file-explorer shortcuts, which are plain DOM `keydown` handlers scoped to whichever tree row holds focus rather than native accelerators (see the plan's safety-constraint note): click a row to focus it, press ⌘N, type a name, and confirm the new file appears in the tree; press F2 on that file's own row and confirm the inline rename opens prefilled with its current name; press ⌘⌫ and confirm the permanent-delete confirmation modal opens (and the entry survives) before actually deleting it via the modal's own button.
@@ -57,4 +62,5 @@ These are real-display, real-input-timing bugs that jsdom/vitest tests cannot ex
 
 ## Status
 
-Written against the plan but **not executed** in the environment this was developed in (no display, no system WebView libraries, no macOS). Run this suite on a real dev machine or in CI on `macos-latest` before relying on it — treat it as a starting point to verify and adjust selectors/timing against, not as already-passing.
+The focused launch-open spec runs in Linux CI.
+The broader smoke suite still requires a real Linux or Windows display and is not part of the default CI workflow.

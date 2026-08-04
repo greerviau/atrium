@@ -21,7 +21,6 @@ use std::ffi::OsString;
 use std::future::Future;
 use std::io;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -610,12 +609,20 @@ impl LocalWorkspace {
                         // walked; `is_on_track_to_root` below tolerates that
                         // climb, and the check right after this loop is what
                         // actually enforces containment on the final result.
-                        current = PathBuf::from("/");
-                        let mut spliced: VecDeque<(OsString, bool)> = normalized_target
-                            .components()
-                            .filter(|c| !matches!(c, Component::RootDir))
-                            .map(|c| (c.as_os_str().to_os_string(), false))
-                            .collect();
+                        let mut target_root = PathBuf::new();
+                        let mut spliced = VecDeque::new();
+                        let mut below_root = false;
+                        for component in normalized_target.components() {
+                            if !below_root
+                                && matches!(component, Component::Prefix(_) | Component::RootDir)
+                            {
+                                target_root.push(component.as_os_str());
+                            } else {
+                                below_root = true;
+                                spliced.push_back((component.as_os_str().to_os_string(), false));
+                            }
+                        }
+                        current = target_root;
                         spliced.append(&mut remaining);
                         remaining = spliced;
                     }
@@ -832,16 +839,11 @@ fn fsync_full(file: &std::fs::File) -> io::Result<()> {
     file.sync_all()
 }
 
-/// Reports whether the current process can write to `path`, via `access(2)`
-/// — the same check `open(2)` itself makes, and more faithful than
-/// `Permissions::readonly()` (which only inspects the mode bits and ignores
-/// the process's actual effective uid/gid).
+/// Reports whether the current process can open `path` for writing without
+/// truncating it. This asks the OS to apply the process's real access rights
+/// instead of inferring writability from platform-specific permission bits.
 fn is_writable(path: &Path) -> bool {
-    use std::os::unix::ffi::OsStrExt;
-    let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
-        return false;
-    };
-    unsafe { libc::access(c_path.as_ptr(), libc::W_OK) == 0 }
+    std::fs::OpenOptions::new().write(true).open(path).is_ok()
 }
 
 /// Writes `contents` to `target` atomically and durably: writes to a fresh
@@ -870,26 +872,35 @@ pub(crate) fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
             "target is not writable",
         ));
     }
-    let permissions = existing
-        .map(|meta| meta.permissions())
-        .unwrap_or_else(|| std::fs::Permissions::from_mode(0o644));
+    let permissions = existing.map(|meta| meta.permissions());
+    #[cfg(unix)]
+    let permissions = permissions.or_else(|| {
+        use std::os::unix::fs::PermissionsExt;
+        Some(std::fs::Permissions::from_mode(0o644))
+    });
 
     let mut builder = tempfile::Builder::new();
     builder.prefix(".atrium-save-");
 
     let mut tmp = builder.tempfile_in(dir)?;
-    // `Builder::permissions` would only feed the mode to `open(2)`, which the
-    // process umask then masks — using `set_permissions` (`fchmod`) here
-    // instead applies the mode directly, so the target's permissions (or the
-    // `0o644` default for a new file) survive intact regardless of umask.
-    tmp.as_file().set_permissions(permissions)?;
+    // Preserve an existing target's permissions. New Unix files receive the
+    // editor's 0644 default; Windows retains tempfile's platform default
+    // instead of manufacturing Unix mode bits.
+    if let Some(permissions) = permissions {
+        tmp.as_file().set_permissions(permissions)?;
+    }
     tmp.write_all(contents)?;
     fsync_full(tmp.as_file())?;
 
     tmp.persist(target).map_err(|e| e.error)?;
 
-    let dir_file = std::fs::File::open(dir)?;
-    fsync_full(&dir_file)?;
+    // Unix permits opening and syncing a directory so the rename itself is
+    // durable. Windows does not expose that operation through `std::fs`.
+    #[cfg(unix)]
+    {
+        let dir_file = std::fs::File::open(dir)?;
+        fsync_full(&dir_file)?;
+    }
 
     Ok(())
 }
@@ -949,6 +960,20 @@ fn unique_destination(dest_dir: &Path, name: &str, is_dir: bool) -> Result<PathB
 /// Boxed and manually recursive (async fns can't call themselves directly)
 /// with an explicit `'a` lifetime tying the returned future to both borrowed
 /// path arguments.
+#[cfg(unix)]
+fn copy_symlink(_source: &Path, target: &Path, dest: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(target, dest)
+}
+
+#[cfg(windows)]
+fn copy_symlink(source: &Path, target: &Path, dest: &Path) -> io::Result<()> {
+    if std::fs::metadata(source)?.is_dir() {
+        std::os::windows::fs::symlink_dir(target, dest)
+    } else {
+        std::os::windows::fs::symlink_file(target, dest)
+    }
+}
+
 fn copy_recursive<'a>(
     source: &'a Path,
     dest: &'a Path,
@@ -958,7 +983,7 @@ fn copy_recursive<'a>(
         let file_type = metadata.file_type();
         if file_type.is_symlink() {
             let target = tokio::fs::read_link(source).await?;
-            std::os::unix::fs::symlink(&target, dest)?;
+            copy_symlink(source, &target, dest)?;
         } else if file_type.is_dir() {
             tokio::fs::create_dir_all(dest).await?;
             let mut read_dir = tokio::fs::read_dir(source).await?;
@@ -1388,9 +1413,10 @@ impl Workspace for LocalWorkspace {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn workspace(root: &Path) -> LocalWorkspace {
