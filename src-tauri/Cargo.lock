@@ -258,6 +258,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "csv",
+ "file-id",
  "grep-matcher",
  "grep-regex",
  "grep-searcher",

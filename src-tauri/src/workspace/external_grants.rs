@@ -1,7 +1,31 @@
 use crate::error::AppError;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+#[cfg(unix)]
+type StableFileIdentity = Arc<same_file::Handle>;
+
+#[cfg(windows)]
+#[derive(Clone, PartialEq, Eq)]
+struct StableFileIdentity {
+    file_id: file_id::FileId,
+    created: Option<std::time::SystemTime>,
+}
+
+#[cfg(unix)]
+fn stable_file_identity(path: &Path) -> std::io::Result<StableFileIdentity> {
+    same_file::Handle::from_path(path).map(Arc::new)
+}
+
+#[cfg(windows)]
+fn stable_file_identity(path: &Path) -> std::io::Result<StableFileIdentity> {
+    let metadata = std::fs::metadata(path)?;
+    Ok(StableFileIdentity {
+        file_id: file_id::get_file_id(path)?,
+        created: metadata.created().ok(),
+    })
+}
 
 /// Identity captured at grant time and re-verified on every later access.
 /// **The invariant this type exists to enforce: a granted key authorizes
@@ -10,20 +34,21 @@ use std::sync::Mutex;
 /// ID (device/inode on Unix, volume/file ID on Windows) is not enough; a
 /// directory-symlink swap combined with a hard link can hold that ID stable
 /// while changing what the path resolves to (§4.4c); comparing
-/// `canonical_path` too closes that. The identity handles remain open for the
-/// grant's lifetime, preventing the OS from reusing a deleted file or
-/// directory's ID while the grant still refers to it.
+/// `canonical_path` too closes that. Unix identity handles remain open for
+/// the grant's lifetime, preventing ID reuse. Windows combines its 128-bit
+/// file ID with creation time without retaining a handle that would block an
+/// atomic replacement.
 #[derive(Clone)]
 struct GrantedIdentity {
     canonical_path: PathBuf,
-    file_handle: std::sync::Arc<same_file::Handle>,
+    file_identity: StableFileIdentity,
     /// The granted file's *parent directory's* own identity at the moment
     /// this was captured (grant time, or the most recent legitimate
     /// refresh). Exists solely so `resolve_granted_for_write`'s
     /// deleted-file recreation arm can confirm the parent it's about to
     /// recreate into is still the exact directory that was granted, not
     /// wherever a swapped symlink now resolves it to (MF-B, round 2).
-    parent_handle: std::sync::Arc<same_file::Handle>,
+    parent_identity: StableFileIdentity,
 }
 
 /// Per-workspace-instance allowlist of externally-opened files, created
@@ -288,7 +313,8 @@ const ASSET_EXTENSION_ALLOWLIST: &[&str] = &[
 const MIN_ASSET_ROOT_COMPONENTS: usize = 1;
 
 fn identity_matches(current: &GrantedIdentity, recorded: &GrantedIdentity) -> bool {
-    current.file_handle == recorded.file_handle && current.canonical_path == recorded.canonical_path
+    current.file_identity == recorded.file_identity
+        && current.canonical_path == recorded.canonical_path
 }
 
 /// Re-verifies, live, that a granted file's recorded parent directory is
@@ -319,8 +345,8 @@ async fn verify_parent(recorded: &GrantedIdentity) -> bool {
     let Some(parent) = recorded.canonical_path.parent() else {
         return false;
     };
-    same_file::Handle::from_path(parent)
-        .map(|current| current == *recorded.parent_handle)
+    stable_file_identity(parent)
+        .map(|current| current == recorded.parent_identity)
         .unwrap_or(false)
 }
 
@@ -339,14 +365,14 @@ async fn capture_identity(path: &str) -> Result<GrantedIdentity, AppError> {
     let parent = canonical_path
         .parent()
         .ok_or_else(|| AppError::InvalidPath(format!("'{path}' has no parent directory")))?;
-    let file_handle = same_file::Handle::from_path(&canonical_path)
+    let file_identity = stable_file_identity(&canonical_path)
         .map_err(|e| crate::workspace::local::map_io_err(e, path))?;
-    let parent_handle = same_file::Handle::from_path(parent)
-        .map_err(|e| crate::workspace::local::map_io_err(e, path))?;
+    let parent_identity =
+        stable_file_identity(parent).map_err(|e| crate::workspace::local::map_io_err(e, path))?;
     Ok(GrantedIdentity {
         canonical_path,
-        file_handle: std::sync::Arc::new(file_handle),
-        parent_handle: std::sync::Arc::new(parent_handle),
+        file_identity,
+        parent_identity,
     })
 }
 

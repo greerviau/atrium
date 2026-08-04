@@ -307,9 +307,11 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         let outside_file = outside.path().join("secret.txt");
         std::fs::write(&outside_file, "hi").unwrap();
-        let colliding_suffix = workspace_root
-            .path()
-            .join(outside_file.strip_prefix("/").unwrap());
+        let outside_without_root: PathBuf = outside_file
+            .components()
+            .filter(|component| !matches!(component, Component::Prefix(_) | Component::RootDir))
+            .collect();
+        let colliding_suffix = workspace_root.path().join(outside_without_root);
         std::fs::create_dir_all(colliding_suffix.parent().unwrap()).unwrap();
         std::fs::write(colliding_suffix, "not the printed absolute path").unwrap();
 

@@ -16,7 +16,6 @@ export const config = {
   path: "/",
   capabilities: [
     {
-      browserName: "wry",
       "tauri:options": {
         application: appBinary,
       },
