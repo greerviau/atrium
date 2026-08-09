@@ -12,6 +12,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+#[cfg(not(target_os = "macos"))]
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
 /// Emitted whenever an OS-open request arrives after the frontend has
