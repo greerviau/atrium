@@ -586,6 +586,19 @@ impl LocalWorkspace {
 
         let mut current = real_root.clone();
         let mut hops = 0u32;
+        // Whether `current`'s own final component has itself been checked
+        // (via `symlink_metadata`) since it was last updated — true for
+        // `real_root` (it's `canonicalize`'s own output), for a freshly
+        // spliced `target_root` (a bare drive root can't be a symlink), and
+        // for every `_` catch-all update below (that arm only runs once
+        // `symlink_metadata` has already confirmed `next` isn't one).
+        // False only for the `resolve_entry_within_root` (`dereference_final
+        // == false`) case: the caller's own final component, deliberately
+        // never checked, matching `unlink(2)`/`rename(2)`. `windows_alias`
+        // needs this to decide whether canonicalizing `current` whole is
+        // safe (verified) or would risk dereferencing an unchecked symlink
+        // (unverified, so only `current`'s parent gets canonicalized).
+        let mut current_verified = true;
 
         while let Some((component, is_original_final)) = remaining.pop_front() {
             // `delete`/`rename` act on the directory entry itself and must not
@@ -638,19 +651,22 @@ impl LocalWorkspace {
                             }
                         }
                         current = target_root;
+                        current_verified = true;
                         spliced.append(&mut remaining);
                         remaining = spliced;
                     }
                     _ => {
                         current = next;
-                        if !is_on_track_to_root(&current, &real_root) {
+                        current_verified = true;
+                        if !is_on_track_to_root(&current, &real_root, current_verified) {
                             return Err(escapes_workspace_root(path));
                         }
                     }
                 }
             } else {
                 current.push(&component);
-                if !is_on_track_to_root(&current, &real_root) {
+                current_verified = false;
+                if !is_on_track_to_root(&current, &real_root, current_verified) {
                     return Err(escapes_workspace_root(path));
                 }
             }
@@ -661,7 +677,7 @@ impl LocalWorkspace {
         // `real_root` (still "on track") right up until the last component is
         // consumed. This is the check that actually enforces containment on
         // the fully-resolved result.
-        if !contains_root(&current, &real_root) {
+        if !contains_root(&current, &real_root, current_verified) {
             return Err(escapes_workspace_root(path));
         }
         Ok(current)
@@ -802,11 +818,12 @@ fn escapes_workspace_root(path: &str) -> AppError {
 /// target that ultimately resolves inside `root`. Once a path fails both
 /// directions it can never recover (no more `..` remain after
 /// normalization), so this is safe to treat as a definitive escape — modulo
-/// the Windows fallback below.
-fn is_on_track_to_root(current: &Path, real_root: &Path) -> bool {
+/// the Windows fallback below. `verified` is `current`'s own
+/// `current_verified` from the caller's walk — see `windows_alias`.
+fn is_on_track_to_root(current: &Path, real_root: &Path, verified: bool) -> bool {
     current.starts_with(real_root)
         || real_root.starts_with(current)
-        || windows_alias(current, real_root).is_some()
+        || windows_alias(current, real_root, verified).is_some()
 }
 
 /// Whether `current` (fully resolved — every component consumed) is
@@ -814,10 +831,10 @@ fn is_on_track_to_root(current: &Path, real_root: &Path) -> bool {
 /// "contains" direction counts: `current` being a mere ancestor of
 /// `real_root` is not containment, it's an incomplete walk, which can't
 /// happen here since this is checked only after every component has been
-/// consumed.
-fn contains_root(current: &Path, real_root: &Path) -> bool {
+/// consumed. `verified` is documented on `windows_alias`.
+fn contains_root(current: &Path, real_root: &Path, verified: bool) -> bool {
     current.starts_with(real_root)
-        || windows_alias(current, real_root)
+        || windows_alias(current, real_root, verified)
             .is_some_and(|canonical| canonical.starts_with(real_root))
 }
 
@@ -830,37 +847,43 @@ fn contains_root(current: &Path, real_root: &Path) -> bool {
 /// folding `current` into that same representation lets callers re-compare
 /// against it.
 ///
-/// Canonicalizes `current`'s *parent* and rejoins its literal file name,
-/// rather than canonicalizing `current` as a whole — `canonicalize` follows
-/// symlinks, and while every other component of `current` has already been
-/// individually checked for being a symlink by the time it reaches this
-/// point (each hop goes through `resolve_within_root_impl`'s own
-/// `symlink_metadata` check), the *final* component has not when this is
-/// reached via `resolve_entry_within_root` (`dereference_final == false`,
-/// behind `delete`/`rename`): that path deliberately leaves the last
-/// component un-dereferenced, matching `unlink(2)`/`rename(2)`. Canonicalizing
-/// `current` whole would silently resolve through it anyway, deciding
-/// containment for a symlinked entry against whatever it points at rather
-/// than the entry itself — both directions wrong (rejecting an in-workspace
-/// symlink pending delete, or accepting one whose target actually escapes).
-/// Resolving only the (always-verified) parent and keeping the final
-/// component literal can't skip an untraversed hop either way. A `current`
-/// with no parent (a bare drive root) can't itself be a symlink, so it's
-/// canonicalized directly; a target that doesn't exist yet (the
+/// `verified` is `resolve_within_root_impl`'s own `current_verified`:
+/// whether `current`'s *final* component has itself already been checked
+/// via `symlink_metadata` (true for every case except
+/// `resolve_entry_within_root`'s deliberately un-dereferenced final
+/// component, behind `delete`/`rename`). When `true`, canonicalizing
+/// `current` as a whole is safe and necessary — necessary because the final
+/// component can itself need alias-folding (an 8.3 short name is not only a
+/// property of ancestors), safe because every component up to and including
+/// it has already been individually confirmed not to be a symlink. When
+/// `false`, canonicalizing `current` whole would risk silently resolving
+/// through *this* unchecked final component if it turns out to be a
+/// symlink — deciding containment for the entry's target rather than the
+/// entry itself — so only `current`'s parent (always verified) is
+/// canonicalized, and the literal file name is rejoined un-resolved; this
+/// narrows what the fallback can fix for that one case (an 8.3-named entry
+/// being deleted through an aliased ancestor stays unresolved) rather than
+/// ever dereferencing a symlink it was told not to. A `current` with no
+/// parent (a bare drive root) can't itself be a symlink, so it's
+/// canonicalized directly either way; a target that doesn't exist yet (the
 /// dangling-target case this module tolerates elsewhere) can't be
 /// canonicalized, so this returns `None` unchanged from the pre-fallback
 /// behavior.
 #[cfg(windows)]
-fn windows_alias(current: &Path, real_root: &Path) -> Option<PathBuf> {
-    let canonical = match (current.parent(), current.file_name()) {
-        (Some(parent), Some(name)) => std::fs::canonicalize(parent).ok()?.join(name),
-        _ => std::fs::canonicalize(current).ok()?,
+fn windows_alias(current: &Path, real_root: &Path, verified: bool) -> Option<PathBuf> {
+    let canonical = if verified {
+        std::fs::canonicalize(current).ok()?
+    } else {
+        match (current.parent(), current.file_name()) {
+            (Some(parent), Some(name)) => std::fs::canonicalize(parent).ok()?.join(name),
+            _ => std::fs::canonicalize(current).ok()?,
+        }
     };
     (canonical.starts_with(real_root) || real_root.starts_with(&canonical)).then_some(canonical)
 }
 
 #[cfg(not(windows))]
-fn windows_alias(_current: &Path, _real_root: &Path) -> Option<PathBuf> {
+fn windows_alias(_current: &Path, _real_root: &Path, _verified: bool) -> Option<PathBuf> {
     None
 }
 
