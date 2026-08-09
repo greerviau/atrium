@@ -21,7 +21,6 @@ use std::ffi::OsString;
 use std::future::Future;
 use std::io;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -432,11 +431,26 @@ fn find_files_root(
 /// Strips `root` off `path` to get the workspace-root-relative string that
 /// `find_files` both fuzzy-matches against and reports as `display_path` —
 /// done once here so a match's indices and the frontend's rendered string
-/// are always computed against the identical characters.
+/// are always computed against the identical characters. Always
+/// `/`-separated regardless of platform, matching every other
+/// workspace-relative path this app hands to the frontend — on Windows,
+/// `Path`'s own `\`-separated `Display` would otherwise leak into fuzzy-match
+/// highlighting and the search UI. The replace is `#[cfg(windows)]`-only: a
+/// Unix filename may legally contain a literal backslash, and only Windows
+/// ever needs one folded into a forward slash here.
 fn display_path(root: &Path, path: &str) -> String {
     Path::new(path)
         .strip_prefix(root)
-        .map(|relative| relative.to_string_lossy().to_string())
+        .map(|relative| {
+            #[cfg(windows)]
+            {
+                relative.to_string_lossy().replace('\\', "/")
+            }
+            #[cfg(not(windows))]
+            {
+                relative.to_string_lossy().to_string()
+            }
+        })
         .unwrap_or_else(|_| path.to_string())
 }
 
@@ -572,6 +586,19 @@ impl LocalWorkspace {
 
         let mut current = real_root.clone();
         let mut hops = 0u32;
+        // Whether `current`'s own final component has itself been checked
+        // (via `symlink_metadata`) since it was last updated — true for
+        // `real_root` (it's `canonicalize`'s own output), for a freshly
+        // spliced `target_root` (a bare drive root can't be a symlink), and
+        // for every `_` catch-all update below (that arm only runs once
+        // `symlink_metadata` has already confirmed `next` isn't one).
+        // False only for the `resolve_entry_within_root` (`dereference_final
+        // == false`) case: the caller's own final component, deliberately
+        // never checked, matching `unlink(2)`/`rename(2)`. `windows_alias`
+        // needs this to decide whether canonicalizing `current` whole is
+        // safe (verified) or would risk dereferencing an unchecked symlink
+        // (unverified, so only `current`'s parent gets canonicalized).
+        let mut current_verified = true;
 
         while let Some((component, is_original_final)) = remaining.pop_front() {
             // `delete`/`rename` act on the directory entry itself and must not
@@ -610,25 +637,36 @@ impl LocalWorkspace {
                         // walked; `is_on_track_to_root` below tolerates that
                         // climb, and the check right after this loop is what
                         // actually enforces containment on the final result.
-                        current = PathBuf::from("/");
-                        let mut spliced: VecDeque<(OsString, bool)> = normalized_target
-                            .components()
-                            .filter(|c| !matches!(c, Component::RootDir))
-                            .map(|c| (c.as_os_str().to_os_string(), false))
-                            .collect();
+                        let mut target_root = PathBuf::new();
+                        let mut spliced = VecDeque::new();
+                        let mut below_root = false;
+                        for component in normalized_target.components() {
+                            if !below_root
+                                && matches!(component, Component::Prefix(_) | Component::RootDir)
+                            {
+                                target_root.push(component.as_os_str());
+                            } else {
+                                below_root = true;
+                                spliced.push_back((component.as_os_str().to_os_string(), false));
+                            }
+                        }
+                        current = target_root;
+                        current_verified = true;
                         spliced.append(&mut remaining);
                         remaining = spliced;
                     }
                     _ => {
                         current = next;
-                        if !is_on_track_to_root(&current, &real_root) {
+                        current_verified = true;
+                        if !is_on_track_to_root(&current, &real_root, current_verified) {
                             return Err(escapes_workspace_root(path));
                         }
                     }
                 }
             } else {
                 current.push(&component);
-                if !is_on_track_to_root(&current, &real_root) {
+                current_verified = false;
+                if !is_on_track_to_root(&current, &real_root, current_verified) {
                     return Err(escapes_workspace_root(path));
                 }
             }
@@ -639,7 +677,7 @@ impl LocalWorkspace {
         // `real_root` (still "on track") right up until the last component is
         // consumed. This is the check that actually enforces containment on
         // the fully-resolved result.
-        if !current.starts_with(&real_root) {
+        if !contains_root(&current, &real_root, current_verified) {
             return Err(escapes_workspace_root(path));
         }
         Ok(current)
@@ -779,9 +817,74 @@ fn escapes_workspace_root(path: &str) -> AppError {
 /// strict `starts_with` at every hop would reject that climb even for a
 /// target that ultimately resolves inside `root`. Once a path fails both
 /// directions it can never recover (no more `..` remain after
-/// normalization), so this is safe to treat as a definitive escape.
-fn is_on_track_to_root(current: &Path, real_root: &Path) -> bool {
-    current.starts_with(real_root) || real_root.starts_with(current)
+/// normalization), so this is safe to treat as a definitive escape — modulo
+/// the Windows fallback below. `verified` is `current`'s own
+/// `current_verified` from the caller's walk — see `windows_alias`.
+fn is_on_track_to_root(current: &Path, real_root: &Path, verified: bool) -> bool {
+    current.starts_with(real_root)
+        || real_root.starts_with(current)
+        || windows_alias(current, real_root, verified).is_some()
+}
+
+/// Whether `current` (fully resolved — every component consumed) is
+/// actually inside `real_root`. Unlike `is_on_track_to_root`, only the
+/// "contains" direction counts: `current` being a mere ancestor of
+/// `real_root` is not containment, it's an incomplete walk, which can't
+/// happen here since this is checked only after every component has been
+/// consumed. `verified` is documented on `windows_alias`.
+fn contains_root(current: &Path, real_root: &Path, verified: bool) -> bool {
+    current.starts_with(real_root)
+        || windows_alias(current, real_root, verified)
+            .is_some_and(|canonical| canonical.starts_with(real_root))
+}
+
+/// On Windows, `current` and `real_root` can name the exact same directory
+/// while being spelled differently — an 8.3 short name (`RUNNER~1`) versus
+/// its long form, or a plain `C:\...` prefix versus `canonicalize`'s
+/// verbatim `\\?\C:\...` — which `Path`'s component-wise `starts_with`
+/// treats as a hard mismatch even though nothing actually diverges on disk.
+/// `real_root` is always canonicalized (see `resolve_within_root_impl`), so
+/// folding `current` into that same representation lets callers re-compare
+/// against it.
+///
+/// `verified` is `resolve_within_root_impl`'s own `current_verified`:
+/// whether `current`'s *final* component has itself already been checked
+/// via `symlink_metadata` (true for every case except
+/// `resolve_entry_within_root`'s deliberately un-dereferenced final
+/// component, behind `delete`/`rename`). When `true`, canonicalizing
+/// `current` as a whole is safe and necessary — necessary because the final
+/// component can itself need alias-folding (an 8.3 short name is not only a
+/// property of ancestors), safe because every component up to and including
+/// it has already been individually confirmed not to be a symlink. When
+/// `false`, canonicalizing `current` whole would risk silently resolving
+/// through *this* unchecked final component if it turns out to be a
+/// symlink — deciding containment for the entry's target rather than the
+/// entry itself — so only `current`'s parent (always verified) is
+/// canonicalized, and the literal file name is rejoined un-resolved; this
+/// narrows what the fallback can fix for that one case (an 8.3-named entry
+/// being deleted through an aliased ancestor stays unresolved) rather than
+/// ever dereferencing a symlink it was told not to. A `current` with no
+/// parent (a bare drive root) can't itself be a symlink, so it's
+/// canonicalized directly either way; a target that doesn't exist yet (the
+/// dangling-target case this module tolerates elsewhere) can't be
+/// canonicalized, so this returns `None` unchanged from the pre-fallback
+/// behavior.
+#[cfg(windows)]
+fn windows_alias(current: &Path, real_root: &Path, verified: bool) -> Option<PathBuf> {
+    let canonical = if verified {
+        std::fs::canonicalize(current).ok()?
+    } else {
+        match (current.parent(), current.file_name()) {
+            (Some(parent), Some(name)) => std::fs::canonicalize(parent).ok()?.join(name),
+            _ => std::fs::canonicalize(current).ok()?,
+        }
+    };
+    (canonical.starts_with(real_root) || real_root.starts_with(&canonical)).then_some(canonical)
+}
+
+#[cfg(not(windows))]
+fn windows_alias(_current: &Path, _real_root: &Path, _verified: bool) -> Option<PathBuf> {
+    None
 }
 
 /// Maps a filesystem `io::Error` to `AppError::NotFound` when its kind is
@@ -835,13 +938,24 @@ fn fsync_full(file: &std::fs::File) -> io::Result<()> {
 /// Reports whether the current process can write to `path`, via `access(2)`
 /// — the same check `open(2)` itself makes, and more faithful than
 /// `Permissions::readonly()` (which only inspects the mode bits and ignores
-/// the process's actual effective uid/gid).
+/// the process's actual effective uid/gid). Unlike the Windows open-probe
+/// below, this returns immediately even when `path` is a FIFO: `access(2)`
+/// never opens the file, so it has nothing to block on waiting for a reader.
+#[cfg(unix)]
 fn is_writable(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
     let Ok(c_path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
         return false;
     };
     unsafe { libc::access(c_path.as_ptr(), libc::W_OK) == 0 }
+}
+
+/// Reports whether the current process can open `path` for writing without
+/// truncating it. Windows has no `access(2)` equivalent that consults the
+/// process's real access rights, so this asks by actually opening the file.
+#[cfg(windows)]
+fn is_writable(path: &Path) -> bool {
+    std::fs::OpenOptions::new().write(true).open(path).is_ok()
 }
 
 /// Writes `contents` to `target` atomically and durably: writes to a fresh
@@ -870,26 +984,35 @@ pub(crate) fn atomic_write(target: &Path, contents: &[u8]) -> io::Result<()> {
             "target is not writable",
         ));
     }
-    let permissions = existing
-        .map(|meta| meta.permissions())
-        .unwrap_or_else(|| std::fs::Permissions::from_mode(0o644));
+    let permissions = existing.map(|meta| meta.permissions());
+    #[cfg(unix)]
+    let permissions = permissions.or_else(|| {
+        use std::os::unix::fs::PermissionsExt;
+        Some(std::fs::Permissions::from_mode(0o644))
+    });
 
     let mut builder = tempfile::Builder::new();
     builder.prefix(".atrium-save-");
 
     let mut tmp = builder.tempfile_in(dir)?;
-    // `Builder::permissions` would only feed the mode to `open(2)`, which the
-    // process umask then masks — using `set_permissions` (`fchmod`) here
-    // instead applies the mode directly, so the target's permissions (or the
-    // `0o644` default for a new file) survive intact regardless of umask.
-    tmp.as_file().set_permissions(permissions)?;
+    // Preserve an existing target's permissions. New Unix files receive the
+    // editor's 0644 default; Windows retains tempfile's platform default
+    // instead of manufacturing Unix mode bits.
+    if let Some(permissions) = permissions {
+        tmp.as_file().set_permissions(permissions)?;
+    }
     tmp.write_all(contents)?;
     fsync_full(tmp.as_file())?;
 
     tmp.persist(target).map_err(|e| e.error)?;
 
-    let dir_file = std::fs::File::open(dir)?;
-    fsync_full(&dir_file)?;
+    // Unix permits opening and syncing a directory so the rename itself is
+    // durable. Windows does not expose that operation through `std::fs`.
+    #[cfg(unix)]
+    {
+        let dir_file = std::fs::File::open(dir)?;
+        fsync_full(&dir_file)?;
+    }
 
     Ok(())
 }
@@ -949,6 +1072,20 @@ fn unique_destination(dest_dir: &Path, name: &str, is_dir: bool) -> Result<PathB
 /// Boxed and manually recursive (async fns can't call themselves directly)
 /// with an explicit `'a` lifetime tying the returned future to both borrowed
 /// path arguments.
+#[cfg(unix)]
+fn copy_symlink(_source: &Path, target: &Path, dest: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(target, dest)
+}
+
+#[cfg(windows)]
+fn copy_symlink(source: &Path, target: &Path, dest: &Path) -> io::Result<()> {
+    if std::fs::metadata(source)?.is_dir() {
+        std::os::windows::fs::symlink_dir(target, dest)
+    } else {
+        std::os::windows::fs::symlink_file(target, dest)
+    }
+}
+
 fn copy_recursive<'a>(
     source: &'a Path,
     dest: &'a Path,
@@ -958,7 +1095,7 @@ fn copy_recursive<'a>(
         let file_type = metadata.file_type();
         if file_type.is_symlink() {
             let target = tokio::fs::read_link(source).await?;
-            std::os::unix::fs::symlink(&target, dest)?;
+            copy_symlink(source, &target, dest)?;
         } else if file_type.is_dir() {
             tokio::fs::create_dir_all(dest).await?;
             let mut read_dir = tokio::fs::read_dir(source).await?;
@@ -1391,6 +1528,8 @@ impl Workspace for LocalWorkspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use tokio::sync::mpsc::unbounded_channel;
 
     fn workspace(root: &Path) -> LocalWorkspace {
@@ -1415,6 +1554,7 @@ mod tests {
         assert!(matches!(err, AppError::InvalidPath(_)));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn read_file_succeeds_through_a_canonically_spelled_symlink_when_the_root_sits_behind_a_symlinked_ancestor(
     ) {
@@ -1456,6 +1596,7 @@ mod tests {
         assert!(matches!(err, AppError::NotFound(_)));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn read_file_rejects_a_symlink_escaping_the_workspace_root() {
         let outside = tempfile::tempdir().unwrap();
@@ -1477,6 +1618,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn read_file_rejects_an_escape_through_a_chain_of_two_symlinks() {
         let outside = tempfile::tempdir().unwrap();
@@ -1500,6 +1642,7 @@ mod tests {
         assert!(matches!(err, AppError::InvalidPath(_)));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn read_file_rejects_an_escape_through_an_absolute_symlink_target_naming_another_symlink()
     {
@@ -1519,6 +1662,61 @@ mod tests {
         .unwrap();
 
         let err = ws.read_file("innocent.txt").await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidPath(_)));
+    }
+
+    /// Direct coverage for the `Component::Prefix` splice in
+    /// `resolve_within_root_impl`: it exists solely to handle an absolute
+    /// symlink target spelled with a Windows drive letter (`C:\...`), a
+    /// component kind that can never appear while parsing a Unix path, so no
+    /// test above can reach it. The target here resolves back inside the
+    /// workspace root under its own drive prefix, proving the prefix is
+    /// captured into `target_root` and the walk continues correctly, rather
+    /// than the prefix being dropped or misrouted by the splice.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn read_file_succeeds_through_a_drive_prefixed_absolute_symlink_target() {
+        let dir = tempfile::tempdir().unwrap();
+        // Deliberately the *raw*, non-canonicalized temp path (what
+        // `symlink_file` actually gets handed in real usage) rather than
+        // its canonical form — this is what exposed the real bug: `dir`'s
+        // raw path can differ from `std::fs::canonicalize(dir.path())`'s
+        // output (e.g. an 8.3 short name in a component, or a plain `C:\...`
+        // prefix versus `canonicalize`'s verbatim `\\?\C:\...`) even though
+        // both name the same directory, and `resolve_within_root_impl`'s
+        // `real_root` is always the canonical form. `contains_root`'s
+        // Windows fallback is what makes this resolve correctly instead of
+        // every absolute symlink target being rejected regardless of where
+        // it actually points.
+        let real = dir.path().join("real.md");
+        std::fs::write(&real, "# drive prefix").unwrap();
+
+        std::os::windows::fs::symlink_file(&real, dir.path().join("link.md")).unwrap();
+
+        let ws = workspace(dir.path());
+        assert_eq!(ws.read_file("link.md").await.unwrap(), "# drive prefix");
+    }
+
+    /// The escape-detection counterpart: a drive-prefixed absolute symlink
+    /// target that resolves outside the workspace root must still be
+    /// rejected, proving the splice's `target_root` capture grants the walk
+    /// no exemption from the containment check that follows it.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn read_file_rejects_a_drive_prefixed_absolute_symlink_target_escaping_the_workspace_root(
+    ) {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.md"), "top secret").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        std::os::windows::fs::symlink_file(
+            outside.path().join("secret.md"),
+            dir.path().join("link.md"),
+        )
+        .unwrap();
+
+        let err = ws.read_file("link.md").await.unwrap_err();
         assert!(matches!(err, AppError::InvalidPath(_)));
     }
 
@@ -1585,6 +1783,7 @@ mod tests {
         assert_eq!(contents, "hello");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn write_file_replaces_a_symlinks_target_and_preserves_the_symlink() {
         let dir = tempfile::tempdir().unwrap();
@@ -1604,6 +1803,7 @@ mod tests {
         assert_eq!(ws.read_file("real.md").await.unwrap(), "updated");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn write_file_through_a_dangling_symlink_creates_its_target() {
         let dir = tempfile::tempdir().unwrap();
@@ -1618,6 +1818,7 @@ mod tests {
         assert_eq!(ws.read_file("missing.md").await.unwrap(), "hello");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn write_file_rejects_a_symlink_escaping_the_workspace_root() {
         let outside = tempfile::tempdir().unwrap();
@@ -1639,6 +1840,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn write_file_rejects_a_dangling_symlink_whose_target_escapes_the_workspace_root() {
         let outside = tempfile::tempdir().unwrap();
@@ -1656,6 +1858,7 @@ mod tests {
         assert!(!outside.path().join("new_secret.txt").exists());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn write_file_rejects_an_escape_through_a_chain_of_two_symlinks() {
         let outside = tempfile::tempdir().unwrap();
@@ -1681,6 +1884,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn write_file_preserves_existing_file_permissions() {
         let dir = tempfile::tempdir().unwrap();
@@ -1709,6 +1913,7 @@ mod tests {
         assert_eq!(mode, 0o666);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn write_file_over_a_read_only_target_fails_and_leaves_it_untouched() {
         let dir = tempfile::tempdir().unwrap();
@@ -1763,6 +1968,7 @@ mod tests {
         assert!(matches!(err, AppError::AlreadyExists(_)));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn create_file_rejects_a_path_under_an_ancestor_symlink_that_escapes_the_workspace_root()
     {
@@ -1802,6 +2008,7 @@ mod tests {
         assert_eq!(ws.read_file("notes.md").await.unwrap(), "hello");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn rename_rejects_a_symlink_onto_its_own_target() {
         let dir = tempfile::tempdir().unwrap();
@@ -1820,6 +2027,7 @@ mod tests {
         assert!(dir.path().join("link.md").symlink_metadata().is_ok());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn rename_rejects_a_target_onto_its_own_symlink() {
         let dir = tempfile::tempdir().unwrap();
@@ -1838,6 +2046,7 @@ mod tests {
         assert!(dir.path().join("link.md").symlink_metadata().is_ok());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn rename_of_a_symlink_escaping_the_workspace_root_renames_the_link_entry() {
         let outside = tempfile::tempdir().unwrap();
@@ -1873,6 +2082,7 @@ mod tests {
         assert!(!dir.path().join("sub").exists());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn delete_removes_a_symlinked_directory_without_touching_its_target() {
         let dir = tempfile::tempdir().unwrap();
@@ -1894,6 +2104,7 @@ mod tests {
         assert_eq!(ws.read_file("real_dir/inside.md").await.unwrap(), "keep me");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn delete_of_a_symlink_escaping_the_workspace_root_only_unlinks_the_link() {
         let outside = tempfile::tempdir().unwrap();
@@ -1914,6 +2125,71 @@ mod tests {
             std::fs::read_to_string(outside.path().join("secret.txt")).unwrap(),
             "keep me"
         );
+    }
+
+    /// Regression test for `windows_alias`'s parent-only canonicalization:
+    /// `delete` resolves through `resolve_entry_within_root`
+    /// (`dereference_final == false`), so `a/link.md`'s final component must
+    /// never be dereferenced even after `a` (an ancestor symlink) forces a
+    /// splice — canonicalizing `current` as a whole here would follow
+    /// `link.md` to its outside target and spuriously reject deleting the
+    /// (legitimately in-workspace) symlink entry itself.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn delete_of_an_in_workspace_symlink_reached_through_an_ancestor_symlink_only_unlinks_the_link(
+    ) {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.md"), "keep me").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::os::windows::fs::symlink_dir(dir.path().join("sub"), dir.path().join("a")).unwrap();
+        std::os::windows::fs::symlink_file(
+            outside.path().join("secret.md"),
+            dir.path().join("sub").join("link.md"),
+        )
+        .unwrap();
+
+        ws.delete("a/link.md", false).await.unwrap();
+
+        assert!(dir
+            .path()
+            .join("sub")
+            .join("link.md")
+            .symlink_metadata()
+            .is_err());
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("secret.md")).unwrap(),
+            "keep me"
+        );
+    }
+
+    /// The security-critical counterpart: an ancestor symlink climbing out
+    /// to the workspace's own parent is tolerated mid-walk (by design, so a
+    /// target that ultimately lands back inside can still resolve), but a
+    /// *pre-existing, genuinely external* entry that happens to alias back
+    /// into the workspace must still be rejected as escaping — the alias
+    /// fold-in exists to normalize representation, not to grant containment
+    /// to an entry canonicalization would resolve through.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn delete_rejects_an_ancestor_symlink_reaching_an_outside_entry_that_aliases_back_in() {
+        let container = tempfile::tempdir().unwrap();
+        let ws_root = container.path().join("ws");
+        std::fs::create_dir(&ws_root).unwrap();
+        let ws = workspace(&ws_root);
+
+        std::fs::create_dir(ws_root.join("notes")).unwrap();
+        // Pre-existing, outside the workspace, but aliases back into it.
+        std::os::windows::fs::symlink_dir(ws_root.join("notes"), container.path().join("notes"))
+            .unwrap();
+        // Climbs out to the workspace's own parent.
+        std::os::windows::fs::symlink_dir(container.path(), ws_root.join("a")).unwrap();
+
+        let err = ws.delete("a/notes", false).await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidPath(_)));
+        assert!(container.path().join("notes").symlink_metadata().is_ok());
     }
 
     #[tokio::test]
@@ -1955,6 +2231,7 @@ mod tests {
         assert_eq!(names, vec![".gitignore"]);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn list_dir_reports_a_symlinked_directory_as_a_directory() {
         let dir = tempfile::tempdir().unwrap();
@@ -1971,6 +2248,7 @@ mod tests {
         assert!(link.is_symlink);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn list_dir_reports_a_symlinked_file_as_a_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -1985,6 +2263,7 @@ mod tests {
         assert!(link.is_symlink);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn list_dir_reports_a_dangling_symlink_as_not_a_directory() {
         let dir = tempfile::tempdir().unwrap();
@@ -1999,6 +2278,7 @@ mod tests {
         assert!(link.is_symlink);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn list_dir_rejects_a_directory_symlink_escaping_the_workspace_root() {
         let outside = tempfile::tempdir().unwrap();
@@ -2012,6 +2292,7 @@ mod tests {
         assert!(matches!(err, AppError::InvalidPath(_)));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn list_dir_rejects_an_escape_through_a_chain_of_two_symlinks() {
         let outside = tempfile::tempdir().unwrap();
@@ -2524,6 +2805,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(copied).unwrap(), "one");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn import_external_preserves_a_symlink_inside_a_copied_directory() {
         let source_dir = tempfile::tempdir().unwrap();
@@ -2576,6 +2858,7 @@ mod tests {
         assert!(matches!(err, AppError::InvalidPath(_)));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn import_external_rejects_a_dest_dir_that_is_a_symlink_escaping_the_workspace_root() {
         let outside = tempfile::tempdir().unwrap();

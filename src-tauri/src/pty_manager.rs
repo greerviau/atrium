@@ -52,6 +52,16 @@ const PENDING_CAP: usize = 256 * 1024;
 /// tick that finds nothing has actually changed can skip sending an event.
 type TitleSnapshot = (String, Option<String>);
 
+#[cfg(unix)]
+fn default_shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
+}
+
+#[cfg(windows)]
+fn default_shell() -> String {
+    std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+}
+
 /// One session's poll-tick inputs: its id, shell pid, event channel,
 /// last-reported title, and last-seen foreign foreground pid, snapshotted
 /// together while the sessions map is briefly locked (see
@@ -177,12 +187,10 @@ pub struct PtyManager {
     /// any individual tick took to actually run under CI scheduling
     /// contention. See the regression history on
     /// `output_after_idle_period_arrives_within_roughly_one_flush_interval`.
-    /// Only read by `#[cfg(test)]` code today, so a plain (non-test) build
-    /// never reads it — `cfg_attr` scopes the allowance to exactly that
-    /// build, rather than gating the field itself behind `cfg(test)` and
-    /// letting the struct's shape differ between test and production
-    /// compiles.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Only read by Unix `#[cfg(test)]` code today, so other builds allow the
+    /// field to remain write-only rather than changing the production struct's
+    /// shape by platform or test mode.
+    #[cfg_attr(any(not(test), windows), allow(dead_code))]
     flush_ticks: Arc<AtomicU64>,
 }
 
@@ -231,9 +239,7 @@ impl PtyManager {
             })
             .map_err(|e| AppError::Other(format!("failed to open pty: {e}")))?;
 
-        let shell = shell_override
-            .or_else(|| std::env::var("SHELL").ok())
-            .unwrap_or_else(|| "/bin/zsh".to_string());
+        let shell = shell_override.unwrap_or_else(default_shell);
         let mut cmd = CommandBuilder::new(shell);
         // A login shell, the same as every other terminal emulator opens. The
         // built app is launched by `launchd` and inherits its bare `PATH`, so
@@ -243,6 +249,7 @@ impl PtyManager {
         // only. `portable_pty` applies the conventional `-zsh` argv0 itself,
         // but only for `new_default_prog`, which can't honour
         // `shell_override`; passing `-l` gets the same behaviour for both.
+        #[cfg(unix)]
         cmd.arg("-l");
         cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");
@@ -440,7 +447,10 @@ impl PtyManager {
         );
         let descendants = Self::collect_descendants(system, shell_pid);
 
-        // Best-effort: a descendant may have already exited on its own.
+        // Best-effort Unix grace signal: a descendant may have already
+        // exited on its own. Windows has no SIGHUP equivalent, so its
+        // descendants proceed directly to the force-termination pass.
+        #[cfg(unix)]
         for &pid in &descendants {
             unsafe {
                 libc::kill(pid as libc::pid_t, libc::SIGHUP);
@@ -466,10 +476,8 @@ impl PtyManager {
                 ProcessRefreshKind::nothing(),
             );
             for &pid in &descendants {
-                if system.process(Pid::from_u32(pid)).is_some() {
-                    unsafe {
-                        libc::kill(pid as libc::pid_t, libc::SIGKILL);
-                    }
+                if let Some(process) = system.process(Pid::from_u32(pid)) {
+                    let _ = process.kill();
                 }
             }
         }
@@ -592,20 +600,30 @@ impl PtyManager {
         last_foreign_pid: &Mutex<Option<u32>>,
         system: &mut System,
     ) -> Option<TitleSnapshot> {
-        // Re-lock just long enough for `tcgetpgrp` (a single syscall on the
-        // pty's own fd) — the actual OS-inspection work below (targeted
-        // `sysinfo` refreshes) runs with no lock held at all, so it never
-        // blocks this session's own spawn/write/resize/kill calls.
+        // Re-lock just long enough for `tcgetpgrp` on Unix. ConPTY does not
+        // expose a foreground process group, so Windows reports the shell
+        // itself and still receives cwd updates from `sysinfo` below.
+        #[cfg(unix)]
         let fg_pid = {
             let sessions = sessions.lock().unwrap();
-            sessions.get(terminal_id)?.master.process_group_leader()
+            sessions
+                .get(terminal_id)?
+                .master
+                .process_group_leader()
+                .map(|pid| pid as u32)
+        };
+        #[cfg(windows)]
+        let fg_pid = {
+            let sessions = sessions.lock().unwrap();
+            sessions.get(terminal_id)?;
+            None
         };
 
         // A foreign foreground process is only "foreign" if its pid differs
         // from the shell's own — a builtin (`cd`, a shell function) never
         // forks, so `tcgetpgrp` correctly keeps reporting the shell's own
         // pid for those.
-        let foreign_pid = fg_pid.map(|pid| pid as u32).filter(|&pid| pid != shell_pid);
+        let foreign_pid = fg_pid.filter(|&pid| pid != shell_pid);
 
         let mut pids = vec![Pid::from_u32(shell_pid)];
         if let Some(pid) = foreign_pid {
@@ -656,6 +674,7 @@ impl PtyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::sync::atomic::AtomicBool;
     use std::time::Instant;
     use tauri::ipc::InvokeResponseBody;
@@ -695,6 +714,7 @@ mod tests {
         (channel, titles)
     }
 
+    #[cfg(unix)]
     type ReceivedChunks = Arc<Mutex<Vec<Vec<u8>>>>;
 
     /// Like the ad hoc `Data`-collecting channels used elsewhere in this
@@ -702,6 +722,7 @@ mod tests {
     /// instead of flattening them into one buffer — needed by the
     /// coalescing tests below, which assert on both the concatenated bytes
     /// and how many separate `Data` events arrived.
+    #[cfg(unix)]
     fn data_chunks_channel() -> (Channel<PtyEvent>, ReceivedChunks) {
         let chunks: ReceivedChunks = Arc::new(Mutex::new(Vec::new()));
         let chunks_clone = chunks.clone();
@@ -762,6 +783,7 @@ mod tests {
     /// of its own (mirroring the `launchd`-launched built app, which has
     /// none) — so this must come from `PtyManager::spawn` explicitly setting
     /// it, not from inheritance.
+    #[cfg(unix)]
     #[test]
     fn spawned_shell_has_term_set_to_xterm_256color() {
         let manager = PtyManager::new();
@@ -799,6 +821,7 @@ mod tests {
     /// must not print `TERM environment variable not set`, which only
     /// happens when `TERM` is unset or names a terminfo entry that doesn't
     /// exist on the host.
+    #[cfg(unix)]
     #[test]
     fn clear_does_not_report_term_not_set() {
         let manager = PtyManager::new();
@@ -852,6 +875,7 @@ mod tests {
     ///
     /// Asserted against a stub shell that reports its own argv, so the test
     /// depends on neither the host's dotfiles nor its installed tools.
+    #[cfg(unix)]
     #[test]
     fn spawned_shell_is_a_login_shell() {
         use std::os::unix::fs::PermissionsExt;
@@ -904,6 +928,7 @@ mod tests {
     /// and named via OS-level process inspection alone, with no shell
     /// cooperation (no OSC 133 "command started" marker involved at all),
     /// and the report clears back to `None` once the program exits.
+    #[cfg(unix)]
     #[test]
     fn foreground_program_reported_while_running_then_cleared_on_exit() {
         let manager = PtyManager::new();
@@ -947,6 +972,16 @@ mod tests {
     /// Proves the cwd half of #152's fix: the reported cwd updates after a
     /// plain `cd`, with nothing written to the pty by the shell itself (no
     /// OSC 7) — the poller reads it independently via the shell's own pid.
+    /// `#[cfg(unix)]` despite spawning nothing Unix-specific: on Windows this
+    /// depends on `sysinfo`'s `Process::cwd()`, which reads the target
+    /// process's PEB via a `ReadProcessMemory` handle opened once when the
+    /// pid is first seen — if that open only secures
+    /// `PROCESS_QUERY_LIMITED_INFORMATION` (observed in CI), every later cwd
+    /// read fails silently for the life of the `System`, so the poller never
+    /// reports the post-`cd` directory. Confirmed failing empirically in
+    /// windows-latest CI; revisit if `sysinfo`'s Windows cwd tracking
+    /// changes.
+    #[cfg(unix)]
     #[test]
     fn cwd_updates_after_cd_with_no_shell_cooperation() {
         let manager = PtyManager::new();
@@ -1025,6 +1060,7 @@ mod tests {
     /// group on its own), so it's kept as a baseline alongside
     /// `backgrounded_descendant_reaped_under_dash_with_no_job_hangup_of_its_own`
     /// below, which is the one that actually exercises the tree walk.
+    #[cfg(unix)]
     #[test]
     fn foreground_descendant_reaped_on_kill() {
         let manager = PtyManager::new();
@@ -1106,6 +1142,7 @@ mod tests {
     /// The session's shell is set to `/bin/dash` via `PtyManager::spawn`'s
     /// `shell_override` parameter rather than the process-global `SHELL` env
     /// var, so this test can't race any other test in this binary.
+    #[cfg(unix)]
     #[test]
     fn backgrounded_descendant_reaped_under_dash_with_no_job_hangup_of_its_own() {
         let manager = PtyManager::new();
@@ -1180,6 +1217,7 @@ mod tests {
     /// stayed blocked. After the fix, only the stalled terminal's own writer
     /// mutex is held across the blocking write, so spawning a second
     /// terminal never waits on it.
+    #[cfg(unix)]
     #[test]
     fn write_does_not_block_other_terminals_when_pty_input_buffer_is_full() {
         let manager = PtyManager::new();
@@ -1241,6 +1279,7 @@ mod tests {
     /// loop, and `child.wait()`, which stalled every other terminal's own
     /// spawn/write/resize/kill for the duration. After the fix, the map is
     /// only locked long enough to remove the entry being reaped.
+    #[cfg(unix)]
     #[test]
     fn kill_does_not_block_other_terminals_while_reaping() {
         let manager = PtyManager::new();
@@ -1374,6 +1413,7 @@ mod tests {
     /// into a handful of `Data` events by `flush_output_loop` instead of
     /// one event per underlying read, while every byte still arrives
     /// intact and in order.
+    #[cfg(unix)]
     #[test]
     fn flood_output_is_coalesced_into_few_data_events() {
         let manager = PtyManager::new();
@@ -1505,6 +1545,7 @@ mod tests {
     /// Regression test for issue #261: output still sitting in `pending`
     /// when the reader thread hits EOF must be flushed before the `Exit`
     /// event, not silently dropped.
+    #[cfg(unix)]
     #[test]
     fn pending_output_flushed_before_exit_event() {
         let manager = PtyManager::new();

@@ -72,7 +72,7 @@ export function workspaceRemoveRecent(path: string): Promise<void> {
   return invoke("workspace_remove_recent", { path });
 }
 
-/** Drains every pending Dock-menu-picked (or OS "Open With Atrium") path from a cold launch, if any (macOS only). */
+/** Drains every pending path supplied by an OS open event or process launch argument. */
 export function workspaceTakePendingOpen(): Promise<string[]> {
   return invoke("workspace_take_pending_open");
 }

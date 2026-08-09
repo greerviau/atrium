@@ -1,6 +1,6 @@
 # Atrium
 
-A unified markdown and code editor for macOS.
+A unified markdown and code editor for macOS, Linux, and Windows.
 
 ![Atrium Logo](assets/atrium.jpg)
 
@@ -55,4 +55,5 @@ End-to-end smoke tests live in `tests/e2e/` and require a real display and the f
 npm run tauri build
 ```
 
-Produces a `.app` bundle in `src-tauri/target/release/bundle/`. The MVP does not require Developer ID signing or notarization; local/ad-hoc signing (or an unsigned build with a manually cleared Gatekeeper warning) is sufficient.
+Produces the native packages for the current platform in `src-tauri/target/release/bundle/`: `.app` and `.dmg` on macOS, `.deb` and `.AppImage` on Linux, and an NSIS installer on Windows.
+The macOS build does not require Developer ID signing or notarization for local use; local/ad-hoc signing or an unsigned build with a manually cleared Gatekeeper warning is sufficient.

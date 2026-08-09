@@ -1,7 +1,7 @@
 [package]
 name = "atrium"
 version = "0.1.0"
-description = "Atrium: a unified markdown editor, code editor, file explorer, and terminal for macOS"
+description = "Atrium: a cross-platform markdown editor, code editor, file explorer, and terminal"
 authors = ["Atrium contributors"]
 edition = "2021"
 
@@ -42,5 +42,17 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSDocumentController", "NSGraphics", "NSMenu", "NSMenuItem", "NSResponder", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3", features = ["NSURL"] }
 tauri-utils = "2"
+
+# Second-open handoff on macOS already routes through Launch Services into
+# `RunEvent::Opened`, so this plugin would add no capability there — only an
+# unauthenticated `/tmp` domain socket (see `main.rs` and `commands/fs.rs`).
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+tauri-plugin-single-instance = "2.4.3"
+
+[target."cfg(unix)".dependencies]
+same-file = "1.0.6"
+
+[target."cfg(windows)".dependencies]
+file-id = "0.2.3"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

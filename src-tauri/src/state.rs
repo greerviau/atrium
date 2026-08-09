@@ -13,8 +13,8 @@ use tauri::AppHandle;
 /// "what's on disk" and "what's running"; the frontend's Svelte stores own
 /// "what's open in the UI" and are never synced back here.
 ///
-/// Dock-menu picks and `RunEvent::Opened` paths awaiting pickup by the
-/// frontend live in `launch_open`, not here — that queue exists
+/// Dock-menu picks, `RunEvent::Opened` paths, and launch arguments awaiting
+/// pickup by the frontend live in `launch_open`, not here; that queue exists
 /// specifically to hold data that can arrive before this struct does (issue
 /// #325's cold-launch plan, §6.1), which managed state can't do.
 ///
