@@ -3,7 +3,7 @@
   import { tabsState, setActiveTab } from "../stores/tabs";
   import { standaloneWorkspaceId } from "../ipc/commands";
   import { revealInFinder } from "../ipc/reveal";
-  import { basename } from "../util/path";
+  import { basename, pathsEqual } from "../util/path";
   import ContextMenu from "../ui/ContextMenu.svelte";
   import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
   import { contiguousPathSelection } from "./rangeSelection";
@@ -44,6 +44,15 @@
     if (selected.size > 0) return selected;
     return activePath === null ? new Set<string>() : new Set([activePath]);
   });
+  // Mirrors FileTree.svelte's own split (issue #400): non-empty only during
+  // a genuine multi-row range selection, so a plain click or arrow move —
+  // which always collapses back to one row — never paints a fill on its
+  // own. `selectedPaths` still drives `aria-selected` unchanged.
+  let rangeSelectedPaths = $derived(selectedPaths.size > 1 ? selectedPaths : new Set<string>());
+  // The currently open file: unlike FileTree, every row here already *is* an
+  // open tab (no directory nesting, nothing to expand/reveal), so this is
+  // just the active one among them.
+  let openPath = $derived($tabsState.activeTabPath);
 
   function onFocusRow(path: string): void {
     focusedPath = path;
@@ -131,10 +140,12 @@
     {#each rows as row (row.path)}
       <div
         class="row"
+        class:range-selected={rangeSelectedPaths.has(row.path)}
         data-path={row.path}
         title={row.path}
         role="treeitem"
         aria-selected={selectedPaths.has(row.path)}
+        aria-current={openPath !== null && pathsEqual(row.path, openPath) ? "true" : undefined}
         aria-level="1"
         tabindex={activePath === row.path ? 0 : -1}
         onclick={(event) => selectRow(row.path, event.shiftKey)}
@@ -174,18 +185,35 @@
     -webkit-user-select: none;
     user-select: none;
   }
-  .row:hover {
+  /* Mirrors `FileTreeNode.svelte`'s own split (issue #400): the open file
+     and a genuine multi-row range selection share the one strong fill; a
+     single current/focused row gets no fill of its own (see `:focus`
+     below). */
+  .row.range-selected,
+  .row[aria-current="true"] {
+    background: var(--atrium-selection-bg);
+  }
+  /* Excludes a highlighted row, so hovering it doesn't swap the strong
+     selection fill for the much fainter hover tint and erase the only
+     signal of which file is open. */
+  .row:hover:not(.range-selected):not([aria-current="true"]) {
     background: var(--atrium-bg-hover);
   }
-  .row[aria-selected="true"] {
-    background: var(--atrium-selection-bg);
+  /* A highlighted row still needs its own hover feedback — same outline
+     language as `:focus` below, layered on top of the fill rather than
+     replacing it. */
+  .row.range-selected:hover,
+  .row[aria-current="true"]:hover {
+    outline: 1px solid var(--atrium-accent);
+    outline-offset: -1px;
   }
   /* Plain `:focus`, not `:focus-visible` — matches `FileTreeNode.svelte`'s
      own row styling, since this row is just as much a keyboard target
-     (Up/Down/Home/End, Enter/Space) regardless of how focus arrived. */
+     (Up/Down/Home/End, Enter/Space) regardless of how focus arrived. No
+     `background` here (unlike before issue #400) — see the fill rule
+     above. */
   .row:focus {
     outline: 1px solid var(--atrium-accent);
     outline-offset: -1px;
-    background: var(--atrium-selection-bg);
   }
 </style>

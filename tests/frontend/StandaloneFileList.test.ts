@@ -203,4 +203,72 @@ describe("StandaloneFileList (issue #325)", () => {
 
     expect(reveal.revealInFinder).toHaveBeenCalledWith(NOTE);
   });
+
+  // Issue #400: the open file is highlighted here too, and moving keyboard
+  // focus without activating a tab (unlike a click, which always activates)
+  // must not leave a second, stale fill behind.
+  describe("highlights the currently open file (issue #400)", () => {
+    /** The only two markers that produce a visible fill per this component's own CSS. */
+    function hasFill(row: HTMLElement): boolean {
+      return row.classList.contains("range-selected") || row.getAttribute("aria-current") === "true";
+    }
+
+    function filledPaths(container: HTMLElement): string[] {
+      return Array.from(container.querySelectorAll<HTMLElement>(".row[data-path]"))
+        .filter(hasFill)
+        .map((row) => row.dataset.path!);
+    }
+
+    it("highlights exactly the active tab's row, and moves with it", async () => {
+      tabsState.set({
+        tabs: [standaloneTab(NOTE), standaloneTab(OTHER)],
+        activeTabPath: NOTE,
+      });
+      const { container } = render(StandaloneFileList);
+
+      expect(filledPaths(container)).toEqual([NOTE]);
+
+      tabsState.update((s) => ({ ...s, activeTabPath: OTHER }));
+      await Promise.resolve();
+
+      expect(filledPaths(container)).toEqual([OTHER]);
+    });
+
+    it("moving keyboard focus without activating a tab does not paint a second fill", async () => {
+      tabsState.set({
+        tabs: [standaloneTab(NOTE), standaloneTab(OTHER)],
+        activeTabPath: NOTE,
+      });
+      const { container } = render(StandaloneFileList);
+
+      await fireEvent.keyDown(rowFor(container, NOTE), { key: "ArrowDown" });
+      await vi.waitFor(() => expect(tabbableRow(container)).toBe(rowFor(container, OTHER)));
+
+      // Focus moved to "other.md" (it's now the roving-tabindex row and
+      // `aria-selected`), but activating it requires Enter/Space/click —
+      // arrow navigation alone must not activate it, so the fill stays on
+      // the still-open "note.md".
+      expect(activeTabPath()).toBe(NOTE);
+      expect(rowFor(container, OTHER).getAttribute("aria-selected")).toBe("true");
+      expect(filledPaths(container)).toEqual([NOTE]);
+    });
+
+    it("shows a fill on every row of a genuine multi-row range selection, including the open file itself", async () => {
+      const third = "/tmp/third.md";
+      tabsState.set({
+        tabs: [standaloneTab(NOTE), standaloneTab(OTHER), standaloneTab(third)],
+        activeTabPath: NOTE,
+      });
+      const { container } = render(StandaloneFileList);
+
+      await fireEvent.click(rowFor(container, NOTE));
+      await fireEvent.click(rowFor(container, third), { shiftKey: true });
+
+      expect(rowFor(container, NOTE).classList.contains("range-selected")).toBe(true);
+      expect(rowFor(container, NOTE).getAttribute("aria-current")).toBe("true");
+      expect(rowFor(container, OTHER).classList.contains("range-selected")).toBe(true);
+      expect(rowFor(container, third).classList.contains("range-selected")).toBe(true);
+      expect(filledPaths(container).sort()).toEqual([NOTE, OTHER, third].sort());
+    });
+  });
 });

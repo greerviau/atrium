@@ -21,6 +21,12 @@ describe("FileTreeNode: recent-files write path", () => {
   beforeEach(() => {
     vi.mocked(commands.fsListDir).mockReset();
     vi.mocked(commands.fsReadFile).mockResolvedValue("file contents");
+    // `FileTree.svelte`'s issue #400 expand-to-open-file effect calls this on
+    // whichever file gets clicked below; jsdom has no implementation at all
+    // (unlike a real WebView), so without a stub the effect's own `.catch`
+    // swallows a `scrollIntoView is not a function` `TypeError` — harmless,
+    // but noisy stderr unrelated to what these tests are about.
+    Element.prototype.scrollIntoView = vi.fn();
     localStorage.clear();
     workspace.set({ id: "local", root: ROOT });
   });

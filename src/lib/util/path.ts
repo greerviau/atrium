@@ -46,6 +46,21 @@ export function isPathUnderOrEqual(path: string, prefix: string): boolean {
   );
 }
 
+/**
+ * Whether `a` and `b` refer to the same path, ignoring separator style
+ * (`/` vs `\`) and a trailing separator. Unlike `isPathUnderOrEqual`, which
+ * also accepts `a` being a *descendant* of `b`, this is exact-match only —
+ * for comparing a tree node's native-separator `entry.path` against
+ * `tabsState.activeTabPath`, which is not guaranteed to be in the same form
+ * (most callers pass a path through verbatim, but at least one, a markdown
+ * link's relative-path resolution, normalizes backslashes to `/` along the
+ * way).
+ */
+export function pathsEqual(a: string, b: string): boolean {
+  const normalize = (path: string) => path.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalize(a) === normalize(b);
+}
+
 /** Joins `base` and `relative`, resolving `.`/`..` segments lexically. */
 function resolveRelative(base: string, relative: string): string {
   if (relative.startsWith("/")) {

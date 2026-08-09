@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { basename, dirOf, isPathUnderOrEqual } from "../../src/lib/util/path";
+import { basename, dirOf, isPathUnderOrEqual, pathsEqual } from "../../src/lib/util/path";
 
 describe("basename", () => {
   it("returns the last segment of a plain path", () => {
@@ -68,5 +68,27 @@ describe("isPathUnderOrEqual", () => {
 
   it("tolerates a trailing slash on the prefix", () => {
     expect(isPathUnderOrEqual("/a/b/file.ts", "/a/b/")).toBe(true);
+  });
+});
+
+describe("pathsEqual", () => {
+  it("matches identical paths", () => {
+    expect(pathsEqual("/a/b/notes.txt", "/a/b/notes.txt")).toBe(true);
+  });
+
+  it("matches the same path in native-backslash form against forward-slash form", () => {
+    expect(pathsEqual("C:\\ws\\src\\index.ts", "C:/ws/src/index.ts")).toBe(true);
+  });
+
+  it("tolerates a trailing slash on one side", () => {
+    expect(pathsEqual("/a/b/", "/a/b")).toBe(true);
+  });
+
+  it("does not match a descendant, unlike isPathUnderOrEqual", () => {
+    expect(pathsEqual("/a/b/file.ts", "/a/b")).toBe(false);
+  });
+
+  it("does not match an unrelated path", () => {
+    expect(pathsEqual("/a/b/file.ts", "/a/c/file.ts")).toBe(false);
   });
 });

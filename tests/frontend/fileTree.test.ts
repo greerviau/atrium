@@ -8,6 +8,7 @@ import {
   collapse,
   toggleExpanded,
   refreshDirectoryContaining,
+  expandToPath,
 } from "../../src/lib/stores/fileTree";
 import FileTree from "../../src/lib/explorer/FileTree.svelte";
 import { pendingCreate } from "../../src/lib/explorer/inlineEdit";
@@ -200,6 +201,100 @@ describe("fileTree: root-level refresh", () => {
     await refreshDirectoryContaining(`${ROOT}/b.txt`);
     expect(commands.fsListDir).toHaveBeenCalledTimes(1);
     expect(get(fileTree).root?.children?.map((n) => n.entry.name)).toEqual(["a.txt"]);
+  });
+});
+
+describe("fileTree: expandToPath (issue #400)", () => {
+  beforeEach(() => {
+    vi.mocked(commands.fsListDir).mockReset();
+  });
+
+  it("expands a directory whose own node path uses backslashes while the target path uses forward slashes (a markdown link's normalized path, on Windows)", async () => {
+    const winRoot = "C:\\ws";
+    const winSrc = "C:\\ws\\src";
+    const winIndex = "C:\\ws\\src\\index.ts";
+    vi.mocked(commands.fsListDir).mockImplementation(async (_workspaceId, path) => {
+      if (path === winRoot) return [{ name: "src", path: winSrc, isDir: true, isSymlink: false }];
+      if (path === winSrc) return [{ name: "index.ts", path: winIndex, isDir: false, isSymlink: false }];
+      return [];
+    });
+    await loadRoot(winRoot);
+    vi.mocked(commands.fsListDir).mockClear();
+
+    // The activeTabPath a markdown link's relative-path resolution would
+    // produce for this same file: forward-slashed, unlike the node's own
+    // native (backslash) `entry.path`.
+    await expandToPath("C:/ws/src/index.ts", () => false);
+
+    // Expanding by walking the tree (not slicing the target path into
+    // ancestor strings) means the real, native-separator node path is what
+    // gets passed to `loadChildren`/`fsListDir` — a string-slice approach
+    // would instead produce a forward-slashed ancestor that matches no node
+    // and silently expands nothing.
+    expect(commands.fsListDir).toHaveBeenCalledWith("local", winSrc);
+    const src = get(fileTree).root?.children?.find((n) => n.entry.path === winSrc);
+    expect(src?.expanded).toBe(true);
+    expect(src?.children?.map((n) => n.entry.path)).toEqual([winIndex]);
+  });
+
+  it("aborts a multi-level expansion partway through once isStale reports the target is no longer current", async () => {
+    const a = `${ROOT}/a`;
+    const b = `${ROOT}/a/b`;
+    const target = `${ROOT}/a/b/file.txt`;
+    vi.mocked(commands.fsListDir).mockImplementation(async (_workspaceId, path) => {
+      if (path === ROOT) return [{ name: "a", path: a, isDir: true, isSymlink: false }];
+      if (path === a) return [{ name: "b", path: b, isDir: true, isSymlink: false }];
+      if (path === b) return [{ name: "file.txt", path: target, isDir: false, isSymlink: false }];
+      return [];
+    });
+    await loadRoot(ROOT);
+    vi.mocked(commands.fsListDir).mockClear();
+
+    let callsSinceExpand = 0;
+    vi.mocked(commands.fsListDir).mockImplementation(async (_workspaceId, path) => {
+      callsSinceExpand++;
+      if (path === a) return [{ name: "b", path: b, isDir: true, isSymlink: false }];
+      if (path === b) return [{ name: "file.txt", path: target, isDir: false, isSymlink: false }];
+      return [];
+    });
+
+    // Stale from the very next check onward — the loop expands "a" (the
+    // first ancestor, already in flight before staleness could be checked
+    // again) but must never go on to expand "b".
+    await expandToPath(target, () => callsSinceExpand > 0);
+
+    expect(commands.fsListDir).toHaveBeenCalledTimes(1);
+    expect(commands.fsListDir).toHaveBeenCalledWith("local", a);
+    const nodeA = get(fileTree).root?.children?.find((n) => n.entry.path === a);
+    expect(nodeA?.expanded).toBe(true);
+    const nodeB = nodeA?.children?.find((n) => n.entry.path === b);
+    expect(nodeB?.expanded ?? false).toBe(false);
+  });
+
+  it("is a no-op for a path outside the workspace root", async () => {
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("a.txt")]);
+    await loadRoot(ROOT);
+    vi.mocked(commands.fsListDir).mockClear();
+
+    await expandToPath("/elsewhere/file.txt", () => false);
+
+    expect(commands.fsListDir).not.toHaveBeenCalled();
+  });
+
+  it("expands a nested directory when the workspace root itself is \"/\"", async () => {
+    vi.mocked(commands.fsListDir).mockImplementation(async (_workspaceId, path) => {
+      if (path === "/") return [{ name: "a", path: "/a", isDir: true, isSymlink: false }];
+      if (path === "/a") return [{ name: "b.txt", path: "/a/b.txt", isDir: false, isSymlink: false }];
+      return [];
+    });
+    await loadRoot("/");
+    vi.mocked(commands.fsListDir).mockClear();
+
+    await expandToPath("/a/b.txt", () => false);
+
+    expect(commands.fsListDir).toHaveBeenCalledWith("local", "/a");
+    const nodeA = get(fileTree).root?.children?.find((n) => n.entry.path === "/a");
+    expect(nodeA?.expanded).toBe(true);
   });
 });
 

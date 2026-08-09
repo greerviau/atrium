@@ -1,7 +1,16 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
-  import { fileTree, loadRoot, loadChildren, collapse, toggleExpanded, type TreeNode } from "../stores/fileTree";
+  import {
+    fileTree,
+    loadRoot,
+    loadChildren,
+    collapse,
+    toggleExpanded,
+    expandToPath,
+    type TreeNode,
+  } from "../stores/fileTree";
   import { workspace } from "../stores/workspace";
+  import { tabsState } from "../stores/tabs";
   import {
     contextMenu,
     closeContextMenu,
@@ -15,7 +24,7 @@
   import FileTreeNode from "./FileTreeNode.svelte";
   import ContextMenu from "../ui/ContextMenu.svelte";
   import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
-  import { dirOf } from "../util/path";
+  import { dirOf, pathsEqual } from "../util/path";
   import { SHORTCUT_LABELS } from "../shell/shortcutLabels";
   import { draggingPath } from "./explorerDrag";
   import { contiguousPathSelection } from "./rangeSelection";
@@ -117,6 +126,64 @@
     const selected = new Set([...explicitSelectedPaths].filter((path) => visiblePaths.has(path)));
     if (selected.size > 0) return selected;
     return activePath === null ? new Set<string>() : new Set([activePath]);
+  });
+  // The subset of `selectedPaths` that actually reflects a user-made,
+  // multi-row range selection (shift-click/shift-arrow) rather than the
+  // single-row fallback above — a plain click or arrow move always
+  // collapses back to one row, so this is empty outside a genuine range
+  // selection. Drives the visual fill (FileTreeNode.svelte); `selectedPaths`
+  // itself still drives `aria-selected` unchanged, for the single-current-
+  // row a11y semantics `FileTreeKeyboardNav.test.ts` already covers.
+  let rangeSelectedPaths = $derived(selectedPaths.size > 1 ? selectedPaths : new Set<string>());
+
+  // The currently open file (issue #400) and the workspace root's own path,
+  // both as memoized values rather than raw store reads: `openPath`/
+  // `rootPath` only change (by `Object.is`) when the active tab or the
+  // root's own identity actually changes, not on every unrelated write to
+  // `tabsState`/`fileTree` (a keystroke's `markDirty`, a `collapse()`, an
+  // `fs:changed` refresh) — load-bearing for the expand effect below, which
+  // must not re-fire on those.
+  let openPath = $derived($tabsState.activeTabPath);
+  let rootPath = $derived($fileTree.root?.entry.path ?? null);
+
+  // Expands every collapsed ancestor of the open file and scrolls its row
+  // into view (issue #400): without this, a file inside a collapsed
+  // directory — the common case on a restored session, or any open
+  // triggered from outside the explorer (a markdown/terminal link, an OS
+  // file-manager open, #398) — has no DOM row to highlight at all.
+  // `rootPath` going from `null` to the real path (once, when `loadRoot`
+  // finishes) is what makes a cold-start session restore work, since the
+  // active tab is typically set before that resolves. `isStale` is
+  // re-checked before each awaited step and before scrolling, so a rapid tab
+  // switch aborts an in-flight expansion instead of racing it to a wrong
+  // final scroll target.
+  $effect(() => {
+    const path = openPath;
+    const root = rootPath;
+    if (!path || !root) return;
+    const isStale = () => openPath !== path;
+    void expandToPath(path, isStale)
+      .then(async () => {
+        if (isStale()) return;
+        await tick();
+        // `treeEl` reverts to `null` once the component unmounts (Svelte's
+        // `bind:this` teardown) — an `fsListDir` that resolves after that
+        // would otherwise throw here and get misattributed to a filesystem
+        // failure by the `.catch` below.
+        if (!treeEl) return;
+        // `pathsEqual`, not `===` — `path` (`openPath`) is not guaranteed to
+        // be in the same separator form as `row.dataset.path` (sourced from
+        // the tree's own native-separator `entry.path`), the same mismatch
+        // `expandToPath`/`aria-current` above already account for. A plain
+        // `===` here would expand the right ancestor and highlight the right
+        // row but silently never scroll to it.
+        Array.from(treeEl.querySelectorAll<HTMLElement>(".row[data-path]")).find(
+          (row) => pathsEqual(row.dataset.path ?? "", path),
+        )?.scrollIntoView({ block: "nearest" });
+      })
+      .catch((err: unknown) => {
+        console.error("atrium: failed to expand to open file in explorer", err);
+      });
   });
 
   function onFocusRow(path: string): void {
@@ -346,7 +413,15 @@
 >
   {#if $fileTree.root}
     <div role="tree" aria-label="File Explorer" aria-multiselectable="true">
-      <FileTreeNode node={$fileTree.root} focusedPath={activePath} {selectedPaths} {onFocusRow} {onSelectRow} />
+      <FileTreeNode
+        node={$fileTree.root}
+        focusedPath={activePath}
+        {selectedPaths}
+        {rangeSelectedPaths}
+        {openPath}
+        {onFocusRow}
+        {onSelectRow}
+      />
     </div>
   {/if}
 </div>

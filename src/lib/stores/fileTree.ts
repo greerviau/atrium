@@ -1,6 +1,6 @@
 import { writable, get } from "svelte/store";
 import { fsListDir, localWorkspaceId, type DirEntry } from "../ipc/commands";
-import { basename } from "../util/path";
+import { basename, isPathUnderOrEqual } from "../util/path";
 
 export interface TreeNode {
   entry: DirEntry;
@@ -86,6 +86,51 @@ export async function toggleExpanded(node: TreeNode): Promise<void> {
     return;
   }
   await loadChildren(node.entry.path);
+}
+
+/**
+ * Expands every collapsed ancestor directory of `path`, so a row for it
+ * exists in the tree — used to reveal the currently-open tab (issue #400):
+ * without this, a file inside a collapsed directory (the common case on a
+ * restored session, or any open triggered from outside the explorer) has no
+ * DOM row to highlight at all. A no-op once there's no root or `path` is
+ * outside it. `isStale` is re-checked before each awaited step, so a rapid
+ * tab switch aborts an in-flight expansion instead of racing it to
+ * completion for a path that's no longer current.
+ *
+ * Descends the *tree*, not the path string: at each level it picks whichever
+ * child directory `path` falls under, via `isPathUnderOrEqual` (which
+ * normalizes both sides), rather than slicing `path` itself into ancestor
+ * strings to `===`-match against node paths. `path` (`tabsState.activeTabPath`)
+ * is not guaranteed to be in the same separator form as `entry.path` — most
+ * callers pass it through verbatim from the native filesystem, but at least
+ * one (a markdown link's relative-path resolution) normalizes backslashes to
+ * `/` along the way — so a string-prefix approach silently stops matching
+ * tree nodes for that caller on Windows. Re-reads `fileTree` at the top of
+ * every iteration rather than holding a node reference across the `await`,
+ * since `loadChildren` replaces the node objects on the path it patches.
+ */
+export async function expandToPath(path: string, isStale: () => boolean): Promise<void> {
+  const initialRoot = get(fileTree).root;
+  if (!initialRoot || !isPathUnderOrEqual(path, initialRoot.entry.path)) {
+    return;
+  }
+
+  let currentPath = initialRoot.entry.path;
+  for (;;) {
+    if (isStale()) return;
+    const root = get(fileTree).root;
+    const current = root && findNode(root, currentPath);
+    if (!current?.children) return;
+    const next = current.children.find(
+      (child) => child.entry.isDir && isPathUnderOrEqual(path, child.entry.path),
+    );
+    if (!next) return; // `path` is directly under `current`, already visible
+    if (!(next.expanded && next.children)) {
+      await loadChildren(next.entry.path);
+    }
+    currentPath = next.entry.path;
+  }
 }
 
 /** Re-fetches the children of whichever expanded directory contains `path`, used by the `fs:changed` live-update handler (section 6.3). */
