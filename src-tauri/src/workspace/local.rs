@@ -435,11 +435,22 @@ fn find_files_root(
 /// `/`-separated regardless of platform, matching every other
 /// workspace-relative path this app hands to the frontend — on Windows,
 /// `Path`'s own `\`-separated `Display` would otherwise leak into fuzzy-match
-/// highlighting and the search UI.
+/// highlighting and the search UI. The replace is `#[cfg(windows)]`-only: a
+/// Unix filename may legally contain a literal backslash, and only Windows
+/// ever needs one folded into a forward slash here.
 fn display_path(root: &Path, path: &str) -> String {
     Path::new(path)
         .strip_prefix(root)
-        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+        .map(|relative| {
+            #[cfg(windows)]
+            {
+                relative.to_string_lossy().replace('\\', "/")
+            }
+            #[cfg(not(windows))]
+            {
+                relative.to_string_lossy().to_string()
+            }
+        })
         .unwrap_or_else(|_| path.to_string())
 }
 
@@ -816,21 +827,35 @@ fn contains_root(current: &Path, real_root: &Path) -> bool {
 /// verbatim `\\?\C:\...` — which `Path`'s component-wise `starts_with`
 /// treats as a hard mismatch even though nothing actually diverges on disk.
 /// `real_root` is always canonicalized (see `resolve_within_root_impl`), so
-/// canonicalizing `current` here and handing back the result lets callers
-/// re-compare against that same representation. Safe to call from mid-walk:
-/// every ancestor component of `current` has already been individually
-/// checked for being a symlink before `current` reached this point (each
-/// hop goes through `resolve_within_root_impl`'s own `symlink_metadata`
-/// check), so this can only fold in a same-entry alias — it cannot silently
-/// jump through an untraversed symlink the way canonicalizing a raw,
-/// not-yet-walked absolute target upfront would (that would skip this
-/// function's whole reason for re-walking one hop at a time). A target
-/// that doesn't exist yet (the dangling-target case this module tolerates
-/// elsewhere) can't be canonicalized, so this returns `None` unchanged from
-/// the pre-fallback behavior.
+/// folding `current` into that same representation lets callers re-compare
+/// against it.
+///
+/// Canonicalizes `current`'s *parent* and rejoins its literal file name,
+/// rather than canonicalizing `current` as a whole — `canonicalize` follows
+/// symlinks, and while every other component of `current` has already been
+/// individually checked for being a symlink by the time it reaches this
+/// point (each hop goes through `resolve_within_root_impl`'s own
+/// `symlink_metadata` check), the *final* component has not when this is
+/// reached via `resolve_entry_within_root` (`dereference_final == false`,
+/// behind `delete`/`rename`): that path deliberately leaves the last
+/// component un-dereferenced, matching `unlink(2)`/`rename(2)`. Canonicalizing
+/// `current` whole would silently resolve through it anyway, deciding
+/// containment for a symlinked entry against whatever it points at rather
+/// than the entry itself — both directions wrong (rejecting an in-workspace
+/// symlink pending delete, or accepting one whose target actually escapes).
+/// Resolving only the (always-verified) parent and keeping the final
+/// component literal can't skip an untraversed hop either way. A `current`
+/// with no parent (a bare drive root) can't itself be a symlink, so it's
+/// canonicalized directly; a target that doesn't exist yet (the
+/// dangling-target case this module tolerates elsewhere) can't be
+/// canonicalized, so this returns `None` unchanged from the pre-fallback
+/// behavior.
 #[cfg(windows)]
 fn windows_alias(current: &Path, real_root: &Path) -> Option<PathBuf> {
-    let canonical = std::fs::canonicalize(current).ok()?;
+    let canonical = match (current.parent(), current.file_name()) {
+        (Some(parent), Some(name)) => std::fs::canonicalize(parent).ok()?.join(name),
+        _ => std::fs::canonicalize(current).ok()?,
+    };
     (canonical.starts_with(real_root) || real_root.starts_with(&canonical)).then_some(canonical)
 }
 
@@ -2077,6 +2102,71 @@ mod tests {
             std::fs::read_to_string(outside.path().join("secret.txt")).unwrap(),
             "keep me"
         );
+    }
+
+    /// Regression test for `windows_alias`'s parent-only canonicalization:
+    /// `delete` resolves through `resolve_entry_within_root`
+    /// (`dereference_final == false`), so `a/link.md`'s final component must
+    /// never be dereferenced even after `a` (an ancestor symlink) forces a
+    /// splice — canonicalizing `current` as a whole here would follow
+    /// `link.md` to its outside target and spuriously reject deleting the
+    /// (legitimately in-workspace) symlink entry itself.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn delete_of_an_in_workspace_symlink_reached_through_an_ancestor_symlink_only_unlinks_the_link(
+    ) {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.md"), "keep me").unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let ws = workspace(dir.path());
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::os::windows::fs::symlink_dir(dir.path().join("sub"), dir.path().join("a")).unwrap();
+        std::os::windows::fs::symlink_file(
+            outside.path().join("secret.md"),
+            dir.path().join("sub").join("link.md"),
+        )
+        .unwrap();
+
+        ws.delete("a/link.md", false).await.unwrap();
+
+        assert!(dir
+            .path()
+            .join("sub")
+            .join("link.md")
+            .symlink_metadata()
+            .is_err());
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("secret.md")).unwrap(),
+            "keep me"
+        );
+    }
+
+    /// The security-critical counterpart: an ancestor symlink climbing out
+    /// to the workspace's own parent is tolerated mid-walk (by design, so a
+    /// target that ultimately lands back inside can still resolve), but a
+    /// *pre-existing, genuinely external* entry that happens to alias back
+    /// into the workspace must still be rejected as escaping — the alias
+    /// fold-in exists to normalize representation, not to grant containment
+    /// to an entry canonicalization would resolve through.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn delete_rejects_an_ancestor_symlink_reaching_an_outside_entry_that_aliases_back_in() {
+        let container = tempfile::tempdir().unwrap();
+        let ws_root = container.path().join("ws");
+        std::fs::create_dir(&ws_root).unwrap();
+        let ws = workspace(&ws_root);
+
+        std::fs::create_dir(ws_root.join("notes")).unwrap();
+        // Pre-existing, outside the workspace, but aliases back into it.
+        std::os::windows::fs::symlink_dir(ws_root.join("notes"), container.path().join("notes"))
+            .unwrap();
+        // Climbs out to the workspace's own parent.
+        std::os::windows::fs::symlink_dir(container.path(), ws_root.join("a")).unwrap();
+
+        let err = ws.delete("a/notes", false).await.unwrap_err();
+        assert!(matches!(err, AppError::InvalidPath(_)));
+        assert!(container.path().join("notes").symlink_metadata().is_ok());
     }
 
     #[tokio::test]

@@ -34,7 +34,7 @@ export function dirOf(path: string): string {
   return idx <= 0 ? path : normalized.slice(0, idx);
 }
 
-/** Whether `path` is `prefix` itself or a descendant of it, matched at a path-separator boundary (so a prefix of `a/b` does not also match a sibling like `a/bc`). Normalizes backslashes first, since a Windows `display_path` from the Rust side uses them while callers here compare against POSIX-style paths. */
+/** Whether `path` is `prefix` itself or a descendant of it, matched at a path-separator boundary (so a prefix of `a/b` does not also match a sibling like `a/bc`). Normalizes backslashes first: callers here compare tab/root/rename-event paths, which are absolute filesystem paths from the Rust side and use native separators on Windows — unlike `find_files`' `display_path`, which the backend already normalizes to `/`. */
 export function isPathUnderOrEqual(path: string, prefix: string): boolean {
   const normalizedPath = path.replace(/\\/g, "/");
   const normalizedPrefix = prefix.replace(/\\/g, "/");
