@@ -5,6 +5,7 @@
   import { openContextMenu, treeActionRequest, type TreeActionRequest } from "./contextMenu";
   import { editingPath, pendingCreate, commitRename, commitCreate } from "./inlineEdit";
   import { beginExplorerDrag, dragOverTargetDir } from "./explorerDrag";
+  import { pathsEqual } from "../util/path";
   import ExplorerIcon from "./icons/ExplorerIcon.svelte";
   import InlineNameInput from "./InlineNameInput.svelte";
   import NewEntryRow from "./NewEntryRow.svelte";
@@ -135,7 +136,7 @@
     onfocus={() => onFocusRow(node.entry.path)}
     role="treeitem"
     aria-selected={selectedPaths.has(node.entry.path)}
-    aria-current={node.entry.path === openPath ? "true" : undefined}
+    aria-current={openPath !== null && pathsEqual(node.entry.path, openPath) ? "true" : undefined}
     aria-expanded={node.entry.isDir ? node.expanded : undefined}
     aria-level={depth + 1}
     tabindex={focusedPath === node.entry.path ? 0 : -1}
@@ -206,18 +207,27 @@
      current/focused row deliberately gets no fill of its own — see the
      `:focus` rule below — so "no file open" always means no fill anywhere,
      and the open file is never sharing the explorer with a second,
-     unrelated highlighted row. All three of this rule, `.row.range-selected`
-     via this selector, and `.row:hover` below have equal specificity, so
-     `:hover` is declared last and wins whenever a highlighted row is
-     hovered — losing the fill for a strict background swap is the accepted
-     trade-off (see the plan) rather than the two rules fighting silently by
-     declaration order. */
+     unrelated highlighted row. */
   .row.range-selected,
   .row[aria-current="true"] {
     background: var(--atrium-selection-bg);
   }
-  .row:hover {
+  /* Excludes a highlighted row, so hovering it doesn't swap the strong
+     selection fill for the much fainter hover tint and erase the only
+     signal of which file is open. */
+  .row:hover:not(.range-selected):not([aria-current="true"]) {
     background: var(--atrium-bg-hover);
+  }
+  /* A highlighted row still needs its own hover feedback — same outline
+     language as `:focus`/`.drop-target-active` below, layered on top of the
+     fill rather than replacing it. `:not(.drop-target-active)` keeps this
+     from outranking `.drop-target-active`'s own (stronger, 2px) outline on a
+     drag-over row — this selector's specificity would otherwise win, since
+     it matches on three simple selectors against that rule's two. */
+  .row.range-selected:hover:not(.drop-target-active),
+  .row[aria-current="true"]:hover:not(.drop-target-active) {
+    outline: 1px solid var(--atrium-accent);
+    outline-offset: -1px;
   }
   /* Plain `:focus`, not `:focus-visible` — this row is a keyboard-shortcut
      target (New/Rename/Delete/Reveal act on whichever row holds focus), so

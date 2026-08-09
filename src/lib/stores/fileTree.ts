@@ -93,29 +93,43 @@ export async function toggleExpanded(node: TreeNode): Promise<void> {
  * exists in the tree — used to reveal the currently-open tab (issue #400):
  * without this, a file inside a collapsed directory (the common case on a
  * restored session, or any open triggered from outside the explorer) has no
- * DOM row to highlight at all. A no-op once there's no root, `path` is
- * outside it, or `path` *is* the root itself. `isStale` is re-checked before
- * each awaited step, so a rapid tab switch aborts an in-flight expansion
- * instead of racing it to completion for a path that's no longer current.
+ * DOM row to highlight at all. A no-op once there's no root or `path` is
+ * outside it. `isStale` is re-checked before each awaited step, so a rapid
+ * tab switch aborts an in-flight expansion instead of racing it to
+ * completion for a path that's no longer current.
+ *
+ * Descends the *tree*, not the path string: at each level it picks whichever
+ * child directory `path` falls under, via `isPathUnderOrEqual` (which
+ * normalizes both sides), rather than slicing `path` itself into ancestor
+ * strings to `===`-match against node paths. `path` (`tabsState.activeTabPath`)
+ * is not guaranteed to be in the same separator form as `entry.path` — most
+ * callers pass it through verbatim from the native filesystem, but at least
+ * one (a markdown link's relative-path resolution) normalizes backslashes to
+ * `/` along the way — so a string-prefix approach silently stops matching
+ * tree nodes for that caller on Windows. Re-reads `fileTree` at the top of
+ * every iteration rather than holding a node reference across the `await`,
+ * since `loadChildren` replaces the node objects on the path it patches.
  */
 export async function expandToPath(path: string, isStale: () => boolean): Promise<void> {
-  const root = get(fileTree).root;
-  if (!root || root.entry.path === path || !isPathUnderOrEqual(path, root.entry.path)) {
+  const initialRoot = get(fileTree).root;
+  if (!initialRoot || !isPathUnderOrEqual(path, initialRoot.entry.path)) {
     return;
   }
 
-  const ancestors: string[] = [];
-  let dir = nativeDirOf(path);
-  while (dir !== root.entry.path && nativeDirOf(dir) !== dir) {
-    ancestors.unshift(dir);
-    dir = nativeDirOf(dir);
-  }
-
-  for (const ancestor of ancestors) {
+  let currentPath = initialRoot.entry.path;
+  for (;;) {
     if (isStale()) return;
-    const node = findNode(get(fileTree).root ?? root, ancestor);
-    if (node?.expanded && node.children) continue;
-    await loadChildren(ancestor);
+    const root = get(fileTree).root;
+    const current = root && findNode(root, currentPath);
+    if (!current?.children) return;
+    const next = current.children.find(
+      (child) => child.entry.isDir && isPathUnderOrEqual(path, child.entry.path),
+    );
+    if (!next) return; // `path` is directly under `current`, already visible
+    if (!(next.expanded && next.children)) {
+      await loadChildren(next.entry.path);
+    }
+    currentPath = next.entry.path;
   }
 }
 
@@ -135,21 +149,6 @@ function parentPath(path: string): string {
   const normalized = normalizePath(path);
   const idx = normalized.lastIndexOf("/");
   return idx <= 0 ? "/" : normalized.slice(0, idx);
-}
-
-/**
- * Parent directory of `path`, preserving whichever separator (`/` or `\`)
- * the input actually uses — unlike `dirOf` (`../util/path`), which
- * normalizes its *result* to `/`. That normalization is fine for the
- * string-comparison uses `dirOf` already has, but it would break a caller
- * that needs the result to still `===`-match a tree node's own
- * `entry.path`, which is kept in native (OS-specific) separator form
- * straight from the Rust backend — on Windows, a forward-slashed ancestor
- * would never match a backslashed node path. Used by `expandToPath` only.
- */
-function nativeDirOf(path: string): string {
-  const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return idx <= 0 ? path : path.slice(0, idx);
 }
 
 function findNode(node: TreeNode, path: string): TreeNode | undefined {

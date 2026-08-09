@@ -3,7 +3,7 @@
   import { tabsState, setActiveTab } from "../stores/tabs";
   import { standaloneWorkspaceId } from "../ipc/commands";
   import { revealInFinder } from "../ipc/reveal";
-  import { basename } from "../util/path";
+  import { basename, pathsEqual } from "../util/path";
   import ContextMenu from "../ui/ContextMenu.svelte";
   import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
   import { contiguousPathSelection } from "./rangeSelection";
@@ -145,7 +145,7 @@
         title={row.path}
         role="treeitem"
         aria-selected={selectedPaths.has(row.path)}
-        aria-current={row.path === openPath ? "true" : undefined}
+        aria-current={openPath !== null && pathsEqual(row.path, openPath) ? "true" : undefined}
         aria-level="1"
         tabindex={activePath === row.path ? 0 : -1}
         onclick={(event) => selectRow(row.path, event.shiftKey)}
@@ -188,14 +188,24 @@
   /* Mirrors `FileTreeNode.svelte`'s own split (issue #400): the open file
      and a genuine multi-row range selection share the one strong fill; a
      single current/focused row gets no fill of its own (see `:focus`
-     below). `:hover` is declared last so it wins on equal specificity,
-     including over a highlighted row. */
+     below). */
   .row.range-selected,
   .row[aria-current="true"] {
     background: var(--atrium-selection-bg);
   }
-  .row:hover {
+  /* Excludes a highlighted row, so hovering it doesn't swap the strong
+     selection fill for the much fainter hover tint and erase the only
+     signal of which file is open. */
+  .row:hover:not(.range-selected):not([aria-current="true"]) {
     background: var(--atrium-bg-hover);
+  }
+  /* A highlighted row still needs its own hover feedback — same outline
+     language as `:focus` below, layered on top of the fill rather than
+     replacing it. */
+  .row.range-selected:hover,
+  .row[aria-current="true"]:hover {
+    outline: 1px solid var(--atrium-accent);
+    outline-offset: -1px;
   }
   /* Plain `:focus`, not `:focus-visible` — matches `FileTreeNode.svelte`'s
      own row styling, since this row is just as much a keyboard target

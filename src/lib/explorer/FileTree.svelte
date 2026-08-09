@@ -166,6 +166,11 @@
       .then(async () => {
         if (isStale()) return;
         await tick();
+        // `treeEl` reverts to `undefined` once the component unmounts
+        // (Svelte's `bind:this` teardown) — an `fsListDir` that resolves
+        // after that would otherwise throw here and get misattributed to a
+        // filesystem failure by the `.catch` below.
+        if (!treeEl) return;
         Array.from(treeEl.querySelectorAll<HTMLElement>(".row[data-path]")).find(
           (row) => row.dataset.path === path,
         )?.scrollIntoView({ block: "nearest" });
