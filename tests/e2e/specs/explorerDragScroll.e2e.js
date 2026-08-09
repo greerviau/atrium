@@ -80,12 +80,13 @@ describe("file explorer: horizontal scroll during a drag (issue #390)", () => {
     // A real pointer drag toward and past the tree's right edge, held there
     // for several frames — the window in which a native drag-autoscroll (the
     // reported bug) would kick in — then released back over the dragged
-    // row's own coordinates. `isValidMoveTarget` (explorerDrag.ts) always
-    // treats a drop onto the source path itself as a no-op, so this is a
-    // guaranteed-inert release regardless of what else occupies the screen
-    // past the tree's right edge (unlike releasing out past `.file-tree`'s
-    // bounding box, which resolves against whatever pane is under that
-    // point rather than against the tree at all).
+    // row's own coordinates. Hit-testing a file row resolves to its parent
+    // directory (`resolveExplorerDropTargetDir`), which `isValidMoveTarget`
+    // (explorerDrag.ts) always rejects as "already directly inside its
+    // current parent" — so this is a guaranteed-inert release regardless of
+    // what else occupies the screen past the tree's right edge (unlike
+    // releasing out past `.file-tree`'s bounding box, which resolves against
+    // whatever pane is under that point rather than against the tree at all).
     const treeRect = await browser.execute((el) => {
       const rect = el.getBoundingClientRect();
       return { right: rect.right };
