@@ -44,14 +44,15 @@
   });
 
   // Independent of the `.dragging` CSS lock below (issue #390 / #391): that
-  // lock can only stop a horizontal scroll that goes through overflow-x's
-  // own scroll affordance. This corrects the *effect* of any scroll — of
-  // any origin, including a native drag-autoscroll gesture that bypasses
-  // overflow-x and JS event prevention entirely — by snapping scrollLeft
-  // back the instant it moves during a drag. Self-terminating: after the
-  // corrective write, scrollLeft already equals lockedScrollLeft, so the
-  // scroll event that write itself triggers is a no-op through the `!==`
-  // guard rather than a second correction.
+  // lock alone didn't hold on a real device (the issue was reopened after
+  // #391 shipped it), and the exact native mechanism still causing the
+  // scroll was never identified — this environment has no display to
+  // observe it with. Rather than guess at a second mechanism-specific fix,
+  // this corrects the *effect* of any scroll, whatever its cause, by
+  // snapping scrollLeft back the instant it moves during a drag.
+  // Self-terminating: after the corrective write, scrollLeft already equals
+  // lockedScrollLeft, so the scroll event that write itself triggers is a
+  // no-op through the `!==` guard rather than a second correction.
   $effect(() => {
     if ($draggingPath === null) return;
     const lockedScrollLeft = treeEl.scrollLeft;
