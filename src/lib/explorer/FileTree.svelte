@@ -43,6 +43,25 @@
     }
   });
 
+  // Independent of the `.dragging` CSS lock below (issue #390 / #391): that
+  // lock can only stop a horizontal scroll that goes through overflow-x's
+  // own scroll affordance. This corrects the *effect* of any scroll — of
+  // any origin, including a native drag-autoscroll gesture that bypasses
+  // overflow-x and JS event prevention entirely — by snapping scrollLeft
+  // back the instant it moves during a drag. Self-terminating: after the
+  // corrective write, scrollLeft already equals lockedScrollLeft, so the
+  // scroll event that write itself triggers is a no-op through the `!==`
+  // guard rather than a second correction.
+  $effect(() => {
+    if ($draggingPath === null) return;
+    const lockedScrollLeft = treeEl.scrollLeft;
+    const onScroll = () => {
+      if (treeEl.scrollLeft !== lockedScrollLeft) treeEl.scrollLeft = lockedScrollLeft;
+    };
+    treeEl.addEventListener("scroll", onScroll);
+    return () => treeEl.removeEventListener("scroll", onScroll);
+  });
+
   // Roving tabindex + arrow-key navigation (§ Approach step 1). Starts at the
   // root the first time `$fileTree.root` loads and otherwise just tracks
   // wherever the user last navigated during the session — no coupling to
