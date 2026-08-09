@@ -513,4 +513,76 @@ describe("App proportional panel resize (#301)", () => {
 
     expect(terminalStyle(container).width).toBe("300px");
   });
+
+  it("toggling the explorer sidebar redistributes the terminal's width by ratio, not just to the editor (issue #402)", async () => {
+    terminalPosition.set("left");
+    const { container } = renderApp();
+    await tick();
+    await tick();
+
+    setAppWidth(container, 1000);
+    dragExplorer(container, 200 - 240); // explorerWidth -> 200 (ratio 0.2 @ appWidth 1000)
+    await tick();
+
+    setMainSize(container, { width: 796, height: 796 });
+    dragTerminal(container, 398 - 320); // terminalWidth -> 398 (ratio 0.5 @ mainContentWidth 796)
+    await tick();
+    expect(terminalStyle(container).width).toBe("398px");
+
+    explorerVisible.set(false);
+    await tick();
+    await tick();
+
+    expect(container.querySelector(".explorer")).toBeNull();
+    // The freed 204px (explorer + resizer) is redistributed by ratio: the
+    // terminal grows to 50% of the now-full 1000px main content width,
+    // instead of staying pinned at its stale 398px.
+    expect(terminalStyle(container).width).toBe("500px");
+
+    explorerVisible.set(true);
+    await tick();
+    await tick();
+
+    // Restoring the sidebar gives the ratio back exactly.
+    expect(terminalStyle(container).width).toBe("398px");
+  });
+
+  it("re-baselines the terminal's ratio on an explorer drag, so a later toggle round-trips exactly (issue #402)", async () => {
+    terminalPosition.set("left");
+    const { container } = renderApp();
+    await tick();
+    await tick();
+
+    setAppWidth(container, 1000);
+    dragExplorer(container, 200 - 240); // explorerWidth -> 200
+    await tick();
+
+    setMainSize(container, { width: 796, height: 796 });
+    dragTerminal(container, 398 - 320); // terminalWidth -> 398 (ratio 0.5 @ 796)
+    await tick();
+
+    // A further explorer drag alone must not rescale the terminal's pixels
+    // (the existing contract pinned above), but it must re-baseline the
+    // terminal's ratio to its new on-screen fraction of `.main`.
+    dragExplorer(container, 300 - 200); // explorerWidth -> 300
+    await tick();
+    expect(terminalStyle(container).width).toBe("398px");
+
+    explorerVisible.set(false);
+    await tick();
+    await tick();
+
+    // 398 / (1000 - 300 - 4) = 398/696, the terminal's actual on-screen
+    // fraction right before the toggle, applied to the now-full 1000px main
+    // content width -> round(398/696 * 1000) = 572. A stale pre-drag ratio
+    // (398/796 = 0.5) would instead give 500.
+    expect(terminalStyle(container).width).toBe("572px");
+
+    explorerVisible.set(true);
+    await tick();
+    await tick();
+
+    // Exact round-trip: round(398/696 * 696) = 398.
+    expect(terminalStyle(container).width).toBe("398px");
+  });
 });
