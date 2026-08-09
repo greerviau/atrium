@@ -28,6 +28,7 @@
   import { tabSize } from "../stores/tabSize";
   import { lineNumbersEnabled } from "../stores/lineNumbersEnabled";
   import { zoom } from "../stores/textSize";
+  import { proseWidth, proseWidthCssValue, type ProseWidth } from "../stores/proseWidth";
   import { autoSaveEnabled, AUTO_SAVE_DELAY_MS, isAutoSaveBlocked, blockAutoSave, unblockAutoSave } from "../stores/autoSave";
   import { showErrorToast, describeError } from "../stores/errorToast";
   import { basename } from "../util/path";
@@ -101,6 +102,7 @@
   let lastAppliedMinimapEnabled: boolean | undefined;
   let lastAppliedWordWrapEnabled: boolean | undefined;
   let lastAppliedLineNumbersEnabled: boolean | undefined;
+  let lastAppliedProseWidth: ProseWidth | undefined;
   let minimapIdleHandle: number | undefined;
   let minimapVisibilityTimer: ReturnType<typeof setTimeout> | undefined;
   let lastAppliedMinimapVisible: boolean | undefined;
@@ -581,6 +583,25 @@
     view.dispatch({ effects: tabSizeCompartment.reconfigure(indentUnit.of(" ".repeat(size))) });
   });
 
+  // The Max Width setting changes `.cm-line`'s `max-width` via the CSS
+  // custom property written into the pane's `style` attribute below, which
+  // re-wraps rendered prose and changes line heights. That's invisible to
+  // CodeMirror: there's no compartment reconfigure or dispatch to drive its
+  // measure cycle, and `.cm-scroller`'s own border box doesn't change (this
+  // pane and `.cm-editor` are both `height: 100%`), so the view layer's one
+  // `ResizeObserver` never fires for it either. An explicit
+  // `requestMeasure()` forces a fresh pass instead of relying on
+  // CodeMirror's implicit, best-effort convergence — same reasoning as the
+  // view-mode effect below.
+  $effect(() => {
+    const width = $proseWidth;
+    if (!view || width === lastAppliedProseWidth) {
+      return;
+    }
+    lastAppliedProseWidth = width;
+    view.requestMeasure();
+  });
+
   // Reconfigures the view-mode compartment in place when a markdown tab's
   // `viewMode` toggles between rendered and source, or when the Line
   // Numbers setting changes (both extension sets `viewModeExtensions`
@@ -738,7 +759,16 @@
 <svelte:window onclick={closeMenu} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="editor-pane" bind:this={container} style={`font-size: ${$zoom * 100}%`} oncontextmenu={onContextMenu}></div>
+<!-- Concatenated into the style attribute, not Svelte's `style:--custom-prop`
+     directive: that directive compiles to `element.style.setProperty()`,
+     which is unreliable for custom properties under jsdom's `cssstyle` in
+     tests — same reason zoom's font-size is done this way. -->
+<div
+  class="editor-pane"
+  bind:this={container}
+  style={`font-size: ${$zoom * 100}%; --atrium-prose-max-width: ${proseWidthCssValue($proseWidth)};`}
+  oncontextmenu={onContextMenu}
+></div>
 
 {#if menu}
   <ContextMenu x={menu.x} y={menu.y}>

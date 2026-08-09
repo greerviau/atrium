@@ -10,6 +10,7 @@ import { terminalPosition } from "../../src/lib/stores/layout";
 import { zoom, zoomIn, DEFAULT_ZOOM } from "../../src/lib/stores/textSize";
 import { minimapEnabled, DEFAULT_MINIMAP_ENABLED } from "../../src/lib/stores/minimapEnabled";
 import { markdownDefaultView, DEFAULT_MARKDOWN_VIEW } from "../../src/lib/stores/markdownDefaultView";
+import { proseWidth, DEFAULT_PROSE_WIDTH } from "../../src/lib/stores/proseWidth";
 import { wordWrapEnabled, DEFAULT_WORD_WRAP_ENABLED } from "../../src/lib/stores/wordWrap";
 import { tabSize, DEFAULT_TAB_SIZE } from "../../src/lib/stores/tabSize";
 import { lineNumbersEnabled, DEFAULT_LINE_NUMBERS_ENABLED } from "../../src/lib/stores/lineNumbersEnabled";
@@ -61,6 +62,7 @@ describe("SettingsDialog", () => {
     zoom.set(DEFAULT_ZOOM);
     minimapEnabled.set(DEFAULT_MINIMAP_ENABLED);
     markdownDefaultView.set(DEFAULT_MARKDOWN_VIEW);
+    proseWidth.set(DEFAULT_PROSE_WIDTH);
     wordWrapEnabled.set(DEFAULT_WORD_WRAP_ENABLED);
     tabSize.set(DEFAULT_TAB_SIZE);
     lineNumbersEnabled.set(DEFAULT_LINE_NUMBERS_ENABLED);
@@ -815,12 +817,16 @@ describe("SettingsDialog", () => {
   });
 
   describe("markdown default view", () => {
+    // Targeted by accessible name, not the shared `dropdownTrigger(container)`
+    // helper: Markdown now has two dropdowns (Default View, Max Width), and
+    // that helper selects the first `.dropdown-trigger` in DOM order, which
+    // only stays this one because of section ordering elsewhere.
     async function openMarkdownViewDropdown(): Promise<HTMLElement> {
       settingsOverlay.set({ open: true });
       const { container } = render(SettingsDialog);
       await tick();
       await selectCategory("Markdown");
-      await fireEvent.click(dropdownTrigger(container));
+      await fireEvent.click(screen.getByLabelText("Default view for markdown files"));
       await flush();
       return container;
     }
@@ -841,6 +847,50 @@ describe("SettingsDialog", () => {
 
       expect(get(markdownDefaultView)).toBe("source");
       expect(screen.queryByRole("listbox")).toBeNull();
+    });
+  });
+
+  describe("markdown max width", () => {
+    // Markdown is the first category with two dropdowns (Default View, Max
+    // Width), so the shared `dropdownTrigger(container)` helper — which
+    // selects the first `.dropdown-trigger` in DOM order — would open
+    // Default View instead. The trigger's accessible name (`Dropdown.svelte`
+    // puts its `label` prop on as `aria-label`) selects the right one
+    // regardless of DOM position.
+    async function openMaxWidthDropdown(): Promise<void> {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+      await selectCategory("Markdown");
+      await fireEvent.click(screen.getByLabelText("Max width of rendered markdown"));
+      await flush();
+    }
+
+    it("marks the current preset as selected", async () => {
+      proseWidth.set(120);
+      await openMaxWidthDropdown();
+
+      expect(screen.getByRole("option", { name: "80ch" }).getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByRole("option", { name: "120ch" }).getAttribute("aria-selected")).toBe("true");
+    });
+
+    it("clicking a preset updates the shared proseWidth store and closes the dropdown", async () => {
+      await openMaxWidthDropdown();
+
+      await fireEvent.click(screen.getByRole("option", { name: "100ch" }));
+      await flush();
+
+      expect(get(proseWidth)).toBe(100);
+      expect(screen.queryByRole("listbox")).toBeNull();
+    });
+
+    it("clicking Full updates the shared proseWidth store to the \"full\" sentinel", async () => {
+      await openMaxWidthDropdown();
+
+      await fireEvent.click(screen.getByRole("option", { name: "Full" }));
+      await flush();
+
+      expect(get(proseWidth)).toBe("full");
     });
   });
 
@@ -1070,6 +1120,17 @@ describe("SettingsDialog", () => {
       await tick();
 
       expect(screen.getByRole("heading", { name: "Restore Tabs on Startup" })).toBeTruthy();
+    });
+
+    it("finds Max Width by the 'line length' synonym", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "line length" } });
+      await tick();
+
+      expect(screen.getByRole("heading", { name: "Max Width" })).toBeTruthy();
     });
   });
 

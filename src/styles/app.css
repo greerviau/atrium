@@ -50,7 +50,10 @@ html.tab-drag-active * {
      so the whole document reads as one consistent column with a single left
      edge (issue #199) instead of prose centering narrower than code/tables.
      `ch` (not `px`) so the column scales with the user's font size/zoom
-     (#70) rather than staying visually fixed as text size changes. */
+     (#70) rather than staying visually fixed as text size changes. This is
+     the pre-JS-paint default only — `EditorPane.svelte` overrides it per
+     pane from the Max Width setting (`stores/proseWidth.ts`, #401) once
+     Svelte mounts. */
   --atrium-prose-max-width: 80ch;
 
   --atrium-icon-folder: #90a4c4;

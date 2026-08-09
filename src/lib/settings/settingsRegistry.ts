@@ -88,6 +88,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ["markdown", "view", "rendered", "source", "default"],
   },
   {
+    id: "max-width",
+    categoryId: "markdown",
+    title: "Max Width",
+    keywords: ["markdown", "width", "reading width", "line length", "column", "prose"],
+  },
+  {
     id: "dock-position",
     categoryId: "terminal",
     title: "Dock Position",
