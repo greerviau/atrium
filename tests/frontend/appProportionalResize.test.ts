@@ -585,4 +585,36 @@ describe("App proportional panel resize (#301)", () => {
     // Exact round-trip: round(398/696 * 696) = 398.
     expect(terminalStyle(container).width).toBe("398px");
   });
+
+  it("bottom-docked terminal is unaffected by the explorer sidebar toggle (issue #402)", async () => {
+    terminalPosition.set("bottom");
+    saveTerminalLayout({ position: "bottom", height: 400, width: 320 });
+    const { container } = renderApp();
+    await tick();
+    await tick();
+
+    setAppWidth(container, 1000);
+    setMainSize(container, { width: 1000, height: 1000 });
+    dragTerminal(container, 0); // establishes terminalHeightRatio = 400/1000
+    await tick();
+    expect(terminalStyle(container).height).toBe("400px");
+
+    explorerVisible.set(false);
+    await tick();
+    await tick();
+
+    // A sidebar toggle never changes `.main`'s height, so the bottom-docked
+    // terminal's height is unaffected, and its width is never set at all —
+    // `.terminal-area`'s inline style only sets `width` when docked
+    // left/right.
+    expect(terminalStyle(container).height).toBe("400px");
+    expect(terminalStyle(container).width).toBe("");
+
+    explorerVisible.set(true);
+    await tick();
+    await tick();
+
+    expect(terminalStyle(container).height).toBe("400px");
+    expect(terminalStyle(container).width).toBe("");
+  });
 });
