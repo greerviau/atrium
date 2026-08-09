@@ -201,4 +201,34 @@ describe("FileTree: highlights the currently open file (issue #400)", () => {
     expect(rowFor(container, B_TXT).classList.contains("range-selected")).toBe(true);
     expect(filledPaths(container).sort()).toEqual([A_TXT, B_TXT].sort());
   });
+
+  // Round-2 implementation review: activeTabPath is not guaranteed to be in
+  // the same separator form as a tree node's own (native) entry.path — e.g.
+  // a markdown link's relative-path resolution normalizes backslashes to
+  // "/". Pins both halves: the row still gets highlighted, and the reveal
+  // effect still scrolls to it, despite the mismatch.
+  it("highlights and scrolls to the open file even when activeTabPath uses different path separators than the tree's own node paths", async () => {
+    const winRoot = "C:\\ws";
+    const winSrc = "C:\\ws\\src";
+    const winIndex = "C:\\ws\\src\\index.ts";
+    vi.mocked(commands.fsListDir).mockImplementation(async (_workspaceId, path) => {
+      if (path === winRoot) return [{ name: "src", path: winSrc, isDir: true, isSymlink: false }];
+      if (path === winSrc) return [{ name: "index.ts", path: winIndex, isDir: false, isSymlink: false }];
+      return [];
+    });
+    await loadRoot(winRoot);
+    // A backslashed data-path breaks a naive `[data-path="..."]` CSS
+    // selector (backslash is a CSS escape character), so this test — unlike
+    // `rowFor` above — filters `querySelectorAll` results on `.dataset.path`
+    // in JS instead of embedding the path in the selector string.
+    tabsState.set({ tabs: [localTab("C:/ws/src/index.ts")], activeTabPath: "C:/ws/src/index.ts" });
+    const { container } = render(FileTree);
+    await vi.waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalled());
+
+    const indexRow = Array.from(container.querySelectorAll<HTMLElement>(".row[data-path]")).find(
+      (row) => row.dataset.path === winIndex,
+    );
+    expect(indexRow).toBeTruthy();
+    expect(indexRow?.getAttribute("aria-current")).toBe("true");
+  });
 });

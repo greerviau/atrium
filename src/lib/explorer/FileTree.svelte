@@ -24,7 +24,7 @@
   import FileTreeNode from "./FileTreeNode.svelte";
   import ContextMenu from "../ui/ContextMenu.svelte";
   import { attachScrollbarAutoHide } from "../ui/scrollbarAutoHide";
-  import { dirOf } from "../util/path";
+  import { dirOf, pathsEqual } from "../util/path";
   import { SHORTCUT_LABELS } from "../shell/shortcutLabels";
   import { draggingPath } from "./explorerDrag";
   import { contiguousPathSelection } from "./rangeSelection";
@@ -166,13 +166,19 @@
       .then(async () => {
         if (isStale()) return;
         await tick();
-        // `treeEl` reverts to `undefined` once the component unmounts
-        // (Svelte's `bind:this` teardown) — an `fsListDir` that resolves
-        // after that would otherwise throw here and get misattributed to a
-        // filesystem failure by the `.catch` below.
+        // `treeEl` reverts to `null` once the component unmounts (Svelte's
+        // `bind:this` teardown) — an `fsListDir` that resolves after that
+        // would otherwise throw here and get misattributed to a filesystem
+        // failure by the `.catch` below.
         if (!treeEl) return;
+        // `pathsEqual`, not `===` — `path` (`openPath`) is not guaranteed to
+        // be in the same separator form as `row.dataset.path` (sourced from
+        // the tree's own native-separator `entry.path`), the same mismatch
+        // `expandToPath`/`aria-current` above already account for. A plain
+        // `===` here would expand the right ancestor and highlight the right
+        // row but silently never scroll to it.
         Array.from(treeEl.querySelectorAll<HTMLElement>(".row[data-path]")).find(
-          (row) => row.dataset.path === path,
+          (row) => pathsEqual(row.dataset.path ?? "", path),
         )?.scrollIntoView({ block: "nearest" });
       })
       .catch((err: unknown) => {
