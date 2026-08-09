@@ -28,7 +28,7 @@ function seedTab(): void {
 // Only a string-attribute check: jsdom's `getComputedStyle` doesn't resolve
 // inherited custom properties through a subtree, so this can't assert that
 // the property actually cascades to `.cm-content` or changes the rendered
-// column's width — that's verified manually against the running app.
+// column's width — that needs a look at the running app.
 describe("EditorPane: prose max width", () => {
   afterEach(() => {
     cleanup();
@@ -97,7 +97,7 @@ describe("EditorPane: prose max width", () => {
     requestMeasureSpy.mockRestore();
   });
 
-  it("does not request a measure on mount for the already-applied default", async () => {
+  it("does not request a further measure when the setting has not changed", async () => {
     seedTab();
     render(EditorPane, { filePath: PATH, paneId: PANE_ID });
     await tick();
