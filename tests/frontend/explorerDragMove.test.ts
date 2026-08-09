@@ -177,6 +177,32 @@ describe("explorer drag-move", () => {
     expect(getComputedStyle(tree).overflowX).toBe("");
   });
 
+  it("snaps scrollLeft back the instant it moves during a drag (issue #390 follow-up: the overflow-x lock alone wasn't enough), and stops correcting it once the drag ends", async () => {
+    const { container } = await renderExpandedTree();
+    stubDropTargets(container);
+    const tree = container.querySelector(".file-tree") as HTMLElement;
+
+    dragTo(rowFor(container, SRC), Y.src, Y.lib);
+    await tick();
+
+    // jsdom doesn't fire `scroll` on a `scrollLeft` assignment on its own
+    // (the same manual-dispatch convention `scrollbarAutoHide.test.ts` uses),
+    // so this stands in for whatever actually moved it in a real browser —
+    // native drag-autoscroll, a wheel event, anything.
+    tree.scrollLeft = 40;
+    tree.dispatchEvent(new Event("scroll"));
+
+    expect(tree.scrollLeft).toBe(0);
+
+    await pointerUp(Y.lib);
+    await tick();
+
+    tree.scrollLeft = 40;
+    tree.dispatchEvent(new Event("scroll"));
+
+    expect(tree.scrollLeft).toBe(40);
+  });
+
   it("does not start a drag (or move anything) when the pointer never crosses the threshold, and the row's click still toggles it", async () => {
     const { container } = await renderExpandedTree();
     stubDropTargets(container);

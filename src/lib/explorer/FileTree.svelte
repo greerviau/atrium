@@ -43,6 +43,26 @@
     }
   });
 
+  // Independent of the `.dragging` CSS lock below (issue #390 / #391): that
+  // lock alone didn't hold on a real device (the issue was reopened after
+  // #391 shipped it), and the exact native mechanism still causing the
+  // scroll was never identified — this environment has no display to
+  // observe it with. Rather than guess at a second mechanism-specific fix,
+  // this corrects the *effect* of any scroll, whatever its cause, by
+  // snapping scrollLeft back the instant it moves during a drag.
+  // Self-terminating: after the corrective write, scrollLeft already equals
+  // lockedScrollLeft, so the scroll event that write itself triggers is a
+  // no-op through the `!==` guard rather than a second correction.
+  $effect(() => {
+    if ($draggingPath === null) return;
+    const lockedScrollLeft = treeEl.scrollLeft;
+    const onScroll = () => {
+      if (treeEl.scrollLeft !== lockedScrollLeft) treeEl.scrollLeft = lockedScrollLeft;
+    };
+    treeEl.addEventListener("scroll", onScroll);
+    return () => treeEl.removeEventListener("scroll", onScroll);
+  });
+
   // Roving tabindex + arrow-key navigation (§ Approach step 1). Starts at the
   // root the first time `$fileTree.root` loads and otherwise just tracks
   // wherever the user last navigated during the session — no coupling to
