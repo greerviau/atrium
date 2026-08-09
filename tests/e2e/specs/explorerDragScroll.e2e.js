@@ -38,8 +38,15 @@ function makeWideWorkspace() {
 }
 
 describe("file explorer: horizontal scroll during a drag (issue #390)", () => {
+  let root;
+
+  afterEach(() => {
+    if (root) fs.rmSync(root, { recursive: true, force: true });
+    root = undefined;
+  });
+
   it("does not scroll .file-tree sideways while a row is being dragged", async () => {
-    const root = makeWideWorkspace();
+    root = makeWideWorkspace();
     await openWorkspace(root);
 
     // Expand both levels of nesting so the deeply-indented leaf row is what
@@ -72,11 +79,16 @@ describe("file explorer: horizontal scroll during a drag (issue #390)", () => {
 
     // A real pointer drag toward and past the tree's right edge, held there
     // for several frames — the window in which a native drag-autoscroll (the
-    // reported bug) would kick in — then released over empty space below the
-    // rows so nothing actually moves.
+    // reported bug) would kick in — then released back over the dragged
+    // row's own coordinates. `isValidMoveTarget` (explorerDrag.ts) always
+    // treats a drop onto the source path itself as a no-op, so this is a
+    // guaranteed-inert release regardless of what else occupies the screen
+    // past the tree's right edge (unlike releasing out past `.file-tree`'s
+    // bounding box, which resolves against whatever pane is under that
+    // point rather than against the tree at all).
     const treeRect = await browser.execute((el) => {
       const rect = el.getBoundingClientRect();
-      return { right: rect.right, bottom: rect.bottom };
+      return { right: rect.right };
     }, tree);
 
     await browser
@@ -85,7 +97,7 @@ describe("file explorer: horizontal scroll during a drag (issue #390)", () => {
       .down()
       .move({ x: Math.round(treeRect.right) + 40, y: startPoint.y, origin: "viewport", duration: 200 })
       .pause(600)
-      .move({ x: Math.round(treeRect.right) + 40, y: Math.round(treeRect.bottom) - 5, origin: "viewport", duration: 100 })
+      .move({ x: startPoint.x, y: startPoint.y, origin: "viewport", duration: 100 })
       .up()
       .perform();
 
