@@ -752,8 +752,8 @@ export const NARROW_COLUMN_MAX_CHARS = 16;
 /**
  * At most this many columns in one table may be treated as narrow. Their
  * combined demand (`NARROW_COLUMN_MAX_CHARS` + ~2ch padding each) has to stay
- * inside the narrowest `--atrium-prose-max-width` anyone is plausibly running,
- * because a narrow column refuses to wrap and therefore can't be squeezed:
+ * inside the narrowest width the Max Width setting offers, because a narrow
+ * column refuses to wrap and therefore can't be squeezed:
  * overshooting would push the table past its cap, forcing `.cm-table-scroll`'s
  * `overflow-x: auto` (markdown.css) to trap the excess as a horizontal
  * scrollbar on an otherwise-ordinary table instead of letting it wrap.

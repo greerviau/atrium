@@ -817,12 +817,16 @@ describe("SettingsDialog", () => {
   });
 
   describe("markdown default view", () => {
+    // Targeted by accessible name, not the shared `dropdownTrigger(container)`
+    // helper: Markdown now has two dropdowns (Default View, Max Width), and
+    // that helper selects the first `.dropdown-trigger` in DOM order, which
+    // only stays this one because of section ordering elsewhere.
     async function openMarkdownViewDropdown(): Promise<HTMLElement> {
       settingsOverlay.set({ open: true });
       const { container } = render(SettingsDialog);
       await tick();
       await selectCategory("Markdown");
-      await fireEvent.click(dropdownTrigger(container));
+      await fireEvent.click(screen.getByLabelText("Default view for markdown files"));
       await flush();
       return container;
     }
@@ -1116,6 +1120,17 @@ describe("SettingsDialog", () => {
       await tick();
 
       expect(screen.getByRole("heading", { name: "Restore Tabs on Startup" })).toBeTruthy();
+    });
+
+    it("finds Max Width by the 'line length' synonym", async () => {
+      settingsOverlay.set({ open: true });
+      render(SettingsDialog);
+      await tick();
+
+      await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "line length" } });
+      await tick();
+
+      expect(screen.getByRole("heading", { name: "Max Width" })).toBeTruthy();
     });
   });
 

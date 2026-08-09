@@ -1,6 +1,7 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { tick } from "svelte";
 import { render, cleanup } from "@testing-library/svelte";
+import { EditorView } from "@codemirror/view";
 import EditorPane from "../../src/lib/editor/EditorPane.svelte";
 import { tabsState, type Tab } from "../../src/lib/stores/tabs";
 import { focusedEditorPaneId } from "../../src/lib/stores/editorPanes";
@@ -75,5 +76,36 @@ describe("EditorPane: prose max width", () => {
     expect(container.querySelector(".editor-pane")?.getAttribute("style")).toContain(
       "--atrium-prose-max-width: 60ch",
     );
+  });
+
+  // CSS alone re-wraps the rendered prose (changing every line's height),
+  // but nothing tells CodeMirror its cached height map is stale unless this
+  // forces a fresh measure pass — see the effect's own comment in
+  // EditorPane.svelte for why nothing else (no compartment, no
+  // ResizeObserver) covers it.
+  it("requests a fresh CodeMirror measure when the setting changes after mount", async () => {
+    seedTab();
+    render(EditorPane, { filePath: PATH, paneId: PANE_ID });
+    await tick();
+
+    const requestMeasureSpy = vi.spyOn(EditorView.prototype, "requestMeasure");
+
+    proseWidth.set(60);
+    await tick();
+
+    expect(requestMeasureSpy).toHaveBeenCalled();
+    requestMeasureSpy.mockRestore();
+  });
+
+  it("does not request a measure on mount for the already-applied default", async () => {
+    seedTab();
+    render(EditorPane, { filePath: PATH, paneId: PANE_ID });
+    await tick();
+
+    const requestMeasureSpy = vi.spyOn(EditorView.prototype, "requestMeasure");
+    await tick();
+
+    expect(requestMeasureSpy).not.toHaveBeenCalled();
+    requestMeasureSpy.mockRestore();
   });
 });

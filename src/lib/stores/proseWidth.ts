@@ -46,7 +46,12 @@ export function setProseWidth(width: ProseWidth): void {
  * The `--atrium-prose-max-width` value for a preset. `"full"` maps to
  * `100cqw`, not a large `ch` number, so it stays genuinely uncapped across
  * the full zoom range — a `ch` figure scales with zoom (issue #70), so no
- * fixed `ch` ceiling is ever truly "unlimited".
+ * fixed `ch` ceiling is ever truly "unlimited". This depends on the property
+ * staying unregistered (no `@property` declaration for it anywhere): a
+ * registered `<length>` would compute `cqw` at the declaring element
+ * (`.editor-pane`, outside the query container) instead of at `.cm-line`
+ * where it's used, making "Full" resolve against the viewport instead of
+ * the pane.
  */
 export function proseWidthCssValue(width: ProseWidth): string {
   return width === "full" ? "100cqw" : `${width}ch`;
