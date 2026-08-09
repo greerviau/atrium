@@ -650,7 +650,7 @@ impl LocalWorkspace {
         // `real_root` (still "on track") right up until the last component is
         // consumed. This is the check that actually enforces containment on
         // the fully-resolved result.
-        if !current.starts_with(&real_root) {
+        if !contains_root(&current, &real_root) {
             return Err(escapes_workspace_root(path));
         }
         Ok(current)
@@ -790,9 +790,53 @@ fn escapes_workspace_root(path: &str) -> AppError {
 /// strict `starts_with` at every hop would reject that climb even for a
 /// target that ultimately resolves inside `root`. Once a path fails both
 /// directions it can never recover (no more `..` remain after
-/// normalization), so this is safe to treat as a definitive escape.
+/// normalization), so this is safe to treat as a definitive escape — modulo
+/// the Windows fallback below.
 fn is_on_track_to_root(current: &Path, real_root: &Path) -> bool {
-    current.starts_with(real_root) || real_root.starts_with(current)
+    current.starts_with(real_root)
+        || real_root.starts_with(current)
+        || windows_alias(current, real_root).is_some()
+}
+
+/// Whether `current` (fully resolved — every component consumed) is
+/// actually inside `real_root`. Unlike `is_on_track_to_root`, only the
+/// "contains" direction counts: `current` being a mere ancestor of
+/// `real_root` is not containment, it's an incomplete walk, which can't
+/// happen here since this is checked only after every component has been
+/// consumed.
+fn contains_root(current: &Path, real_root: &Path) -> bool {
+    current.starts_with(real_root)
+        || windows_alias(current, real_root)
+            .is_some_and(|canonical| canonical.starts_with(real_root))
+}
+
+/// On Windows, `current` and `real_root` can name the exact same directory
+/// while being spelled differently — an 8.3 short name (`RUNNER~1`) versus
+/// its long form, or a plain `C:\...` prefix versus `canonicalize`'s
+/// verbatim `\\?\C:\...` — which `Path`'s component-wise `starts_with`
+/// treats as a hard mismatch even though nothing actually diverges on disk.
+/// `real_root` is always canonicalized (see `resolve_within_root_impl`), so
+/// canonicalizing `current` here and handing back the result lets callers
+/// re-compare against that same representation. Safe to call from mid-walk:
+/// every ancestor component of `current` has already been individually
+/// checked for being a symlink before `current` reached this point (each
+/// hop goes through `resolve_within_root_impl`'s own `symlink_metadata`
+/// check), so this can only fold in a same-entry alias — it cannot silently
+/// jump through an untraversed symlink the way canonicalizing a raw,
+/// not-yet-walked absolute target upfront would (that would skip this
+/// function's whole reason for re-walking one hop at a time). A target
+/// that doesn't exist yet (the dangling-target case this module tolerates
+/// elsewhere) can't be canonicalized, so this returns `None` unchanged from
+/// the pre-fallback behavior.
+#[cfg(windows)]
+fn windows_alias(current: &Path, real_root: &Path) -> Option<PathBuf> {
+    let canonical = std::fs::canonicalize(current).ok()?;
+    (canonical.starts_with(real_root) || real_root.starts_with(&canonical)).then_some(canonical)
+}
+
+#[cfg(not(windows))]
+fn windows_alias(_current: &Path, _real_root: &Path) -> Option<PathBuf> {
+    None
 }
 
 /// Maps a filesystem `io::Error` to `AppError::NotFound` when its kind is
@@ -1585,15 +1629,18 @@ mod tests {
     #[tokio::test]
     async fn read_file_succeeds_through_a_drive_prefixed_absolute_symlink_target() {
         let dir = tempfile::tempdir().unwrap();
-        // Spelled through the *canonical* root, exactly like the analogous
-        // Unix ancestor-symlink test above — `resolve_within_root_impl`
-        // canonicalizes `self.root` into `real_root` once and compares
-        // against it, and a temp directory's raw path can differ from its
-        // canonical form (e.g. an 8.3 short name), which would make an
-        // otherwise in-bounds target compare unequal and get rejected as an
-        // escape.
-        let canonical_root = std::fs::canonicalize(dir.path()).unwrap();
-        let real = canonical_root.join("real.md");
+        // Deliberately the *raw*, non-canonicalized temp path (what
+        // `symlink_file` actually gets handed in real usage) rather than
+        // its canonical form — this is what exposed the real bug: `dir`'s
+        // raw path can differ from `std::fs::canonicalize(dir.path())`'s
+        // output (e.g. an 8.3 short name in a component, or a plain `C:\...`
+        // prefix versus `canonicalize`'s verbatim `\\?\C:\...`) even though
+        // both name the same directory, and `resolve_within_root_impl`'s
+        // `real_root` is always the canonical form. `contains_root`'s
+        // Windows fallback is what makes this resolve correctly instead of
+        // every absolute symlink target being rejected regardless of where
+        // it actually points.
+        let real = dir.path().join("real.md");
         std::fs::write(&real, "# drive prefix").unwrap();
 
         std::os::windows::fs::symlink_file(&real, dir.path().join("link.md")).unwrap();
