@@ -671,9 +671,10 @@ impl PtyManager {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::sync::atomic::AtomicBool;
     use std::time::Instant;
     use tauri::ipc::InvokeResponseBody;
@@ -713,6 +714,7 @@ mod tests {
         (channel, titles)
     }
 
+    #[cfg(unix)]
     type ReceivedChunks = Arc<Mutex<Vec<Vec<u8>>>>;
 
     /// Like the ad hoc `Data`-collecting channels used elsewhere in this
@@ -720,6 +722,7 @@ mod tests {
     /// instead of flattening them into one buffer — needed by the
     /// coalescing tests below, which assert on both the concatenated bytes
     /// and how many separate `Data` events arrived.
+    #[cfg(unix)]
     fn data_chunks_channel() -> (Channel<PtyEvent>, ReceivedChunks) {
         let chunks: ReceivedChunks = Arc::new(Mutex::new(Vec::new()));
         let chunks_clone = chunks.clone();
@@ -780,6 +783,7 @@ mod tests {
     /// of its own (mirroring the `launchd`-launched built app, which has
     /// none) — so this must come from `PtyManager::spawn` explicitly setting
     /// it, not from inheritance.
+    #[cfg(unix)]
     #[test]
     fn spawned_shell_has_term_set_to_xterm_256color() {
         let manager = PtyManager::new();
@@ -817,6 +821,7 @@ mod tests {
     /// must not print `TERM environment variable not set`, which only
     /// happens when `TERM` is unset or names a terminfo entry that doesn't
     /// exist on the host.
+    #[cfg(unix)]
     #[test]
     fn clear_does_not_report_term_not_set() {
         let manager = PtyManager::new();
@@ -870,6 +875,7 @@ mod tests {
     ///
     /// Asserted against a stub shell that reports its own argv, so the test
     /// depends on neither the host's dotfiles nor its installed tools.
+    #[cfg(unix)]
     #[test]
     fn spawned_shell_is_a_login_shell() {
         use std::os::unix::fs::PermissionsExt;
@@ -922,6 +928,7 @@ mod tests {
     /// and named via OS-level process inspection alone, with no shell
     /// cooperation (no OSC 133 "command started" marker involved at all),
     /// and the report clears back to `None` once the program exits.
+    #[cfg(unix)]
     #[test]
     fn foreground_program_reported_while_running_then_cleared_on_exit() {
         let manager = PtyManager::new();
@@ -1043,6 +1050,7 @@ mod tests {
     /// group on its own), so it's kept as a baseline alongside
     /// `backgrounded_descendant_reaped_under_dash_with_no_job_hangup_of_its_own`
     /// below, which is the one that actually exercises the tree walk.
+    #[cfg(unix)]
     #[test]
     fn foreground_descendant_reaped_on_kill() {
         let manager = PtyManager::new();
@@ -1124,6 +1132,7 @@ mod tests {
     /// The session's shell is set to `/bin/dash` via `PtyManager::spawn`'s
     /// `shell_override` parameter rather than the process-global `SHELL` env
     /// var, so this test can't race any other test in this binary.
+    #[cfg(unix)]
     #[test]
     fn backgrounded_descendant_reaped_under_dash_with_no_job_hangup_of_its_own() {
         let manager = PtyManager::new();
@@ -1198,6 +1207,7 @@ mod tests {
     /// stayed blocked. After the fix, only the stalled terminal's own writer
     /// mutex is held across the blocking write, so spawning a second
     /// terminal never waits on it.
+    #[cfg(unix)]
     #[test]
     fn write_does_not_block_other_terminals_when_pty_input_buffer_is_full() {
         let manager = PtyManager::new();
@@ -1259,6 +1269,7 @@ mod tests {
     /// loop, and `child.wait()`, which stalled every other terminal's own
     /// spawn/write/resize/kill for the duration. After the fix, the map is
     /// only locked long enough to remove the entry being reaped.
+    #[cfg(unix)]
     #[test]
     fn kill_does_not_block_other_terminals_while_reaping() {
         let manager = PtyManager::new();
@@ -1392,6 +1403,7 @@ mod tests {
     /// into a handful of `Data` events by `flush_output_loop` instead of
     /// one event per underlying read, while every byte still arrives
     /// intact and in order.
+    #[cfg(unix)]
     #[test]
     fn flood_output_is_coalesced_into_few_data_events() {
         let manager = PtyManager::new();
@@ -1523,6 +1535,7 @@ mod tests {
     /// Regression test for issue #261: output still sitting in `pending`
     /// when the reader thread hits EOF must be flushed before the `Exit`
     /// event, not silently dropped.
+    #[cfg(unix)]
     #[test]
     fn pending_output_flushed_before_exit_event() {
         let manager = PtyManager::new();

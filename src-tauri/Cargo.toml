@@ -36,13 +36,18 @@ tempfile = "3"
 csv = "1.3"
 parquet = { version = "59.1.0", default-features = false, features = ["snap", "flate2-rust_backend", "zstd", "lz4"] }
 sqlparser = "0.62.0"
-tauri-plugin-single-instance = "2.4.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSDocumentController", "NSGraphics", "NSMenu", "NSMenuItem", "NSResponder", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3", features = ["NSURL"] }
 tauri-utils = "2"
+
+# Second-open handoff on macOS already routes through Launch Services into
+# `RunEvent::Opened`, so this plugin would add no capability there — only an
+# unauthenticated `/tmp` domain socket (see `main.rs` and `commands/fs.rs`).
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+tauri-plugin-single-instance = "2.4.3"
 
 [target."cfg(unix)".dependencies]
 same-file = "1.0.6"

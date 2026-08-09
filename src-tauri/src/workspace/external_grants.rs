@@ -324,9 +324,10 @@ fn identity_matches(current: &GrantedIdentity, recorded: &GrantedIdentity) -> bo
 /// since `atomic_write` re-resolves it against whatever the filesystem
 /// looks like *now*, and a parent swapped for a symlink since the grant was
 /// made would otherwise silently redirect the recreated file into it. Uses
-/// `tokio::fs::metadata` (follows symlinks) on the parent's own path
-/// string, so a symlink-swapped parent resolves to the *attacker's*
-/// directory identity here, which will not match `recorded`'s.
+/// `stable_file_identity` (follows symlinks — `same_file::Handle::from_path`
+/// on Unix, `std::fs::metadata` on Windows) on the parent's own path string,
+/// so a symlink-swapped parent resolves to the *attacker's* directory
+/// identity here, which will not match `recorded`'s.
 ///
 /// **What this function does *not* cover, stated precisely so it's never
 /// misattributed**: if the granted *file itself* (not its parent) is
@@ -345,7 +346,11 @@ async fn verify_parent(recorded: &GrantedIdentity) -> bool {
     let Some(parent) = recorded.canonical_path.parent() else {
         return false;
     };
-    stable_file_identity(parent)
+    let parent = parent.to_path_buf();
+    tokio::task::spawn_blocking(move || stable_file_identity(&parent))
+        .await
+        .ok()
+        .and_then(Result::ok)
         .map(|current| current == recorded.parent_identity)
         .unwrap_or(false)
 }
@@ -364,11 +369,17 @@ async fn capture_identity(path: &str) -> Result<GrantedIdentity, AppError> {
     }
     let parent = canonical_path
         .parent()
-        .ok_or_else(|| AppError::InvalidPath(format!("'{path}' has no parent directory")))?;
-    let file_identity = stable_file_identity(&canonical_path)
-        .map_err(|e| crate::workspace::local::map_io_err(e, path))?;
-    let parent_identity =
-        stable_file_identity(parent).map_err(|e| crate::workspace::local::map_io_err(e, path))?;
+        .ok_or_else(|| AppError::InvalidPath(format!("'{path}' has no parent directory")))?
+        .to_path_buf();
+    let file_path = canonical_path.clone();
+    let (file_identity, parent_identity) = tokio::task::spawn_blocking(move || {
+        let file_identity = stable_file_identity(&file_path)?;
+        let parent_identity = stable_file_identity(&parent)?;
+        Ok::<_, std::io::Error>((file_identity, parent_identity))
+    })
+    .await
+    .map_err(|err| AppError::Other(format!("identity check task panicked: {err}")))?
+    .map_err(|e| crate::workspace::local::map_io_err(e, path))?;
     Ok(GrantedIdentity {
         canonical_path,
         file_identity,

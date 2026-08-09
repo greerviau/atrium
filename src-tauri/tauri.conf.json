@@ -35,7 +35,8 @@
         "name": "Markdown Document",
         "description": "Markdown Document",
         "role": "Editor",
-        "rank": "Alternate"
+        "rank": "Alternate",
+        "mimeType": "text/markdown"
       },
       {
         "ext": [
@@ -54,14 +55,16 @@
         "name": "Source Code",
         "description": "Source Code",
         "role": "Editor",
-        "rank": "Alternate"
+        "rank": "Alternate",
+        "mimeType": "text/plain"
       },
       {
         "ext": ["html", "htm", "json", "xml", "txt", "svg"],
         "name": "Data & Markup Document",
         "description": "Data & Markup Document",
         "role": "Editor",
-        "rank": "Alternate"
+        "rank": "Alternate",
+        "mimeType": "text/html;application/json;application/xml;image/svg+xml;text/plain"
       },
       {
         "ext": [],
@@ -69,6 +72,7 @@
         "description": "Text Document",
         "role": "Editor",
         "rank": "Alternate",
+        "mimeType": "text/plain",
         "contentTypes": [
           "public.text",
           "public.plain-text",
@@ -84,6 +88,11 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "desktopTemplate": "linux/main.desktop.hbs"
+      }
+    }
   }
 }

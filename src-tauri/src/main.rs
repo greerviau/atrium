@@ -325,18 +325,31 @@ fn main() {
         launch_open::record_os_open(&launch_paths);
     }
 
-    let app = tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // Linux and Windows file-manager launches start a whole new process, so
+    // the running primary needs this plugin's handoff to receive a second
+    // open. macOS already routes a second open through Launch Services into
+    // `RunEvent::Opened` on the running app, so the plugin adds no capability
+    // there — only an unauthenticated `/tmp` domain socket any local process
+    // could use to deny launch or inject spoofed argv (see the provenance
+    // comment on `record_os_open` in `commands/fs.rs`).
+    #[cfg(not(target_os = "macos"))]
+    {
         // This must remain the first plugin: a secondary process has to stop
         // before any other plugin or app setup can create duplicate state.
         // The callback runs in the primary process with the secondary
         // process's complete argv and cwd.
-        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             let paths = launch_open::paths_from_args(
                 args.into_iter().map(std::ffi::OsString::from),
                 std::path::Path::new(&cwd),
             );
             launch_open::open_paths(app, paths);
-        }))
+        }));
+    }
+
+    let app = builder
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())

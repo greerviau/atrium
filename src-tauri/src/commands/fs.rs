@@ -23,10 +23,13 @@ const RECENT_DROP_WINDOW: Duration = Duration::from_secs(10);
 /// an arbitrary path, with nothing enforcing that a human actually dragged
 /// that file in or the OS was actually asked to open it. `AppState.recent_drop`
 /// is written only by `main.rs`'s own `WindowEvent::DragDrop` handler, and
-/// the OS-open provenance record only by the macOS open event or a verified
-/// process launch path via `launch_open::record_os_open`, all on the Rust
-/// side, which no
-/// renderer-side bug alone can fabricate.
+/// the OS-open provenance record only by `launch_open::record_os_open`, all
+/// on the Rust side, which no renderer-side bug alone can fabricate. That
+/// record has three origins: the macOS `RunEvent::Opened` handler, argv
+/// parsed at process start on every platform (cold launch), and — on Linux
+/// and Windows only — `tauri_plugin_single_instance`'s callback, which
+/// forwards a second launch's argv and cwd over that plugin's own IPC
+/// channel.
 ///
 /// Deliberately not single-use/consumed-on-check: the most recent real
 /// event's path set stays valid for the whole window, and re-checking the
@@ -50,9 +53,24 @@ const RECENT_DROP_WINDOW: Duration = Duration::from_secs(10);
 /// all), and this app's own PTY commands already let a
 /// compromised renderer induce that state directly. Accepted: a compromised
 /// renderer already has arbitrary local execution via the PTY, so nothing
-/// new becomes reachable. If the PTY commands are ever scoped down, the
-/// OS-open origin becomes the weakest remaining link in this gate — revisit
-/// then.
+/// new becomes reachable.
+///
+/// The single-instance channel needs its own note: neither side
+/// authenticates its peer, but on the platforms that still register the
+/// plugin the channel itself is scoped to the local user's own session —
+/// Linux uses the per-user session D-Bus, Windows targets a window in the
+/// caller's own window station via a mutex/class name derived from the app
+/// identifier — so it stays inside the same same-local-user model as the PTY
+/// argument above. macOS does not register this plugin (`main.rs`'s
+/// `#[cfg(not(target_os = "macos"))]` gate): its implementation binds a
+/// fixed-path Unix socket under the world-writable, cross-user `/tmp` with
+/// no peer credential check, which would let a *different* local user deny
+/// launch or inject spoofed argv into this gate — a materially worse channel
+/// than the other two, and one macOS does not need in the first place, since
+/// Launch Services already routes a second open natively into
+/// `RunEvent::Opened` with no IPC channel involved. If the PTY commands are
+/// ever scoped down, the OS-open origin becomes the weakest remaining link
+/// in this gate — revisit then.
 fn recently_opened_externally(
     recent_drop: &Mutex<Option<(HashSet<String>, Instant)>>,
     path: &str,
