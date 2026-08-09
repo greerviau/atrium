@@ -744,7 +744,8 @@ export function collectCellSlots(node: SyntaxNode): CellSlot[] {
  * The longest a column's own widest cell may be for that whole column to be
  * treated as narrow (see `findNarrowColumns`). Sized so a narrow column's
  * demand — this plus the ~2ch its `0.6em` side padding comes to at the
- * editor's monospace metrics — stays a small fraction of the reading column.
+ * editor's monospace metrics — fits inside the narrowest width the Max
+ * Width setting offers (60ch — `PROSE_WIDTH_OPTIONS`, `stores/proseWidth.ts`).
  */
 export const NARROW_COLUMN_MAX_CHARS = 16;
 
@@ -756,8 +757,8 @@ export const NARROW_COLUMN_MAX_CHARS = 16;
  * overshooting would push the table past its cap, forcing `.cm-table-scroll`'s
  * `overflow-x: auto` (markdown.css) to trap the excess as a horizontal
  * scrollbar on an otherwise-ordinary table instead of letting it wrap.
- * Three columns cost at most 54ch, which clears even the 65ch this variable
- * shipped with.
+ * Three columns cost at most 54ch, which clears the narrowest width the Max
+ * Width setting offers (60ch — `PROSE_WIDTH_OPTIONS`, `stores/proseWidth.ts`).
  */
 export const MAX_NARROW_COLUMNS = 3;
 

@@ -28,6 +28,7 @@
   import { tabSize } from "../stores/tabSize";
   import { lineNumbersEnabled } from "../stores/lineNumbersEnabled";
   import { zoom } from "../stores/textSize";
+  import { proseWidth, proseWidthCssValue } from "../stores/proseWidth";
   import { autoSaveEnabled, AUTO_SAVE_DELAY_MS, isAutoSaveBlocked, blockAutoSave, unblockAutoSave } from "../stores/autoSave";
   import { showErrorToast, describeError } from "../stores/errorToast";
   import { basename } from "../util/path";
@@ -738,7 +739,16 @@
 <svelte:window onclick={closeMenu} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="editor-pane" bind:this={container} style={`font-size: ${$zoom * 100}%`} oncontextmenu={onContextMenu}></div>
+<!-- Concatenated into the style attribute, not Svelte's `style:--custom-prop`
+     directive: that directive compiles to `element.style.setProperty()`,
+     which is unreliable for custom properties under jsdom's `cssstyle` in
+     tests — same reason zoom's font-size is done this way. -->
+<div
+  class="editor-pane"
+  bind:this={container}
+  style={`font-size: ${$zoom * 100}%; --atrium-prose-max-width: ${proseWidthCssValue($proseWidth)};`}
+  oncontextmenu={onContextMenu}
+></div>
 
 {#if menu}
   <ContextMenu x={menu.x} y={menu.y}>

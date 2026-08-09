@@ -16,6 +16,7 @@
     setMarkdownDefaultView,
     type MarkdownDefaultView,
   } from "../stores/markdownDefaultView";
+  import { proseWidth, setProseWidth, PROSE_WIDTH_OPTIONS, type ProseWidth } from "../stores/proseWidth";
   import SettingsSidebar from "../settings/SettingsSidebar.svelte";
   import SettingsSection from "../settings/SettingsSection.svelte";
   import Dropdown from "../ui/Dropdown.svelte";
@@ -36,6 +37,11 @@
     { id: "rendered", label: "Rendered" },
     { id: "source", label: "Source" },
   ];
+
+  const PROSE_WIDTH_DROPDOWN_OPTIONS: { id: string; label: string }[] = PROSE_WIDTH_OPTIONS.map((w) => ({
+    id: String(w),
+    label: w === "full" ? "Full" : `${w}ch`,
+  }));
 
   const TAB_SIZE_DROPDOWN_OPTIONS: { id: string; label: string }[] = TAB_SIZE_OPTIONS.map((size) => ({
     id: String(size),
@@ -307,6 +313,20 @@
                   value={$markdownDefaultView}
                   onSelect={(id) => setMarkdownDefaultView(id as MarkdownDefaultView)}
                   label="Default view for markdown files"
+                />
+              </div>
+            </SettingsSection>
+          {/if}
+
+          {#if selectedCategory === "markdown" && isSectionVisible("max-width")}
+            <SettingsSection title="Max Width" id={sectionAnchorId("max-width")}>
+              <div class="settings-row">
+                <span class="settings-label">Max width of rendered markdown</span>
+                <Dropdown
+                  options={PROSE_WIDTH_DROPDOWN_OPTIONS}
+                  value={String($proseWidth)}
+                  onSelect={(id) => setProseWidth((id === "full" ? "full" : Number(id)) as ProseWidth)}
+                  label="Max width of rendered markdown"
                 />
               </div>
             </SettingsSection>
