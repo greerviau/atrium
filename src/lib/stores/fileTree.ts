@@ -1,6 +1,6 @@
 import { writable, get } from "svelte/store";
 import { fsListDir, localWorkspaceId, type DirEntry } from "../ipc/commands";
-import { basename } from "../util/path";
+import { basename, isPathUnderOrEqual } from "../util/path";
 
 export interface TreeNode {
   entry: DirEntry;
@@ -88,6 +88,37 @@ export async function toggleExpanded(node: TreeNode): Promise<void> {
   await loadChildren(node.entry.path);
 }
 
+/**
+ * Expands every collapsed ancestor directory of `path`, so a row for it
+ * exists in the tree — used to reveal the currently-open tab (issue #400):
+ * without this, a file inside a collapsed directory (the common case on a
+ * restored session, or any open triggered from outside the explorer) has no
+ * DOM row to highlight at all. A no-op once there's no root, `path` is
+ * outside it, or `path` *is* the root itself. `isStale` is re-checked before
+ * each awaited step, so a rapid tab switch aborts an in-flight expansion
+ * instead of racing it to completion for a path that's no longer current.
+ */
+export async function expandToPath(path: string, isStale: () => boolean): Promise<void> {
+  const root = get(fileTree).root;
+  if (!root || root.entry.path === path || !isPathUnderOrEqual(path, root.entry.path)) {
+    return;
+  }
+
+  const ancestors: string[] = [];
+  let dir = nativeDirOf(path);
+  while (dir !== root.entry.path && nativeDirOf(dir) !== dir) {
+    ancestors.unshift(dir);
+    dir = nativeDirOf(dir);
+  }
+
+  for (const ancestor of ancestors) {
+    if (isStale()) return;
+    const node = findNode(get(fileTree).root ?? root, ancestor);
+    if (node?.expanded && node.children) continue;
+    await loadChildren(ancestor);
+  }
+}
+
 /** Re-fetches the children of whichever expanded directory contains `path`, used by the `fs:changed` live-update handler (section 6.3). */
 export async function refreshDirectoryContaining(changedPath: string): Promise<void> {
   const state = get(fileTree);
@@ -104,6 +135,21 @@ function parentPath(path: string): string {
   const normalized = normalizePath(path);
   const idx = normalized.lastIndexOf("/");
   return idx <= 0 ? "/" : normalized.slice(0, idx);
+}
+
+/**
+ * Parent directory of `path`, preserving whichever separator (`/` or `\`)
+ * the input actually uses — unlike `dirOf` (`../util/path`), which
+ * normalizes its *result* to `/`. That normalization is fine for the
+ * string-comparison uses `dirOf` already has, but it would break a caller
+ * that needs the result to still `===`-match a tree node's own
+ * `entry.path`, which is kept in native (OS-specific) separator form
+ * straight from the Rust backend — on Windows, a forward-slashed ancestor
+ * would never match a backslashed node path. Used by `expandToPath` only.
+ */
+function nativeDirOf(path: string): string {
+  const idx = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return idx <= 0 ? path : path.slice(0, idx);
 }
 
 function findNode(node: TreeNode, path: string): TreeNode | undefined {

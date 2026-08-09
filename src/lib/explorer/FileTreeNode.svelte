@@ -15,6 +15,8 @@
     depth = 0,
     focusedPath = null,
     selectedPaths = new Set<string>(),
+    rangeSelectedPaths = new Set<string>(),
+    openPath = null,
     onFocusRow = () => {},
     onSelectRow = () => {},
   }: {
@@ -22,6 +24,8 @@
     depth?: number;
     focusedPath?: string | null;
     selectedPaths?: Set<string>;
+    rangeSelectedPaths?: Set<string>;
+    openPath?: string | null;
     onFocusRow?: (path: string) => void;
     onSelectRow?: (path: string, extendSelection: boolean) => void;
   } = $props();
@@ -119,6 +123,7 @@
   <div
     class="row"
     class:drop-target-active={dropTargetActive}
+    class:range-selected={rangeSelectedPaths.has(node.entry.path)}
     style={`padding-left: ${depth * 14 + 6}px`}
     data-path={node.entry.path}
     data-is-dir={node.entry.isDir}
@@ -130,6 +135,7 @@
     onfocus={() => onFocusRow(node.entry.path)}
     role="treeitem"
     aria-selected={selectedPaths.has(node.entry.path)}
+    aria-current={node.entry.path === openPath ? "true" : undefined}
     aria-expanded={node.entry.isDir ? node.expanded : undefined}
     aria-level={depth + 1}
     tabindex={focusedPath === node.entry.path ? 0 : -1}
@@ -159,7 +165,7 @@
         />
       {/if}
       {#each node.children.slice(0, dirEnd) as child (child.entry.path)}
-        <FileTreeNode node={child} depth={depth + 1} {focusedPath} {selectedPaths} {onFocusRow} {onSelectRow} />
+        <FileTreeNode node={child} depth={depth + 1} {focusedPath} {selectedPaths} {rangeSelectedPaths} {openPath} {onFocusRow} {onSelectRow} />
       {/each}
       {#if $pendingCreate?.parentPath === node.entry.path && !$pendingCreate.isDir}
         <NewEntryRow
@@ -170,7 +176,7 @@
         />
       {/if}
       {#each node.children.slice(dirEnd) as child (child.entry.path)}
-        <FileTreeNode node={child} depth={depth + 1} {focusedPath} {selectedPaths} {onFocusRow} {onSelectRow} />
+        <FileTreeNode node={child} depth={depth + 1} {focusedPath} {selectedPaths} {rangeSelectedPaths} {openPath} {onFocusRow} {onSelectRow} />
       {/each}
     </div>
   {/if}
@@ -193,11 +199,25 @@
     -webkit-user-select: text;
     user-select: text;
   }
+  /* The open file (aria-current, issue #400) and a genuine multi-row range
+     selection (range-selected — a plain click or arrow move always
+     collapses to a single row, so this only applies during an actual
+     shift-click/shift-arrow range) share the one strong fill. A single
+     current/focused row deliberately gets no fill of its own — see the
+     `:focus` rule below — so "no file open" always means no fill anywhere,
+     and the open file is never sharing the explorer with a second,
+     unrelated highlighted row. All three of this rule, `.row.range-selected`
+     via this selector, and `.row:hover` below have equal specificity, so
+     `:hover` is declared last and wins whenever a highlighted row is
+     hovered — losing the fill for a strict background swap is the accepted
+     trade-off (see the plan) rather than the two rules fighting silently by
+     declaration order. */
+  .row.range-selected,
+  .row[aria-current="true"] {
+    background: var(--atrium-selection-bg);
+  }
   .row:hover {
     background: var(--atrium-bg-hover);
-  }
-  .row[aria-selected="true"] {
-    background: var(--atrium-selection-bg);
   }
   /* Plain `:focus`, not `:focus-visible` — this row is a keyboard-shortcut
      target (New/Rename/Delete/Reveal act on whichever row holds focus), so
@@ -205,11 +225,13 @@
      `:focus-visible` is designed to suppress exactly the click-focus case on
      an element like this one (a `<div tabindex="0">` with no built-in
      text-editing semantics), which is the primary path these shortcuts are
-     built around: click a row, then press a shortcut. */
+     built around: click a row, then press a shortcut. No `background` here
+     (unlike before issue #400) — a single current/focused row is conveyed by
+     this outline alone now that the fill is reserved for the open file and
+     genuine multi-row selection, above. */
   .row:focus {
     outline: 1px solid var(--atrium-accent);
     outline-offset: -1px;
-    background: var(--atrium-selection-bg);
   }
   .row.drop-target-active {
     outline: 2px solid var(--atrium-accent);
