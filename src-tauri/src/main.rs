@@ -325,6 +325,9 @@ fn main() {
         launch_open::record_os_open(&launch_paths);
     }
 
+    // Only reassigned on non-macOS, below — `#[cfg(not(target_os = "macos"))]`
+    // makes `mut` genuinely unused on macOS, hence the `cfg_attr`.
+    #[cfg_attr(target_os = "macos", allow(unused_mut))]
     let mut builder = tauri::Builder::default();
 
     // Linux and Windows file-manager launches start a whole new process, so

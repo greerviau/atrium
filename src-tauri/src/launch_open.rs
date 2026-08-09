@@ -75,7 +75,11 @@ pub fn paths_from_args(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> 
 /// Routes paths received by an already-running instance into the same queue
 /// and provenance record used during cold launch. Once the frontend is ready,
 /// each path is emitted live. The existing main window is then restored and
-/// focused so opening a file also surfaces Atrium.
+/// focused so opening a file also surfaces Atrium. Only called from the
+/// `tauri_plugin_single_instance` callback (`main.rs`), which is why this is
+/// unused — and `#[cfg]`-gated the same way — on macOS, where a second open
+/// arrives through `RunEvent::Opened` and `macos_dock::open_paths` instead.
+#[cfg(not(target_os = "macos"))]
 pub fn open_paths(app: &AppHandle<Wry>, paths: Vec<String>) {
     if !paths.is_empty() && record_os_open(&paths) {
         for path in paths {
