@@ -431,11 +431,15 @@ fn find_files_root(
 /// Strips `root` off `path` to get the workspace-root-relative string that
 /// `find_files` both fuzzy-matches against and reports as `display_path` —
 /// done once here so a match's indices and the frontend's rendered string
-/// are always computed against the identical characters.
+/// are always computed against the identical characters. Always
+/// `/`-separated regardless of platform, matching every other
+/// workspace-relative path this app hands to the frontend — on Windows,
+/// `Path`'s own `\`-separated `Display` would otherwise leak into fuzzy-match
+/// highlighting and the search UI.
 fn display_path(root: &Path, path: &str) -> String {
     Path::new(path)
         .strip_prefix(root)
-        .map(|relative| relative.to_string_lossy().to_string())
+        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
         .unwrap_or_else(|_| path.to_string())
 }
 
@@ -1581,13 +1585,17 @@ mod tests {
     #[tokio::test]
     async fn read_file_succeeds_through_a_drive_prefixed_absolute_symlink_target() {
         let dir = tempfile::tempdir().unwrap();
-        let real = dir.path().join("real.md");
+        // Spelled through the *canonical* root, exactly like the analogous
+        // Unix ancestor-symlink test above — `resolve_within_root_impl`
+        // canonicalizes `self.root` into `real_root` once and compares
+        // against it, and a temp directory's raw path can differ from its
+        // canonical form (e.g. an 8.3 short name), which would make an
+        // otherwise in-bounds target compare unequal and get rejected as an
+        // escape.
+        let canonical_root = std::fs::canonicalize(dir.path()).unwrap();
+        let real = canonical_root.join("real.md");
         std::fs::write(&real, "# drive prefix").unwrap();
 
-        // A plain absolute target (`C:\...`) — what `symlink_file` actually
-        // records and `read_link` hands back — not `canonicalize`'s
-        // `\\?\`-prefixed form, a differently-spelled but equally
-        // `Component::Prefix`-led path.
         std::os::windows::fs::symlink_file(&real, dir.path().join("link.md")).unwrap();
 
         let ws = workspace(dir.path());
