@@ -6,7 +6,7 @@ use notify_debouncer_full::file_id::{get_file_id, FileId};
 use notify_debouncer_full::{new_debouncer_opt, DebounceEventResult, Debouncer, NoCache};
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -118,6 +118,12 @@ fn is_ignored(
 struct FileIdentityIndex {
     by_path: HashMap<PathBuf, FileId>,
     by_id: HashMap<FileId, HashSet<PathBuf>>,
+}
+
+#[derive(Default)]
+struct IdentityIndexState {
+    index: FileIdentityIndex,
+    ready: bool,
 }
 
 impl FileIdentityIndex {
@@ -302,11 +308,13 @@ fn send_paired_rename(
 /// for it, so the OS watcher registration below still produces the same
 /// "root does not exist" error it always did.
 ///
-/// A file-identity index is initialized alongside the OS watcher so both
-/// preexisting files and fresh changes remain available for rename
-/// correlation when a backend omits one rename half. The index root uses the
-/// event-path form for each platform: canonical on macOS, where FSEvents
-/// canonicalizes paths, and raw elsewhere.
+/// A file-identity index is initialized in a background thread alongside the
+/// OS watcher so opening a large workspace does not wait for a recursive
+/// metadata walk. Events received while the index is building wait in the
+/// debouncer callback until both preexisting files and fresh changes are
+/// available for rename correlation. The index root uses the event-path form
+/// for each platform: canonical on macOS, where FSEvents canonicalizes paths,
+/// and raw elsewhere.
 ///
 /// The debouncer and its underlying OS watcher are kept alive for the
 /// lifetime of the returned guard; the caller (`LocalWorkspace`) holds this
@@ -326,14 +334,20 @@ pub(crate) fn watch(
     #[cfg(not(target_os = "macos"))]
     let file_id_root = raw_root.clone();
 
-    let identities = Arc::new(Mutex::new(FileIdentityIndex::default()));
+    let identities = Arc::new(Mutex::new(IdentityIndexState::default()));
+    let index_ready = Arc::new(Condvar::new());
     let callback_identities = identities.clone();
+    let callback_index_ready = index_ready.clone();
     let mut debouncer = new_debouncer_opt::<_, notify::RecommendedWatcher, NoCache>(
         Duration::from_millis(150),
         None,
         move |result: DebounceEventResult| match result {
             Ok(events) => {
-                let mut identities = callback_identities.lock().unwrap();
+                let mut identity_state = callback_identities.lock().unwrap();
+                while !identity_state.ready {
+                    identity_state = callback_index_ready.wait(identity_state).unwrap();
+                }
+                let identities = &mut identity_state.index;
                 let inferred_renames: HashMap<_, _> = events
                     .iter()
                     .filter(|event| {
@@ -476,12 +490,18 @@ pub(crate) fn watch(
         notify::Config::default(),
     )?;
 
-    let mut identities_guard = identities.lock().unwrap();
     debouncer
         .watcher()
         .watch(Path::new(&root), RecursiveMode::Recursive)?;
-    identities_guard.record_tree(&file_id_root);
-    drop(identities_guard);
+
+    let identities_for_init = identities.clone();
+    let index_ready_for_init = index_ready.clone();
+    std::thread::spawn(move || {
+        let mut identity_state = identities_for_init.lock().unwrap();
+        identity_state.index.record_tree(&file_id_root);
+        identity_state.ready = true;
+        index_ready_for_init.notify_all();
+    });
 
     Ok(debouncer)
 }
@@ -741,7 +761,6 @@ mod tests {
         let (tx, mut rx) = unbounded_channel();
         let _debouncer = watch(root.to_string_lossy().to_string(), "ws".to_string(), tx).unwrap();
         let _ = drain_events(&mut rx, STARTUP_SETTLE_MS).await;
-
         std::fs::rename(&from, &to).unwrap();
 
         let events = drain_events(&mut rx, SETTLE_MS).await;
