@@ -375,7 +375,17 @@
     border-radius: 8px;
     width: 680px;
     max-width: 90vw;
-    height: 80vh;
+    /* A constant height, not a viewport fraction: issue #317 asked for a shell
+       that doesn't resize as a search narrows the content or as categories with
+       differing amounts of content are selected, and a constant satisfies that
+       just as well as `80vh` did while sizing the dialog to what it actually
+       holds. The value is the tallest category (Editor, five rows, ~499px with
+       the chrome) plus roughly one row of headroom, so adding a setting doesn't
+       immediately introduce scrolling; `max-height` keeps it honest on short
+       windows, and both `.settings-content` and `.settings-sidebar` already
+       scroll whatever doesn't fit. Raise this if a category outgrows it. */
+    height: 580px;
+    max-height: 80vh;
     display: flex;
     flex-direction: column;
     overflow: hidden;
