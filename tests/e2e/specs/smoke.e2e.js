@@ -72,7 +72,7 @@ describe("image viewer", () => {
       async () => (await image.getProperty("naturalWidth")) > 0,
       { timeout: 5000, timeoutMsg: "expected pixel.png to load through the Atrium asset protocol" },
     );
-    await expect($(".tab.active .tab-name")).toHaveText("pixel.png");
+    await expect($(".editor-panel .tab.active .tab-name")).toHaveText("pixel.png");
   });
 });
 
@@ -194,7 +194,7 @@ describe("project-wide search", () => {
     await $(".search-panel").waitForExist({ timeout: 5000, reverse: true });
 
     await browser.waitUntil(
-      async () => (await $(".tab.active .tab-name").getText()).includes("note.md"),
+      async () => (await $(".editor-panel .tab.active .tab-name").getText()).includes("note.md"),
       { timeout: 5000, timeoutMsg: "expected note.md's tab to be active after jumping to the search result" },
     );
     await browser.waitUntil(
@@ -231,7 +231,7 @@ describe("go to file", () => {
     await $(".search-panel").waitForExist({ timeout: 5000, reverse: true });
 
     await browser.waitUntil(
-      async () => (await $(".tab.active .tab-name").getText()).includes("note.md"),
+      async () => (await $(".editor-panel .tab.active .tab-name").getText()).includes("note.md"),
       { timeout: 5000, timeoutMsg: "expected note.md's tab to be active after jumping to the file result" },
     );
   });

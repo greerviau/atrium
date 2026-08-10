@@ -20,7 +20,7 @@ async function openNoteAndDirtyIt(marker) {
   await browser.keys(["End"]);
   await browser.keys(marker);
 
-  const tab = await $(".tab.active .tab-name");
+  const tab = await $(".editor-panel .tab.active .tab-name");
   await browser.waitUntil(async () => (await tab.getText()).includes("•"), {
     timeout: 5000,
     timeoutMsg: "expected the tab to show the dirty marker after editing",
