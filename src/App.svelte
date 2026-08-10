@@ -791,6 +791,13 @@
 
   function startDragExplorer(event: PointerEvent): void {
     event.preventDefault();
+    // Engages the full lock immediately, with no pre-threshold
+    // armDragSelectionGuard() phase — unlike explorer rows and tabs, a
+    // resizer's pointerdown *is* the drag; there's no plain-click affordance
+    // on a divider to protect a threshold for, so there's nothing the eager
+    // cursor change could wrongly fire for. Same reasoning applies to
+    // startDragTerminal below and to both EditorPaneSplit.svelte/
+    // PaneSplit.svelte's startDragResizer.
     beginDragLock("col-resize");
     const startX = event.clientX;
     const startWidth = explorerWidth;
@@ -1078,6 +1085,9 @@
 
   function startDragTerminal(event: PointerEvent): void {
     event.preventDefault();
+    // See startDragExplorer's own comment above for why this engages the
+    // full lock immediately rather than splitting into an
+    // armDragSelectionGuard()/beginDragLock() pair.
     beginDragLock($terminalPosition === "bottom" ? "row-resize" : "col-resize");
     function onUp(): void {
       endDragLock();

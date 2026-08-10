@@ -61,6 +61,9 @@
   function startDragResizer(event: PointerEvent, rz: ResizerRect): void {
     event.preventDefault();
     // A row-oriented split has a vertical divider that moves horizontally.
+    // Engages the full lock immediately, with no pre-threshold
+    // armDragSelectionGuard() phase — see App.svelte's startDragExplorer for
+    // why: a resizer's pointerdown is unambiguously the drag itself.
     beginDragLock(rz.orientation === "row" ? "col-resize" : "row-resize");
     const splitRect = rects.get(rz.splitId);
     const rootSizePx = rz.orientation === "row" ? (rootEl?.clientWidth ?? 0) : (rootEl?.clientHeight ?? 0);
