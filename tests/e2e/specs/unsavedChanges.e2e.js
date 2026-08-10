@@ -2,30 +2,15 @@ import { expect } from "@wdio/globals";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { openWorkspace } from "../helpers/workspace.js";
+import { hasClass } from "../helpers/selectors.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(__dirname, "../fixtures");
 const notePath = path.join(fixturesDir, "note.md");
 
-// Mirrors `smoke.e2e.js`'s own helper: the native folder picker is outside
-// WebDriver's reach, so the workspace root is registered directly through
-// the same `workspace_set_root` command the picker's callback would call.
-async function openWorkspace(root) {
-  await browser.execute((path) => {
-    return window.__TAURI_INTERNALS__.invoke("workspace_set_root", {
-      workspaceId: "local",
-      path,
-    });
-  }, root);
-  await browser.refresh();
-
-  const recentRow = await $(`//span[@class='recent-path' and text()='${root}']`);
-  await recentRow.waitForExist({ timeout: 10000 });
-  await recentRow.click();
-}
-
 async function openNoteAndDirtyIt(marker) {
-  const fileNode = await $("//span[@class='name' and text()='note.md']");
+  const fileNode = await $(`//span[${hasClass("name")} and text()='note.md']`);
   await fileNode.waitForExist({ timeout: 10000 });
   await fileNode.click();
 
@@ -35,7 +20,7 @@ async function openNoteAndDirtyIt(marker) {
   await browser.keys(["End"]);
   await browser.keys(marker);
 
-  const tab = await $("//div[@class='tab active']//span[@class='tab-name']");
+  const tab = await $(".editor-panel .tab.active .tab-name");
   await browser.waitUntil(async () => (await tab.getText()).includes("•"), {
     timeout: 5000,
     timeoutMsg: "expected the tab to show the dirty marker after editing",
@@ -66,7 +51,7 @@ describe("unsaved-changes close confirmation", () => {
     await dontSaveButton.click();
 
     await dialog.waitForExist({ timeout: 5000, reverse: true });
-    await $("//div[@class='tab active']").waitForExist({ timeout: 5000, reverse: true });
+    await $(".editor-panel .tab.active").waitForExist({ timeout: 5000, reverse: true });
 
     expect(fs.readFileSync(notePath, "utf8")).toBe(before);
   });
@@ -83,7 +68,7 @@ describe("unsaved-changes close confirmation", () => {
     await saveButton.click();
 
     await dialog.waitForExist({ timeout: 5000, reverse: true });
-    await $("//div[@class='tab active']").waitForExist({ timeout: 5000, reverse: true });
+    await $(".editor-panel .tab.active").waitForExist({ timeout: 5000, reverse: true });
 
     await browser.waitUntil(() => fs.readFileSync(notePath, "utf8").includes("save-marker"), {
       timeout: 5000,

@@ -4,11 +4,12 @@ WebDriver-based smoke tests via `tauri-driver`, per the plan's testing strategy 
 
 ## Prerequisites
 
-These tests drive the actual compiled app through its native WebView, so they need a machine with a display and the full Tauri build toolchain — they cannot run in a headless CI container or a sandbox without system WebView libraries.
+These tests drive the actual compiled app through its native WebView, so they need either a real display or Xvfb, the system WebView libraries, and the full Tauri build toolchain.
 
-- Linux or Windows with a display. `tauri-driver` does not support macOS.
+- Linux or Windows, with a display **or** Xvfb (`xvfb-run`). `tauri-driver` does not support macOS.
 - Rust toolchain, plus the Tauri v2 system dependencies for your platform ([webkit2gtk etc. on Linux](https://v2.tauri.app/start/prerequisites/), Microsoft C++ Build Tools and WebView2 on Windows).
 - `cargo install tauri-driver` (once).
+- On Linux, the package providing `WebKitWebDriver` — `webkitgtk-webdriver` on current Ubuntu releases (it was renamed from the older `webkit2gtk-driver`, which some CI images and older distributions still use) — and, for headless runs, the `xvfb` package.
 
 ## Running
 
@@ -21,6 +22,17 @@ npm run test:launch-open
 
 `wdio.conf.js` starts the Vite server used by Tauri's debug build, builds the binary (`cargo build` in `src-tauri/`), starts `tauri-driver`, and runs the specs in `specs/`. It stops both child processes when the suite finishes.
 The `test:launch-open` command starts Atrium under WebDriver, launches a second native process with `fixtures/launch-open.md` as a real argument, and verifies that the existing app opens it instead of showing the welcome screen.
+
+On a machine with no display attached (including a headless CI container), run the same commands under Xvfb — the same `dbus-run-session -- xvfb-run` recipe `.github/workflows/ci.yml` uses for `test:launch-open` (its runner image still resolves the older `webkit2gtk-driver` package name):
+
+```sh
+sudo apt-get install -y webkitgtk-webdriver xvfb # once — older Ubuntu releases: webkit2gtk-driver
+cargo install tauri-driver --locked              # once
+
+cd tests/e2e
+npm install
+dbus-run-session -- xvfb-run --auto-servernum npm test
+```
 
 ## Coverage
 
@@ -65,4 +77,6 @@ This focused spec runs under Xvfb in Linux CI.
 ## Status
 
 The focused launch-open spec runs in Linux CI.
-The broader smoke suite still requires a real Linux or Windows display and is not part of the default CI workflow.
+The broader smoke suite still requires a real Linux or Windows display (or Xvfb) and is not part of the default CI workflow.
+
+`smoke.e2e.js` has been run once, under Xvfb. 3 of its 12 scenarios pass: "markdown live preview" (open a workspace, edit `note.md`, save, reload, and confirm the edit persisted), and both syntax-highlighting scenarios (`config.toml`, `main.tf`) — each of these exercises `openWorkspace` and the file-tree `name` lookup end to end, which is what this fix targets. The remaining 9 scenarios fail for reasons unrelated to this fix (terminal-pane interactability, the search overlay not appearing, and a status-bar block that cascades from those) — tracked in issue #421.
