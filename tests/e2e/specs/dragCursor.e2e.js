@@ -1,28 +1,10 @@
 import { expect } from "@wdio/globals";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { openWorkspace } from "../helpers/workspace.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(__dirname, "../fixtures");
-
-// Mirrors `explorerDragScroll.e2e.js`'s own helper: the native folder picker
-// is outside WebDriver's reach, so the workspace root is registered directly
-// through the same `workspace_set_root` command the picker's callback would
-// call. `contains(@class, ...)`, not `@class='recent-path'`, for the same
-// scoped-class reason that spec documents.
-async function openWorkspace(root) {
-  await browser.execute((path) => {
-    return window.__TAURI_INTERNALS__.invoke("workspace_set_root", {
-      workspaceId: "local",
-      path,
-    });
-  }, root);
-  await browser.refresh();
-
-  const recentRow = await $(`//span[contains(@class, 'recent-path') and text()='${root}']`);
-  await recentRow.waitForExist({ timeout: 10000 });
-  await recentRow.click();
-}
 
 async function openFile(name) {
   const filePath = path.join(fixturesDir, name);
