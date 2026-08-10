@@ -46,6 +46,48 @@ export function clampToContainer(
   return Math.max(min, Math.min(max, value));
 }
 
+/**
+ * The one rule every ratio re-baseline in the app follows: clamp the pixel
+ * value into the live container *first*, then take the ratio from the clamped
+ * value, never from the raw one.
+ *
+ * Taking it from the raw value is what lets a recorded ratio drift out of
+ * range. A pixel value that no longer fits its container yields a ratio above
+ * 1; a later container change applies that as "more than the whole container",
+ * the clamp on the way out silently caps it, and the round trip back to the
+ * original container lands somewhere else entirely instead of restoring what
+ * was on screen (issue #417). Clamping first makes the round trip exact by
+ * construction: for a clamped `p` in container `c`,
+ * `clamp(round((p / c) * c)) === p`.
+ *
+ * `Math.min(1, ...)` is an invariant, not a behaviour: against today's clamps
+ * it is inert on rendered pixels, for two different reasons in two different
+ * regimes. When the container has room to spare, `clampToContainer`'s ceiling
+ * is `containerSize - reserved`, strictly below the container, so any ratio at
+ * or above 1 saturates to it. When the container is smaller than the floor,
+ * the ceiling collapses onto the floor and every input maps to `min`
+ * regardless — a 100px container against a 140px floor clamps to 140, above
+ * the container, no matter what ratio produced the input. Either way a
+ * recorded 1, 1.49, and 3 render identically at every container size. It is
+ * here so the returned `ratio` is total over `(0, 1]` in both regimes, and
+ * callers and tests can rely on that range rather than re-deriving which one
+ * a given container falls into. The clamp on the line above is what does the
+ * actual work either way — this is what keeps its result nameable as a
+ * fraction.
+ *
+ * Returns `null` when the container is not measurable, meaning "change
+ * nothing" — the caller keeps whatever pair it already had.
+ */
+export function rebaselineRatio(
+  pixelValue: number,
+  containerSize: number,
+  clamp: (value: number, containerSize: number) => number,
+): { pixel: number; ratio: number } | null {
+  if (!Number.isFinite(containerSize) || containerSize <= 0) return null;
+  const pixel = clamp(pixelValue, containerSize);
+  return { pixel, ratio: Math.min(1, pixel / containerSize) };
+}
+
 function isTerminalPosition(value: unknown): value is TerminalPosition {
   return value === "bottom" || value === "left" || value === "right";
 }
