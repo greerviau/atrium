@@ -44,7 +44,7 @@
           "svelte", "h", "c", "hh", "hpp", "hxx", "h++", "cc", "cpp", "cxx", "c++", "m", "mm", "cs",
           "csx", "less", "php", "ps1", "psd1", "psm1", "pyi", "gemspec", "rb", "erb", "scss", "sass",
           "sql", "vue", "ascx", "csproj", "dtd", "plist", "wxi", "wxl", "wxs", "xaml", "eyaml", "eyml",
-          "clj", "cljs", "cljx", "clojure", "coffee", "csv", "cmake", "dart", "diff", "gradle",
+          "clj", "cljs", "cljx", "clojure", "coffee", "cmake", "dart", "diff", "gradle",
           "groovy", "mk", "lua", "ipynb", "lock", "log", "vb", "r", "rst", "tex", "cls", "fs", "fsi",
           "fsx", "fsscript", "toml", "swift", "jav", "java", "ctp", "dot", "edn", "handlebars", "hbs",
           "ml", "mli", "pl", "pl6", "pm", "pm6", "pod", "pp", "properties", "psgi", "rt", "t", "asp",
@@ -80,6 +80,27 @@
           "public.source-code",
           "public.script"
         ]
+      },
+      {
+        "ext": ["csv"],
+        "name": "CSV Document",
+        "description": "CSV Document",
+        "role": "Viewer",
+        "rank": "Alternate",
+        "mimeType": "text/csv",
+        "contentTypes": ["public.comma-separated-values-text"]
+      },
+      {
+        "ext": ["parquet"],
+        "name": "Parquet Document",
+        "description": "Parquet Document",
+        "role": "Viewer",
+        "rank": "Alternate",
+        "mimeType": "application/vnd.apache.parquet",
+        "exportedType": {
+          "identifier": "org.apache.parquet",
+          "conformsTo": ["public.data"]
+        }
       }
     ],
     "icon": [
@@ -91,7 +112,10 @@
     ],
     "linux": {
       "deb": {
-        "desktopTemplate": "linux/main.desktop.hbs"
+        "desktopTemplate": "linux/main.desktop.hbs",
+        "files": {
+          "/usr/share/mime/packages/atrium.xml": "linux/atrium-mime.xml"
+        }
       }
     }
   }
