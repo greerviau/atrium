@@ -652,6 +652,16 @@ describe("SettingsDialog", () => {
   });
 
   describe("panel sizing", () => {
+    it("sizes the panel to a fixed constant, clamped to the viewport on short windows", async () => {
+      settingsOverlay.set({ open: true });
+      const { container } = render(SettingsDialog);
+      await tick();
+
+      const panel = container.querySelector(".settings-panel") as HTMLElement;
+      expect(getComputedStyle(panel).height).toBe("580px");
+      expect(getComputedStyle(panel).maxHeight).toBe("80vh");
+    });
+
     it("keeps a fixed panel height regardless of how much content a search narrows the panel to", async () => {
       settingsOverlay.set({ open: true });
       const { container } = render(SettingsDialog);
@@ -659,12 +669,31 @@ describe("SettingsDialog", () => {
 
       const panel = container.querySelector(".settings-panel") as HTMLElement;
       const heightBefore = getComputedStyle(panel).height;
-      expect(heightBefore).toBe("80vh");
 
       await fireEvent.input(screen.getByLabelText("Search settings"), { target: { value: "theme" } });
       await tick();
 
       expect(getComputedStyle(panel).height).toBe(heightBefore);
+    });
+
+    // This is a structural check, not a visual regression guard: jsdom performs
+    // no layout, so the computed height is category-independent by construction.
+    // What it actually guards against is a category-conditional code path that
+    // starts writing an inline height or swapping a sizing class onto the panel.
+    // The real visual invariance (no jitter, no unwanted scrollbar) can only be
+    // observed in the running app.
+    it("keeps a fixed panel height across every category", async () => {
+      settingsOverlay.set({ open: true });
+      const { container } = render(SettingsDialog);
+      await tick();
+
+      const panel = container.querySelector(".settings-panel") as HTMLElement;
+      const heightBefore = getComputedStyle(panel).height;
+
+      for (const name of ["General", "Appearance", "Editor", "Markdown", "Terminal"]) {
+        await selectCategory(name);
+        expect(getComputedStyle(panel).height).toBe(heightBefore);
+      }
     });
   });
 
