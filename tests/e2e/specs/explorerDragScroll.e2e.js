@@ -2,30 +2,7 @@ import { expect } from "@wdio/globals";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-// Mirrors `smoke.e2e.js`'s own helper: the native folder picker is outside
-// WebDriver's reach, so the workspace root is registered directly through
-// the same `workspace_set_root` command the picker's callback would call.
-//
-// The `recent-path` match below uses `contains(@class, ...)`, not
-// `@class='recent-path'`: every scoped Svelte component's elements carry an
-// extra scoping-hash class alongside the semantic one (e.g.
-// `class="recent-path svelte-13zxole"`), so an exact `@class=` match never
-// matches anything and this line would otherwise hang until its own
-// timeout without ever having opened the workspace.
-async function openWorkspace(root) {
-  await browser.execute((path) => {
-    return window.__TAURI_INTERNALS__.invoke("workspace_set_root", {
-      workspaceId: "local",
-      path,
-    });
-  }, root);
-  await browser.refresh();
-
-  const recentRow = await $(`//span[contains(@class, 'recent-path') and text()='${root}']`);
-  await recentRow.waitForExist({ timeout: 10000 });
-  await recentRow.click();
-}
+import { openWorkspace } from "../helpers/workspace.js";
 
 // A dedicated temp workspace rather than the shared `tests/e2e/fixtures/`
 // directory: this needs a tree wide enough to make `.file-tree` itself
@@ -34,7 +11,8 @@ async function openWorkspace(root) {
 // specs also enumerate. Returns the exact paths of the tree/leaf rows the
 // test drives, so it can select them by `.row[data-path="..."]` — every
 // row already carries its own path as a plain attribute (`FileTreeNode.svelte`),
-// which is both more precise and immune to the scoped-class trap above.
+// which is both more precise and immune to the Svelte scoped-class trap
+// documented in `helpers/selectors.js`.
 //
 // `fs.realpathSync` on the freshly created root, not just `mkdtempSync`'s
 // raw return value: on macOS, `os.tmpdir()` resolves under `/var`, which is

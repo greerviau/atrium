@@ -1,27 +1,16 @@
 import { expect } from "@wdio/globals";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { openWorkspace } from "../helpers/workspace.js";
+import { hasClass } from "../helpers/selectors.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(__dirname, "../fixtures");
 
-async function openWorkspace(root) {
-  await browser.execute((workspacePath) => {
-    return window.__TAURI_INTERNALS__.invoke("workspace_set_root", {
-      workspaceId: "local",
-      path: workspacePath,
-    });
-  }, root);
-  await browser.refresh();
-  const recentRow = await $(`//span[@class='recent-path' and text()='${root}']`);
-  await recentRow.waitForExist({ timeout: 10000 });
-  await recentRow.click();
-}
-
 describe("issue #359 reproduction", () => {
   it("keeps terminal focus after the caret reaches a visual wrap boundary", async () => {
     await openWorkspace(fixturesDir);
-    const fileNode = await $("//span[@class='name' and text()='wrapped.md']");
+    const fileNode = await $(`//span[${hasClass("name")} and text()='wrapped.md']`);
     await fileNode.waitForExist({ timeout: 10000 });
     await fileNode.click();
 

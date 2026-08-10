@@ -1,26 +1,11 @@
 import { expect } from "@wdio/globals";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { openWorkspace } from "../helpers/workspace.js";
+import { hasClass } from "../helpers/selectors.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(__dirname, "../fixtures");
-
-// Mirrors `smoke.e2e.js`'s own helper: the native folder picker is outside
-// WebDriver's reach, so the workspace root is registered directly through
-// the same `workspace_set_root` command the picker's callback would call.
-async function openWorkspace(root) {
-  await browser.execute((path) => {
-    return window.__TAURI_INTERNALS__.invoke("workspace_set_root", {
-      workspaceId: "local",
-      path,
-    });
-  }, root);
-  await browser.refresh();
-
-  const recentRow = await $(`//span[@class='recent-path' and text()='${root}']`);
-  await recentRow.waitForExist({ timeout: 10000 });
-  await recentRow.click();
-}
 
 // The five file-explorer shortcuts (§ Gap 1a) are plain DOM `keydown`
 // handlers scoped to whichever tree row holds focus, not native `main.rs`
@@ -31,7 +16,7 @@ describe("file-explorer keyboard shortcuts (issue #156)", () => {
   it("⌘N on a focused row creates a new file, and F2 opens an inline rename prefilled with its name", async () => {
     await openWorkspace(fixturesDir);
 
-    const noteNode = await $("//span[@class='name' and text()='note.md']");
+    const noteNode = await $(`//span[${hasClass("name")} and text()='note.md']`);
     await noteNode.waitForExist({ timeout: 10000 });
     await noteNode.click();
 
@@ -42,7 +27,7 @@ describe("file-explorer keyboard shortcuts (issue #156)", () => {
     await createInput.setValue("e2e-shortcut-new-file.txt");
     await browser.keys(["Enter"]);
 
-    const newFileNode = await $("//span[@class='name' and text()='e2e-shortcut-new-file.txt']");
+    const newFileNode = await $(`//span[${hasClass("name")} and text()='e2e-shortcut-new-file.txt']`);
     await newFileNode.waitForExist({ timeout: 5000 });
 
     // F2 on the newly created file's own row opens an inline rename
@@ -60,7 +45,7 @@ describe("file-explorer keyboard shortcuts (issue #156)", () => {
   });
 
   it("⌘⌫ on a focused row opens the permanent-delete confirmation modal rather than deleting immediately", async () => {
-    const targetNode = await $("//span[@class='name' and text()='e2e-shortcut-new-file.txt']");
+    const targetNode = await $(`//span[${hasClass("name")} and text()='e2e-shortcut-new-file.txt']`);
     await targetNode.waitForExist({ timeout: 10000 });
     await targetNode.click();
 
@@ -107,7 +92,7 @@ describe("split-direction keyboard shortcuts (issue #156)", () => {
   });
 
   it("⌥⌘↓ splits the last-focused editor pane", async () => {
-    const fileNode = await $("//span[@class='name' and text()='note.md']");
+    const fileNode = await $(`//span[${hasClass("name")} and text()='note.md']`);
     await fileNode.waitForExist({ timeout: 5000 });
     await fileNode.click();
 

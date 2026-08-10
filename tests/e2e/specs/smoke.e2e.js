@@ -1,37 +1,17 @@
 import { expect } from "@wdio/globals";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { openWorkspace } from "../helpers/workspace.js";
+import { hasClass } from "../helpers/selectors.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(__dirname, "../fixtures");
-
-// The native folder picker is outside the WebView and out of WebDriver's
-// reach, so these tests register the workspace root directly through the
-// same `workspace_set_root` command the picker's callback would call.
-// `workspace_set_root` also records `root` as a recent project, so
-// reloading and clicking its row on the welcome screen picks it up through
-// the real `openWorkspacePath` flow (including the workspace store update)
-// — everything downstream (the file tree, opening the file, live preview,
-// save) exercises the real app code.
-async function openWorkspace(root) {
-  await browser.execute((path) => {
-    return window.__TAURI_INTERNALS__.invoke("workspace_set_root", {
-      workspaceId: "local",
-      path,
-    });
-  }, root);
-  await browser.refresh();
-
-  const recentRow = await $(`//span[@class='recent-path' and text()='${root}']`);
-  await recentRow.waitForExist({ timeout: 10000 });
-  await recentRow.click();
-}
 
 describe("markdown live preview", () => {
   it("renders a heading, edits, saves, and persists content", async () => {
     await openWorkspace(fixturesDir);
 
-    const fileNode = await $("//span[@class='name' and text()='note.md']");
+    const fileNode = await $(`//span[${hasClass("name")} and text()='note.md']`);
     await fileNode.waitForExist({ timeout: 10000 });
     await fileNode.click();
 
@@ -65,7 +45,7 @@ describe("code syntax highlighting", () => {
     it(`highlights ${filename} and identifies it as ${language}`, async () => {
       await openWorkspace(fixturesDir);
 
-      const fileNode = await $(`//span[@class='name' and text()='${filename}']`);
+      const fileNode = await $(`//span[${hasClass("name")} and text()='${filename}']`);
       await fileNode.waitForExist({ timeout: 10000 });
       await fileNode.click();
 
@@ -82,7 +62,7 @@ describe("image viewer", () => {
   it("opens an image file in a dedicated pane", async () => {
     await openWorkspace(fixturesDir);
 
-    const fileNode = await $("//span[@class='name' and text()='pixel.png']");
+    const fileNode = await $(`//span[${hasClass("name")} and text()='pixel.png']`);
     await fileNode.waitForExist({ timeout: 10000 });
     await fileNode.click();
 
