@@ -192,6 +192,26 @@
     });
   });
 
+  // Resyncs the terminal panel's pixel width whenever the explorer's
+  // shown/hidden state flips, so the space it frees or reclaims is
+  // redistributed between the editor and terminal by their existing ratio —
+  // the same mechanism `resize` already uses — instead of the editor
+  // silently absorbing all of it alone (issue #402). `explorerWidth` is
+  // passed as-is, not re-derived: a mere visibility toggle doesn't change
+  // the window, so the explorer's own width shouldn't shift, only whether
+  // it's counted into `.main`'s content width.
+  $effect(() => {
+    void $explorerShown;
+    if (!appEl || !mainEl) return;
+    const app = appEl;
+    const main = mainEl;
+    untrack(() => {
+      const appWidth = app.clientWidth;
+      if (appWidth <= 0) return;
+      syncTerminalToContainer(mainContentWidth(appWidth, explorerWidth), main.clientHeight);
+    });
+  });
+
   // A single pane tree for the whole terminal dock — splitting no longer
   // creates an independent tab, it adds a sibling panel to this same tree,
   // each leaf owning its own tabs (see paneTree.ts). `focusedPaneId` tracks
@@ -775,11 +795,27 @@
     function onMove(e: PointerEvent): void {
       explorerWidth = clampExplorerToContainer(startWidth + (e.clientX - startX), appEl?.clientWidth ?? Infinity);
     }
+    // Re-baselines terminalWidthRatio here too, not just explorerRatio: an
+    // explorer drag changes `.main`'s content width while (by design,
+    // "dragging the explorer sidebar alone does not rescale the terminal
+    // panel") leaving the terminal's pixel width untouched, so without this
+    // the ratio would silently desync from the terminal's actual on-screen
+    // fraction of `.main` — and a later sidebar toggle or window resize
+    // would then apply that stale fraction instead of the real one (issue
+    // #402). Only while docked left/right, since that's the only case
+    // terminalWidthRatio is ever consulted for. Uses the analytic
+    // mainContentWidth, not mainEl.clientWidth, for the same reason
+    // mainContentWidth exists at all (see its own doc comment): this site
+    // runs in the same handler that just repeatedly wrote explorerWidth via
+    // onMove, so a direct DOM read here could still reflect a stale,
+    // pre-drag sidebar width.
     function onUp(): void {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       if (appEl && appEl.clientWidth > 0) {
         explorerRatio = explorerWidth / appEl.clientWidth;
+        const content = mainContentWidth(appEl.clientWidth, explorerWidth);
+        if ($terminalPosition !== "bottom" && content > 0) terminalWidthRatio = terminalWidth / content;
       }
       saveExplorerWidth(explorerWidth);
     }
@@ -1146,7 +1182,7 @@
     // terminalWidth against the container every time `mainEl` becomes
     // available, regardless of which one is active for `$terminalPosition`
     // (`syncTerminalToContainer` establishes/clamps both) — on the very
-    // first call it clamps the raw values loaded from storage at :90-91
+    // first call it clamps the raw values loaded from storage at :108-109
     // directly; on every later call it re-derives the active dimension from
     // its stable ratio and clamps that. This runs synchronously as part of
     // mount, before the initial paint, so the one-shot mount-time clamp this
