@@ -6,6 +6,7 @@ import { findTableContext, insertColumn, insertRow, moveColumn, moveRow } from "
 import type { TableEditContext } from "./tableEdit";
 import { collectCellSlots } from "./decorations";
 import { tooltip } from "../../ui/tooltip";
+import { beginDragLock, endDragLock } from "../../ui/dragLock";
 
 /**
  * A table row/column target: either a transient hover (`tableHoverField`) or
@@ -229,13 +230,15 @@ function attachHandleInteractions(el: HTMLElement, view: EditorView, target: Tab
  * separate follow-up dispatch would blank the field for a frame on every
  * step, since `defineTableTargetField`'s reducer clears an ungated field on
  * any `docChanged` transaction that doesn't itself carry a matching effect.
- * `document.body`'s `cm-table-dragging-active` class (driving the drag tint's
- * handle visibility and the `grabbing` cursor) and `tableDragField` are both
- * torn down from one shared `cleanup`, run on `pointerup`, `pointercancel`,
- * and a window `blur` alike — the field going stale is invisible, but the
- * body class isn't: it forces `cursor: grabbing` on every element, so
- * missing one of these exit paths would leave the whole app stuck with a
- * grabbing cursor after an OS/browser-level gesture interruption or a
+ * `document.body`'s `cm-table-dragging-active` class (driving only the drag
+ * tint's handle visibility now — the `grabbing` cursor comes from the shared
+ * `dragLock.ts` lock instead, the same one every other drag gesture in the
+ * app uses), the drag lock, and `tableDragField` are all torn down from one
+ * shared `cleanup`, run on `pointerup`, `pointercancel`, and a window `blur`
+ * alike — the field going stale is invisible, but the drag lock isn't: it
+ * forces `cursor: grabbing` on every element, so missing one of these exit
+ * paths would leave the whole app stuck with a grabbing cursor (and text
+ * selection blocked) after an OS/browser-level gesture interruption or a
  * mid-drag app/tab switch.
  */
 function attachDragReorder(options: {
@@ -259,6 +262,7 @@ function attachDragReorder(options: {
     let current = initial;
 
     document.body.classList.add("cm-table-dragging-active");
+    beginDragLock("grabbing");
     view.dispatch({ effects: setTableDrag.of(options.dragTarget(current)) });
 
     function measureRectsByIndex(): Map<number, DOMRect> {
@@ -317,6 +321,7 @@ function attachDragReorder(options: {
       window.removeEventListener("pointercancel", onCancel);
       window.removeEventListener("blur", onCancel);
       document.body.classList.remove("cm-table-dragging-active");
+      endDragLock();
       view.dispatch({ effects: setTableDrag.of(NO_TABLE_HOVER) });
     }
 
@@ -332,9 +337,9 @@ function attachDragReorder(options: {
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onCancel);
     // A window blur mid-drag (switching apps/tabs) otherwise self-heals only
-    // on the next pointerup anywhere, leaving `cm-table-dragging-active`'s
-    // app-wide `grabbing` cursor stuck in the meantime — closed the same way
-    // as a real pointercancel.
+    // on the next pointerup anywhere, leaving the drag lock's app-wide
+    // `grabbing` cursor (and selection block) stuck in the meantime — closed
+    // the same way as a real pointercancel.
     window.addEventListener("blur", onCancel);
   });
 }
