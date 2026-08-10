@@ -28,7 +28,13 @@ async function openNoteAndDirtyIt(marker) {
 }
 
 async function clickTabClose() {
-  const closeButton = await $('.tab.active button[aria-label="Close /note.md"]');
+  const closeButton = await $(".editor-panel .tab.active button.tab-close");
+  // The accessible name is built from the tab's own absolute path
+  // (`EditorPanel.svelte`), and the backend canonicalizes the workspace root
+  // before emitting it, so the exact string is environment-dependent — assert
+  // its tail rather than selecting on it.
+  const label = await closeButton.getAttribute("aria-label");
+  expect(label).toMatch(/^Close .*note\.md$/);
   await closeButton.click();
 }
 
