@@ -5,6 +5,7 @@ import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import FileTree from "../../src/lib/explorer/FileTree.svelte";
 import { loadRoot, loadChildren, fileTree, type TreeNode } from "../../src/lib/stores/fileTree";
 import { draggingPath, dragOverTargetDir, draggingEntry, dragPointerPosition } from "../../src/lib/explorer/explorerDrag";
+import { endDragLock } from "../../src/lib/ui/dragLock";
 import { editingPath } from "../../src/lib/explorer/inlineEdit";
 import * as commands from "../../src/lib/ipc/commands";
 import type { DirEntry } from "../../src/lib/ipc/commands";
@@ -125,6 +126,7 @@ describe("explorer drag-move", () => {
     draggingEntry.set(null);
     dragPointerPosition.set(null);
     editingPath.set(null);
+    endDragLock();
     // jsdom implements neither method at all.
     HTMLElement.prototype.setPointerCapture = vi.fn();
     HTMLElement.prototype.releasePointerCapture = vi.fn();
@@ -137,6 +139,7 @@ describe("explorer drag-move", () => {
     draggingEntry.set(null);
     dragPointerPosition.set(null);
     editingPath.set(null);
+    endDragLock();
   });
 
   it("highlights the target row while dragging, and moves into it on pointerup, refreshing both directories' listings", async () => {
@@ -383,5 +386,120 @@ describe("explorer drag-move", () => {
     // Close out the gesture the pointerdown above started (never moved or
     // released), so its window-level listeners don't leak into later tests.
     await fireEvent(window, pointerEvt("pointerup", { clientX: 0, clientY: Y.lib, pointerId: 1 }));
+  });
+
+  // The cases below cover the shared drag lock (`dragLock.ts`) this gesture
+  // now drives: the cursor attribute, the `user-select` inline styles, and
+  // the `selectstart` guard. jsdom implements no selection engine, so these
+  // can only prove the lock is engaged/torn down at the right moments — the
+  // same limit `minimap.test.ts`'s own lock coverage documents.
+
+  /** A selectstart event dispatched from `target`, bubbling to the document-level capture listener the same way a real WebKit-initiated selection would. Returns whether it was prevented. */
+  function dispatchSelectStart(target: EventTarget = document): boolean {
+    const event = new Event("selectstart", { bubbles: true, cancelable: true });
+    target.dispatchEvent(event);
+    return event.defaultPrevented;
+  }
+
+  function expectLockClear(): void {
+    expect(document.documentElement.dataset.dragCursor).toBeUndefined();
+    expect(document.documentElement.style.userSelect).toBe("");
+    expect(dispatchSelectStart()).toBe(false);
+  }
+
+  it("arms the selectstart guard on pointerdown alone, below the drag threshold, without writing the cursor attribute or user-select", async () => {
+    const { container } = await renderExpandedTree();
+    stubDropTargets(container);
+
+    rowFor(container, SRC).dispatchEvent(pointerEvt("pointerdown", { clientX: 0, clientY: Y.src, pointerId: 1 }));
+
+    expect(dispatchSelectStart()).toBe(true);
+    expect(document.documentElement.dataset.dragCursor).toBeUndefined();
+    expect(document.documentElement.style.userSelect).toBe("");
+
+    await pointerUp(Y.src);
+  });
+
+  it("engages the full lock — grabbing cursor and user-select: none — once the drag threshold is crossed", async () => {
+    const { container } = await renderExpandedTree();
+    stubDropTargets(container);
+
+    dragTo(rowFor(container, SRC), Y.src, Y.lib);
+
+    expect(document.documentElement.dataset.dragCursor).toBe("grabbing");
+    expect(document.documentElement.style.userSelect).toBe("none");
+    expect(dispatchSelectStart()).toBe(true);
+
+    await pointerUp(Y.lib);
+  });
+
+  it("clears the lock on pointerup", async () => {
+    const { container } = await renderExpandedTree();
+    stubDropTargets(container);
+
+    dragTo(rowFor(container, SRC), Y.src, Y.lib);
+    await pointerUp(Y.lib);
+
+    expectLockClear();
+  });
+
+  it("clears the lock on pointercancel", async () => {
+    const { container } = await renderExpandedTree();
+    stubDropTargets(container);
+
+    dragTo(rowFor(container, SRC), Y.src, Y.lib);
+    await fireEvent(window, pointerEvt("pointercancel", { clientX: 0, clientY: Y.lib, pointerId: 1 }));
+
+    expectLockClear();
+  });
+
+  it("clears the lock on lostpointercapture", async () => {
+    const { container } = await renderExpandedTree();
+    stubDropTargets(container);
+
+    const srcRow = rowFor(container, SRC);
+    dragTo(srcRow, Y.src, Y.lib);
+    srcRow.dispatchEvent(new Event("lostpointercapture", { bubbles: true }));
+
+    expectLockClear();
+  });
+
+  it("clears the lock, and commits no move, on a window blur mid-drag", async () => {
+    const { container } = await renderExpandedTree();
+    stubDropTargets(container);
+
+    dragTo(rowFor(container, SRC), Y.src, Y.lib);
+    expect(document.documentElement.dataset.dragCursor).toBe("grabbing");
+
+    window.dispatchEvent(new Event("blur"));
+
+    expectLockClear();
+    expect(commands.fsRename).not.toHaveBeenCalled();
+
+    // The blurred gesture's own listeners must be fully torn down: a later
+    // unrelated pointerup must not resurrect a move.
+    await fireEvent(window, pointerEvt("pointerup", { clientX: 0, clientY: Y.lib, pointerId: 1 }));
+    expect(commands.fsRename).not.toHaveBeenCalled();
+  });
+
+  it("leaves the lock clean after a gesture that never crosses the threshold and ends in pointerup", async () => {
+    const { container } = await renderExpandedTree();
+    stubDropTargets(container);
+
+    const srcRow = rowFor(container, SRC);
+    srcRow.dispatchEvent(pointerEvt("pointerdown", { clientX: 0, clientY: Y.src, pointerId: 1 }));
+    await pointerUp(Y.src);
+
+    expectLockClear();
+  });
+
+  it("leaves the lock clean after a below-threshold gesture ended by a window blur", async () => {
+    const { container } = await renderExpandedTree();
+    stubDropTargets(container);
+
+    rowFor(container, SRC).dispatchEvent(pointerEvt("pointerdown", { clientX: 0, clientY: Y.src, pointerId: 1 }));
+    window.dispatchEvent(new Event("blur"));
+
+    expectLockClear();
   });
 });
