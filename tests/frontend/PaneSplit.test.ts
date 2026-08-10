@@ -3,6 +3,7 @@ import { render, cleanup } from "@testing-library/svelte";
 import PaneSplit from "../../src/lib/terminal/PaneSplit.svelte";
 import { resizeSplit, PANE_MIN_PX, type PaneNode, type SplitPane } from "../../src/lib/terminal/paneTree";
 import { mountLog } from "./mountLog";
+import { endDragLock } from "../../src/lib/ui/dragLock";
 
 vi.mock("../../src/lib/terminal/TerminalPanel.svelte", async () => {
   const mod = await import("./TerminalPanelStub.svelte");
@@ -12,7 +13,15 @@ vi.mock("../../src/lib/terminal/TerminalPanel.svelte", async () => {
 afterEach(() => {
   cleanup();
   mountLog.length = 0;
+  endDragLock();
 });
+
+/** Same convention as the multi-event-drag regression test below: real pointer events must bubble to reach Svelte 5's delegated handler. */
+function pointerLikeEvent(type: string, clientX = 0): Event {
+  const event = new Event(type, { bubbles: true });
+  Object.defineProperty(event, "clientX", { value: clientX, configurable: true });
+  return event;
+}
 
 function leafNode(id: string) {
   return { type: "leaf" as const, id, tabs: [{ id: `${id}-tab`, cwd: "/proj", title: "proj" }], activeTabId: `${id}-tab` };
@@ -157,5 +166,35 @@ describe("PaneSplit", () => {
     expect(mountLog).toContain("destroy:p1");
     expect(mountLog).not.toContain("destroy:p2");
     expect(mountLog).not.toContain("mount:p2");
+  });
+
+  it.each([
+    ["row" as const, "col-resize" as const],
+    ["column" as const, "row-resize" as const],
+  ])("engages the drag lock with the orientation-correct cursor for a %s split, and clears on pointerup", (direction, expectedCursor) => {
+    const tree: PaneNode = { ...(SPLIT as SplitPane), direction };
+    const { container } = render(PaneSplit, { tree, ...baseProps });
+    const resizer = container.querySelector(".pane-resizer")!;
+
+    resizer.dispatchEvent(pointerLikeEvent("pointerdown"));
+    expect(document.documentElement.dataset.dragCursor).toBe(expectedCursor);
+
+    window.dispatchEvent(new Event("pointerup"));
+    expect(document.documentElement.dataset.dragCursor).toBeUndefined();
+  });
+
+  it("clears the drag lock on pointercancel and on a window blur mid-drag", () => {
+    const { container } = render(PaneSplit, { tree: SPLIT, ...baseProps });
+    const resizer = container.querySelector(".pane-resizer")!;
+
+    resizer.dispatchEvent(pointerLikeEvent("pointerdown"));
+    expect(document.documentElement.dataset.dragCursor).toBe("col-resize");
+    window.dispatchEvent(new Event("pointercancel"));
+    expect(document.documentElement.dataset.dragCursor).toBeUndefined();
+
+    resizer.dispatchEvent(pointerLikeEvent("pointerdown"));
+    expect(document.documentElement.dataset.dragCursor).toBe("col-resize");
+    window.dispatchEvent(new Event("blur"));
+    expect(document.documentElement.dataset.dragCursor).toBeUndefined();
   });
 });

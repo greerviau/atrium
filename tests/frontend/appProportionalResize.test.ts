@@ -12,6 +12,7 @@ import {
   saveTerminalLayout,
   EXPLORER_WIDTH_MIN,
 } from "../../src/lib/stores/layout";
+import { endDragLock } from "../../src/lib/ui/dragLock";
 
 vi.mock("../../src/lib/explorer/FileTree.svelte", async () => {
   const mod = await import("./FileTreeStub.svelte");
@@ -55,20 +56,25 @@ function pointerLikeEvent(type: string, delta: number): Event {
   return event;
 }
 
-/** Simulates a full pointerdown/pointermove/pointerup drag of the explorer resizer, moving it by `delta` pixels from its current width. */
-function dragExplorer(container: HTMLElement, delta: number): void {
+/**
+ * Simulates a full pointerdown/pointermove/`terminator` drag of the explorer
+ * resizer, moving it by `delta` pixels from its current width. `terminator`
+ * defaults to `"pointerup"`; the drag-lock coverage below also needs
+ * `"pointercancel"` and `"blur"` as terminators of the same gesture.
+ */
+function dragExplorer(container: HTMLElement, delta: number, terminator = "pointerup"): void {
   const resizer = container.querySelector(".explorer + .resizer")!;
   resizer.dispatchEvent(pointerLikeEvent("pointerdown", 0));
   window.dispatchEvent(pointerLikeEvent("pointermove", delta));
-  window.dispatchEvent(new Event("pointerup"));
+  window.dispatchEvent(new Event(terminator));
 }
 
 /** Same as `dragExplorer`, for the editor/terminal resizer. Works for any dock position: `startDragTerminal` reads whichever of clientX/clientY applies. */
-function dragTerminal(container: HTMLElement, delta: number): void {
+function dragTerminal(container: HTMLElement, delta: number, terminator = "pointerup"): void {
   const resizer = container.querySelector(".main .resizer")!;
   resizer.dispatchEvent(pointerLikeEvent("pointerdown", 0));
   window.dispatchEvent(pointerLikeEvent("pointermove", delta));
-  window.dispatchEvent(new Event("pointerup"));
+  window.dispatchEvent(new Event(terminator));
 }
 
 function setAppWidth(container: HTMLElement, width: number): void {
@@ -141,6 +147,7 @@ describe("App proportional panel resize (#301)", () => {
 
   afterEach(() => {
     cleanup();
+    endDragLock();
   });
 
   it("preserves the explorer's dragged proportion when the window shrinks (basic case)", async () => {
@@ -616,5 +623,87 @@ describe("App proportional panel resize (#301)", () => {
 
     expect(terminalStyle(container).height).toBe("400px");
     expect(terminalStyle(container).width).toBe("");
+  });
+});
+
+describe("App resizer drag lock (issue #420)", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  afterEach(() => {
+    cleanup();
+    endDragLock();
+  });
+
+  function expectLockClear(): void {
+    expect(document.documentElement.dataset.dragCursor).toBeUndefined();
+  }
+
+  it("engages col-resize for the explorer divider and clears on pointerup", async () => {
+    const { container } = renderApp();
+    await tick();
+    await tick();
+    setAppWidth(container, 2000);
+
+    const resizer = container.querySelector(".explorer + .resizer")!;
+    resizer.dispatchEvent(pointerLikeEvent("pointerdown", 0));
+    expect(document.documentElement.dataset.dragCursor).toBe("col-resize");
+
+    window.dispatchEvent(pointerLikeEvent("pointermove", 50));
+    expect(document.documentElement.dataset.dragCursor).toBe("col-resize");
+
+    window.dispatchEvent(new Event("pointerup"));
+    expectLockClear();
+  });
+
+  it("clears the explorer divider's lock on pointercancel and on window blur", async () => {
+    const { container } = renderApp();
+    await tick();
+    await tick();
+    setAppWidth(container, 2000);
+
+    dragExplorer(container, 50, "pointercancel");
+    expectLockClear();
+
+    dragExplorer(container, 50, "blur");
+    expectLockClear();
+  });
+
+  it.each([
+    ["bottom" as const, "row-resize" as const],
+    ["left" as const, "col-resize" as const],
+    ["right" as const, "col-resize" as const],
+  ])("engages %s dock's terminal divider with %s and clears on pointerup", async (position, expectedCursor) => {
+    terminalPosition.set(position);
+    explorerVisible.set(false);
+    const { container } = renderApp();
+    await tick();
+    await tick();
+    setAppWidth(container, 1000);
+    setMainSize(container, { width: 1000, height: 1000 });
+
+    const resizer = container.querySelector(".main .resizer")!;
+    resizer.dispatchEvent(pointerLikeEvent("pointerdown", 0));
+    expect(document.documentElement.dataset.dragCursor).toBe(expectedCursor);
+
+    window.dispatchEvent(new Event("pointerup"));
+    expectLockClear();
+  });
+
+  it("clears the terminal divider's lock on pointercancel and on window blur", async () => {
+    terminalPosition.set("bottom");
+    explorerVisible.set(false);
+    const { container } = renderApp();
+    await tick();
+    await tick();
+    setAppWidth(container, 1000);
+    setMainSize(container, { width: 1000, height: 1000 });
+
+    dragTerminal(container, 0, "pointercancel");
+    expectLockClear();
+
+    dragTerminal(container, 0, "blur");
+    expectLockClear();
   });
 });
