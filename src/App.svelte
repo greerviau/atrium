@@ -50,6 +50,7 @@
     loadTerminalLayout,
     saveTerminalLayout,
     clampToContainer,
+    rebaselineRatio,
     HEIGHT_MIN,
     WIDTH_MIN,
     explorerShown,
@@ -61,6 +62,7 @@
     saveExplorerWidth,
     clampExplorerToContainer,
     RESIZER_THICKNESS,
+    type TerminalPosition,
   } from "./lib/stores/layout";
   import { restoreEditorSession, saveEditorSession, flushEditorSession } from "./lib/stores/editorSession";
   import { restoreTabsOnStartup } from "./lib/stores/restoreTabsOnStartup";
@@ -121,6 +123,40 @@
   let terminalWidthRatio = $state<number | null>(null);
   let terminalHeightRatio = $state<number | null>(null);
 
+  // Every write to `explorerRatio`/`terminalWidthRatio`/`terminalHeightRatio`
+  // goes through one of these three wrappers, and nothing else in this file
+  // assigns to them. Each re-establishes a (pixel value, ratio) pair against a
+  // live container: clamp the pixel into the container, then take the ratio
+  // from the clamped value (see `rebaselineRatio`). Holding that in one place
+  // is what stops the rule from being re-derived, and half-derived, at each of
+  // the seven moments a ratio has to be established — which is how #416 and
+  // #417 happened.
+  const clampTerminalWidth = (value: number, containerWidth: number): number =>
+    clampToContainer(value, WIDTH_MIN, containerWidth);
+  const clampTerminalHeight = (value: number, containerHeight: number): number =>
+    clampToContainer(value, HEIGHT_MIN, containerHeight);
+
+  function rebaselineExplorer(containerWidth: number): void {
+    const next = rebaselineRatio(explorerWidth, containerWidth, clampExplorerToContainer);
+    if (!next) return;
+    explorerWidth = next.pixel;
+    explorerRatio = next.ratio;
+  }
+
+  function rebaselineTerminalWidth(containerWidth: number): void {
+    const next = rebaselineRatio(terminalWidth, containerWidth, clampTerminalWidth);
+    if (!next) return;
+    terminalWidth = next.pixel;
+    terminalWidthRatio = next.ratio;
+  }
+
+  function rebaselineTerminalHeight(containerHeight: number): void {
+    const next = rebaselineRatio(terminalHeight, containerHeight, clampTerminalHeight);
+    if (!next) return;
+    terminalHeight = next.pixel;
+    terminalHeightRatio = next.ratio;
+  }
+
   /** `.main`'s content width, derived analytically instead of read back from `mainEl.clientWidth` — Svelte 5 batches DOM updates to a microtask, so a same-pass DOM read of `mainEl` after writing `explorerWidth` would still reflect the pre-update sidebar width. */
   function mainContentWidth(appWidthPx: number, explorerWidthPx: number): number {
     return appWidthPx - (get(explorerShown) ? explorerWidthPx + RESIZER_THICKNESS : 0);
@@ -130,7 +166,7 @@
   function syncExplorerToContainer(containerWidth: number): number {
     if (!Number.isFinite(containerWidth) || containerWidth <= 0) return explorerWidth;
     if (explorerRatio === null) {
-      explorerRatio = explorerWidth / containerWidth;
+      rebaselineExplorer(containerWidth);
       return explorerWidth;
     }
     explorerWidth = clampExplorerToContainer(Math.round(explorerRatio * containerWidth), containerWidth);
@@ -151,16 +187,14 @@
   function syncTerminalToContainer(containerWidth: number, containerHeight: number): void {
     if (Number.isFinite(containerHeight) && containerHeight > 0) {
       if (terminalHeightRatio === null) {
-        terminalHeight = clampToContainer(terminalHeight, HEIGHT_MIN, containerHeight);
-        terminalHeightRatio = terminalHeight / containerHeight;
+        rebaselineTerminalHeight(containerHeight);
       } else if ($terminalPosition === "bottom") {
         terminalHeight = clampToContainer(Math.round(terminalHeightRatio * containerHeight), HEIGHT_MIN, containerHeight);
       }
     }
     if (Number.isFinite(containerWidth) && containerWidth > 0) {
       if (terminalWidthRatio === null) {
-        terminalWidth = clampToContainer(terminalWidth, WIDTH_MIN, containerWidth);
-        terminalWidthRatio = terminalWidth / containerWidth;
+        rebaselineTerminalWidth(containerWidth);
       } else if ($terminalPosition !== "bottom") {
         terminalWidth = clampToContainer(Math.round(terminalWidthRatio * containerWidth), WIDTH_MIN, containerWidth);
       }
@@ -210,6 +244,46 @@
       const appWidth = app.clientWidth;
       if (appWidth <= 0) return;
       syncTerminalToContainer(mainContentWidth(appWidth, explorerWidth), main.clientHeight);
+    });
+  });
+
+  // The dock position the outer layout was last synced for. A switch between
+  // "left" and "right" keeps width as the active dimension and needs nothing.
+  // A switch across the bottom/side boundary hands the layout to a dimension
+  // that has been frozen — its pixel value untouched, its ratio unmaintained —
+  // for however long the other side was docked, so the ratio has to be
+  // re-established from what is actually about to be rendered (issue #416).
+  let previousTerminalPosition: TerminalPosition = get(terminalPosition);
+  $effect(() => {
+    const position = $terminalPosition;
+    if (position === previousTerminalPosition) return;
+    // Reads appEl/mainEl before the guard below, deliberately, so they stay
+    // in this effect's dependency set: a switch that lands with no container
+    // bound (e.g. the settings dialog with no workspace open) must not mark
+    // itself handled by advancing previousTerminalPosition, or the newly
+    // active dimension's stale ratio would never get a second chance to
+    // re-baseline once a workspace opens and appEl/mainEl actually bind.
+    const app = appEl;
+    const main = mainEl;
+    if (!app || !main) return;
+    const wasWidthActive = previousTerminalPosition !== "bottom";
+    const isWidthActive = position !== "bottom";
+    previousTerminalPosition = position;
+    if (wasWidthActive === isWidthActive) return;
+    untrack(() => {
+      // The pixels win over the stored ratio here, deliberately. Moving the
+      // dock does not change how wide or tall the panel is on screen, so the
+      // ratio is what has to be brought back into agreement — not the other
+      // way round. Re-deriving the pixels from the stored ratio instead would
+      // make a dock switch resize the panel by whatever the container
+      // happened to do while the dimension was frozen, which is the same
+      // stale-ratio application this fix exists to remove, just relocated.
+      // Each rebaseline call declines on its own (via rebaselineRatio's own
+      // containerSize <= 0 guard) if its own measurement isn't available —
+      // an appWidth of 0 must not also block the height branch, which never
+      // reads it.
+      if (isWidthActive) rebaselineTerminalWidth(mainContentWidth(app.clientWidth, explorerWidth));
+      else rebaselineTerminalHeight(main.clientHeight);
     });
   });
 
@@ -801,23 +875,42 @@
     beginDragLock("col-resize");
     const startX = event.clientX;
     const startWidth = explorerWidth;
+    // The terminal's own width at the moment the gesture began. Every move
+    // re-clamps *this* value, never the current one, so a drag that overshoots
+    // the point where the terminal still fits and then comes back restores it
+    // exactly, instead of ratcheting it down one move at a time and never
+    // giving it back.
+    const startTerminalWidth = terminalWidth;
     function onMove(e: PointerEvent): void {
-      explorerWidth = clampExplorerToContainer(startWidth + (e.clientX - startX), appEl?.clientWidth ?? Infinity);
+      const appWidth = appEl?.clientWidth ?? Infinity;
+      explorerWidth = clampExplorerToContainer(startWidth + (e.clientX - startX), appWidth);
+      // Widening the sidebar shrinks `.main`. Past the point where the
+      // terminal panel no longer fits inside it, the terminal keeps its
+      // inline width (`flex-shrink: 0`) and the editor — the only flexible
+      // child — is squeezed to 0 and then clipped off-screen. Clamping the
+      // terminal here keeps the editor at its reserved minimum instead, and
+      // keeps the pixel value the drag-end is about to take a ratio from
+      // inside the container it is measured against (issue #417). Guarded on
+      // the dock position because `terminalWidth` is only the active
+      // dimension while docked left/right.
+      if (!appEl || $terminalPosition === "bottom") return;
+      const content = mainContentWidth(appEl.clientWidth, explorerWidth);
+      if (content > 0) terminalWidth = clampTerminalWidth(startTerminalWidth, content);
     }
     // Re-baselines terminalWidthRatio here too, not just explorerRatio: an
     // explorer drag changes `.main`'s content width while (by design,
     // "dragging the explorer sidebar alone does not rescale the terminal
-    // panel") leaving the terminal's pixel width untouched, so without this
-    // the ratio would silently desync from the terminal's actual on-screen
-    // fraction of `.main` — and a later sidebar toggle or window resize
-    // would then apply that stale fraction instead of the real one (issue
-    // #402). Only while docked left/right, since that's the only case
-    // terminalWidthRatio is ever consulted for. Uses the analytic
-    // mainContentWidth, not mainEl.clientWidth, for the same reason
-    // mainContentWidth exists at all (see its own doc comment): this site
-    // runs in the same handler that just repeatedly wrote explorerWidth via
-    // onMove, so a direct DOM read here could still reflect a stale,
-    // pre-drag sidebar width.
+    // panel") leaving the terminal's pixel width untouched except for the
+    // live clamp above, so without this the ratio would silently desync from
+    // the terminal's actual on-screen fraction of `.main` — and a later
+    // sidebar toggle or window resize would then apply that stale fraction
+    // instead of the real one (issue #402). Only while docked left/right,
+    // since that's the only case terminalWidthRatio is ever consulted for.
+    // Uses the analytic mainContentWidth, not mainEl.clientWidth, for the
+    // same reason mainContentWidth exists at all (see its own doc comment):
+    // this site runs in the same handler that just repeatedly wrote
+    // explorerWidth via onMove, so a direct DOM read here could still reflect
+    // a stale, pre-drag sidebar width.
     function onUp(): void {
       endDragLock();
       window.removeEventListener("pointermove", onMove);
@@ -825,9 +918,10 @@
       window.removeEventListener("pointercancel", onUp);
       window.removeEventListener("blur", onUp);
       if (appEl && appEl.clientWidth > 0) {
-        explorerRatio = explorerWidth / appEl.clientWidth;
-        const content = mainContentWidth(appEl.clientWidth, explorerWidth);
-        if ($terminalPosition !== "bottom" && content > 0) terminalWidthRatio = terminalWidth / content;
+        rebaselineExplorer(appEl.clientWidth);
+        if ($terminalPosition !== "bottom") {
+          rebaselineTerminalWidth(mainContentWidth(appEl.clientWidth, explorerWidth));
+        }
       }
       saveExplorerWidth(explorerWidth);
     }
@@ -1096,9 +1190,9 @@
       window.removeEventListener("pointercancel", onUp);
       window.removeEventListener("blur", onUp);
       if ($terminalPosition === "bottom") {
-        if (mainEl && mainEl.clientHeight > 0) terminalHeightRatio = terminalHeight / mainEl.clientHeight;
+        if (mainEl) rebaselineTerminalHeight(mainEl.clientHeight);
       } else {
-        if (mainEl && mainEl.clientWidth > 0) terminalWidthRatio = terminalWidth / mainEl.clientWidth;
+        if (mainEl) rebaselineTerminalWidth(mainEl.clientWidth);
       }
       saveTerminalLayout({ position: $terminalPosition, height: terminalHeight, width: terminalWidth });
     }

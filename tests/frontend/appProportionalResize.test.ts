@@ -401,7 +401,7 @@ describe("App proportional panel resize (#301)", () => {
     },
   );
 
-  it("switching dock position lazily establishes the newly-active dimension's ratio instead of throwing or staying stuck", async () => {
+  it("switching dock position re-baselines the newly-active dimension from what is on screen", async () => {
     explorerVisible.set(false);
     terminalPosition.set("bottom");
     saveTerminalLayout({ position: "bottom", height: 300, width: 400 });
@@ -417,19 +417,287 @@ describe("App proportional panel resize (#301)", () => {
     setTerminalPosition("left");
     await tick();
 
-    // First resize since the switch: terminalWidthRatio was never
-    // established for "left" before now, so this call only establishes it
-    // (from the persisted width, 400, against the container at this
-    // moment) — the pixel value stays at its last-known 400, unmodified.
-    setAppWidth(container, 800);
-    await fireResize();
+    // The switch itself never resizes the panel — it only records
+    // terminalWidthRatio = 400 / 1000 = 0.4 from what's already on screen.
     expect(terminalStyle(container).width).toBe("400px");
 
-    // Second resize: the now-established ratio (400/800 = 0.5) actually
-    // rescales.
+    // The ratio is already established, so the *first* resize after the
+    // switch rescales, rather than silently establishing (issue #416).
+    setAppWidth(container, 800);
+    await fireResize();
+    expect(terminalStyle(container).width).toBe("320px");
+
     setAppWidth(container, 600);
     await fireResize();
+    expect(terminalStyle(container).width).toBe("240px");
+  });
+
+  it.each(["left" as const, "right" as const])(
+    "switching the dock away and back (docked %s) re-baselines the ratio, so a later sidebar toggle round-trips exactly (#416 AC1)",
+    async (position) => {
+      terminalPosition.set(position);
+      explorerVisible.set(true);
+      saveTerminalLayout({ position, height: 240, width: 398 });
+      const { container } = renderApp();
+      await tick();
+      await tick();
+
+      setAppWidth(container, 1000);
+      dragExplorer(container, 200 - 240); // explorerWidth -> 200
+      await tick();
+
+      setMainSize(container, { width: 796, height: 796 });
+      dragTerminal(container, 0); // establishes terminalWidthRatio = 398 / 796 = 0.5
+      await tick();
+      expect(terminalStyle(container).width).toBe("398px");
+
+      setTerminalPosition("bottom");
+      await tick();
+      dragExplorer(container, 300 - 200); // explorerWidth -> 300; width is frozen, guarded off
+      await tick();
+      setTerminalPosition(position);
+      await tick();
+
+      // The switch back never resizes the panel; it only re-baselines the
+      // ratio against .main's content width at this moment (1000 - 300 - 4 =
+      // 696): 398 / 696 = 0.5718.
+      expect(terminalStyle(container).width).toBe("398px");
+
+      explorerVisible.set(false);
+      await tick();
+      await tick();
+      // round(398 / 696 * 1000) = 572. Without the fix (no dock-switch
+      // re-baseline at all), the stale ratio from before the switch away
+      // (0.5) would instead give 500.
+      expect(terminalStyle(container).width).toBe("572px");
+
+      explorerVisible.set(true);
+      await tick();
+      await tick();
+      // Exact round trip: round(398 / 696 * 696) = 398. Without the fix this
+      // sequence is 398 -> 500 -> 348 (the issue's own reported numbers).
+      expect(terminalStyle(container).width).toBe("398px");
+    },
+  );
+
+  it("a window resize while width is frozen goes stale until the dock switches back, which must correct it rather than apply it as-is (#416 AC2, corrected)", async () => {
+    // Explorer hidden throughout, so nothing about the sidebar can be
+    // mistaken for the cause — see the plan's "Reproductions" section for why
+    // AC2's literal wording ("no other change") doesn't reproduce and this
+    // sequence (a window resize while docked bottom) is the minimal one that
+    // does.
+    explorerVisible.set(false);
+    terminalPosition.set("left");
+    saveTerminalLayout({ position: "left", height: 240, width: 400 });
+    const { container } = renderApp();
+    await tick();
+    await tick();
+
+    setAppWidth(container, 1000);
+    setMainSize(container, { width: 1000, height: 1000 });
+    dragTerminal(container, 0); // establishes terminalWidthRatio = 400 / 1000 = 0.4
+    await tick();
+
+    setTerminalPosition("bottom"); // width is now frozen
+    await tick();
+
+    // The width branch is guarded off while docked bottom, so the panel
+    // stays at 400 while its container becomes 1600 and the recorded 0.4
+    // goes stale.
+    setAppWidth(container, 1600);
+    setMainSize(container, { width: 1600 });
+    await fireResize();
+
+    setTerminalPosition("left");
+    await tick();
+    // The switch re-baselines to 400 / 1600 = 0.25 and does not move the
+    // panel.
+    expect(terminalStyle(container).width).toBe("400px");
+
+    // A resize that changes nothing.
+    await fireResize();
+    // With the fix, the freshly re-baselined 0.25 reproduces the same pixel
+    // value against the same, unchanged container: still 400px, exactly as a
+    // no-op resize should render. On `main` today the dock switch never
+    // re-baselines anything, so the ratio is still the pre-freeze 0.4, and
+    // applying it against the 1600px container it was never checked against
+    // jumps the panel to 640px — with no user input and no size change at
+    // all.
+    expect(terminalStyle(container).width).toBe("400px");
+
+    // Now a real resize: 1600 -> 1200.
+    setAppWidth(container, 1200);
+    setMainSize(container, { width: 1200 });
+    await fireResize();
+    // Fixed: round(0.25 * 1200) = 300, proportional to the container's own
+    // real shrink. On `main` this instead gives round(0.4 * 1200) = 480 — not
+    // because this step's own resize behaves oddly (it's a real,
+    // proportional one), but because the ratio the dock switch handed back
+    // was never corrected off its pre-freeze value in the first place, so
+    // every apply from that point on measures the wrong fraction of whatever
+    // container it's given.
     expect(terminalStyle(container).width).toBe("300px");
+  });
+
+  it("dragging the explorer past the terminal's container-relative maximum clamps it live and re-baselines the ratio, so a sidebar toggle round-trips exactly (#417 AC1 and AC2)", async () => {
+    // Issue #417's own reproduction reads "Expected: terminal width stays at
+    // 592px throughout" — that describes `main`'s current, buggy behaviour,
+    // not this fix's. The live clamp below squeezes the terminal the moment
+    // it no longer fits, during the drag itself, so 592px is gone the instant
+    // the sidebar passes that point; what survives is AC2's actual
+    // requirement — an exact round trip from whatever the post-drag width is
+    // — not the reproduction's "stays at 592" prose.
+    terminalPosition.set("left");
+    const { container } = renderApp();
+    await tick();
+    await tick();
+
+    setAppWidth(container, 1000);
+    dragExplorer(container, 200 - 240); // explorerWidth -> 200
+    await tick();
+
+    setMainSize(container, { width: 796, height: 796 });
+    dragTerminal(container, 592 - 320); // terminalWidth -> 592, its container-relative maximum
+    await tick();
+    expect(terminalStyle(container).width).toBe("592px");
+
+    // .main's content width becomes 1000 - 600 - 4 = 396; 592 no longer fits
+    // (max(140, 396 - 204) = 192).
+    dragExplorer(container, 600 - 200);
+    await tick();
+    expect(terminalStyle(container).width).toBe("192px");
+
+    explorerVisible.set(false);
+    await tick();
+    await tick();
+    // round(192 / 396 * 1000) = 485.
+    expect(terminalStyle(container).width).toBe("485px");
+
+    explorerVisible.set(true);
+    await tick();
+    await tick();
+    // Exact round trip: round(192 / 396 * 396) = 192. Without the fix this
+    // sequence is 592 -> 796 -> 192 (the issue's own reported numbers).
+    expect(terminalStyle(container).width).toBe("192px");
+  });
+
+  it("the terminal clamp is taken from the gesture's starting width, so an overshoot-and-return within one drag is non-destructive", async () => {
+    terminalPosition.set("left");
+    const { container } = renderApp();
+    await tick();
+    await tick();
+
+    setAppWidth(container, 1000);
+    dragExplorer(container, 200 - 240); // explorerWidth -> 200
+    await tick();
+
+    setMainSize(container, { width: 796, height: 796 });
+    dragTerminal(container, 592 - 320); // terminalWidth -> 592
+    await tick();
+
+    const resizer = container.querySelector(".explorer + .resizer")!;
+    resizer.dispatchEvent(pointerLikeEvent("pointerdown", 200));
+
+    // Drag to explorer 600 (delta 400 from a start of 200): the terminal's
+    // start-of-gesture width (592) clamps to 192 against the shrunk .main
+    // content width (396), and the editor keeps its reserved minimum instead
+    // of collapsing.
+    window.dispatchEvent(pointerLikeEvent("pointermove", 600));
+    await tick();
+    expect(terminalStyle(container).width).toBe("192px");
+
+    // Back to explorer 200 within the same gesture: the clamp is always
+    // taken from the gesture's starting width (592), not the current one, so
+    // this restores 592 exactly rather than ratcheting down and staying
+    // there. A "clamp the current value" implementation would return 192
+    // here instead.
+    window.dispatchEvent(pointerLikeEvent("pointermove", 200));
+    await tick();
+    expect(terminalStyle(container).width).toBe("592px");
+
+    window.dispatchEvent(new Event("pointerup"));
+    await tick();
+    expect(terminalStyle(container).width).toBe("592px");
+  });
+
+  it("a dock switch cannot record an out-of-range ratio either (#416 + #417)", async () => {
+    // The D6 scenario: fixing #416 (re-baseline on a dock switch) without
+    // #417's clamp would reintroduce #417's unclamped-ratio bug at the new
+    // site, since a dock switch is exactly a moment the pixel value can be
+    // out of range for the container it's about to be measured against.
+    terminalPosition.set("left");
+    const { container } = renderApp();
+    await tick();
+    await tick();
+
+    setAppWidth(container, 1000);
+    dragExplorer(container, 200 - 240); // explorerWidth -> 200
+    await tick();
+
+    setMainSize(container, { width: 796, height: 796 });
+    dragTerminal(container, 592 - 320); // terminalWidth -> 592, its container-relative maximum
+    await tick();
+
+    setTerminalPosition("bottom");
+    await tick();
+    // Guarded off while docked bottom: terminalWidth stays 592 while .main's
+    // content width shrinks to 396 as the sidebar widens.
+    dragExplorer(container, 600 - 200);
+    await tick();
+
+    setTerminalPosition("left");
+    await tick();
+    // clamp(592, 140, 396) = 192, ratio 192 / 396 = 0.4848 — the same clamp
+    // #417 needed, now exercised at the dock-switch site instead of the
+    // explorer drag-end. Without D1's clamp at this site this would record
+    // ratio 592 / 396 = 1.4949 and reproduce #417 exactly, at a call site
+    // neither issue names.
+    expect(terminalStyle(container).width).toBe("192px");
+
+    explorerVisible.set(false);
+    await tick();
+    await tick();
+    expect(terminalStyle(container).width).toBe("485px");
+
+    explorerVisible.set(true);
+    await tick();
+    await tick();
+    expect(terminalStyle(container).width).toBe("192px");
+  });
+
+  it("an explorer drag that clamps the terminal moves it live but never persists it (#417 + D7): only the explorer's own drag writes localStorage", async () => {
+    terminalPosition.set("left");
+    const { container } = renderApp();
+    await tick();
+    await tick();
+
+    setAppWidth(container, 1000);
+    dragExplorer(container, 200 - 240); // explorerWidth -> 200
+    await tick();
+
+    setMainSize(container, { width: 796, height: 796 });
+    dragTerminal(container, 592 - 320); // terminalWidth -> 592, committed via the terminal's own resizer
+    await tick();
+
+    const terminalLayoutBeforeExplorerDrag = localStorage.getItem("atrium.layout.terminal");
+    expect(JSON.parse(terminalLayoutBeforeExplorerDrag ?? "")).toEqual({ position: "left", height: 240, width: 592 });
+
+    // Widen the sidebar past the point where the terminal no longer fits —
+    // this clamps the terminal's live width from 592 to 192 (see the #417
+    // tests above), a container-driven accommodation, not a choice made with
+    // the terminal's own resizer.
+    dragExplorer(container, 600 - 200);
+    await tick();
+    expect(terminalStyle(container).width).toBe("192px");
+
+    // The explorer's own width is a choice made with the explorer's own
+    // resizer, so it writes.
+    expect(JSON.parse(localStorage.getItem("atrium.layout.explorer") ?? "")).toBe(600);
+    // The terminal's clamp is not a choice — it writes nothing. The stored
+    // width is still 592, the value the user last chose with the terminal's
+    // own resizer, byte-identical to what was there before the explorer
+    // drag.
+    expect(localStorage.getItem("atrium.layout.terminal")).toBe(terminalLayoutBeforeExplorerDrag);
   });
 
   it("a manual drag re-baselines the ratio for subsequent resizes", async () => {
@@ -500,6 +768,12 @@ describe("App proportional panel resize (#301)", () => {
     expect(localStorage.getItem("atrium.layout.terminal")).toBe(afterDrag);
   });
 
+  // Narrowed, not removed, by the #417 fix: an explorer drag never rescales
+  // the terminal proportionally — it only shrinks it when the terminal would
+  // otherwise no longer fit, and never below what does fit (see the #417
+  // tests above). This test's own numbers never reach that point (the
+  // terminal's clamp here is `clamp(300, 140, 656) = 300`, a no-op), so every
+  // assertion below is unchanged; only this comment is narrowed.
   it("dragging the explorer sidebar alone does not rescale the terminal panel", async () => {
     terminalPosition.set("left");
     saveTerminalLayout({ position: "left", height: 240, width: 300 });
