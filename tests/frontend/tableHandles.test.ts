@@ -767,6 +767,7 @@ describe("drag-to-reposition (phase 4)", () => {
     handles[1].dispatchEvent(pointerCoordEvent("pointerdown", "clientY", 30));
     expect(view.state.field(tableDragField)).toEqual({ table, row: 1, col: null });
     expect(document.body.classList.contains("cm-table-dragging-active")).toBe(true);
+    expect(document.documentElement.dataset.dragCursor).toBe("grabbing");
 
     window.dispatchEvent(pointerCoordEvent("pointermove", "clientY", 55)); // past Bob's own center: one step
     // The field already reflects the row's new position — not a stale value
@@ -777,6 +778,7 @@ describe("drag-to-reposition (phase 4)", () => {
     window.dispatchEvent(pointerCoordEvent("pointerup", "clientY", 55));
     expect(view.state.field(tableDragField)).toEqual(NO_TABLE_HOVER);
     expect(document.body.classList.contains("cm-table-dragging-active")).toBe(false);
+    expect(document.documentElement.dataset.dragCursor).toBeUndefined();
 
     view.destroy();
   });
@@ -817,10 +819,12 @@ describe("drag-to-reposition (phase 4)", () => {
     handles[1].dispatchEvent(pointerCoordEvent("pointerdown", "clientY", 30));
     expect(view.state.field(tableDragField)).toEqual({ table, row: 1, col: null });
     expect(document.body.classList.contains("cm-table-dragging-active")).toBe(true);
+    expect(document.documentElement.dataset.dragCursor).toBe("grabbing");
 
     window.dispatchEvent(pointerLikeEvent("pointercancel"));
     expect(view.state.field(tableDragField)).toEqual(NO_TABLE_HOVER);
     expect(document.body.classList.contains("cm-table-dragging-active")).toBe(false);
+    expect(document.documentElement.dataset.dragCursor).toBeUndefined();
 
     // A pointermove after the cancel must be a no-op — the listeners were
     // removed, not just the drag "finished" logically.
@@ -845,10 +849,12 @@ describe("drag-to-reposition (phase 4)", () => {
     handles[1].dispatchEvent(pointerCoordEvent("pointerdown", "clientY", 30));
     expect(view.state.field(tableDragField)).toEqual({ table, row: 1, col: null });
     expect(document.body.classList.contains("cm-table-dragging-active")).toBe(true);
+    expect(document.documentElement.dataset.dragCursor).toBe("grabbing");
 
     window.dispatchEvent(pointerLikeEvent("blur"));
     expect(view.state.field(tableDragField)).toEqual(NO_TABLE_HOVER);
     expect(document.body.classList.contains("cm-table-dragging-active")).toBe(false);
+    expect(document.documentElement.dataset.dragCursor).toBeUndefined();
 
     view.destroy();
   });

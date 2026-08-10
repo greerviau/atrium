@@ -4,6 +4,7 @@
   import { computeRects, computeResizers, type ResizerRect } from "../terminal/paneLayout";
   import EditorPanel from "./EditorPanel.svelte";
   import { activeTabDrag, type TabDropTarget } from "../panes/tabDrag";
+  import { beginDragLock, endDragLock } from "../ui/dragLock";
 
   /**
    * Renders `listLeaves(tree)` in a flat, `leaf.id`-keyed `{#each}`,
@@ -50,6 +51,11 @@
   // down by that split's rectangle fraction.
   function startDragResizer(event: PointerEvent, rz: ResizerRect): void {
     event.preventDefault();
+    // A row-oriented split has a vertical divider that moves horizontally.
+    // Engages the full lock immediately, with no pre-threshold
+    // armDragSelectionGuard() phase — see App.svelte's startDragExplorer for
+    // why: a resizer's pointerdown is unambiguously the drag itself.
+    beginDragLock(rz.orientation === "row" ? "col-resize" : "row-resize");
     const splitRect = rects.get(rz.splitId);
     const rootSizePx = rz.orientation === "row" ? (rootEl?.clientWidth ?? 0) : (rootEl?.clientHeight ?? 0);
     const fraction = rz.orientation === "row" ? (splitRect?.width ?? 100) : (splitRect?.height ?? 100);
@@ -64,11 +70,18 @@
       onResizeSplit(rz.splitId, rz.index, delta, containerSizePx);
     }
     function onUp(): void {
+      endDragLock();
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("blur", onUp);
     }
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    // Without this, a mid-drag blur strands the app-wide cursor/selection
+    // lock with no teardown — the same gap the resizers in App.svelte close.
+    window.addEventListener("blur", onUp);
   }
 </script>
 

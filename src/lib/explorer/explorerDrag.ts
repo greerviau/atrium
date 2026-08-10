@@ -3,6 +3,7 @@ import { dirOf } from "../util/path";
 import { resolveExplorerDropTargetDir } from "./explorerDropTargets";
 import { movePath } from "./contextMenu";
 import { terminalPaneAtScreenPoint, insertPathsAtScreenPoint, dragOverTerminalPane, setDragOverTerminalPane } from "../terminal/terminalDropTargets";
+import { armDragSelectionGuard, beginDragLock, endDragLock } from "../ui/dragLock";
 import type { DirEntry } from "../ipc/commands";
 
 /** Path of the explorer row currently in a pointer-driven drag, or null. */
@@ -48,9 +49,13 @@ const DRAG_THRESHOLD_PX = 4;
  * `pointerup` outside the row (or outside the window) is still delivered to
  * these listeners instead of being lost. Every exit path — a genuine
  * `pointerup`, `pointercancel` (OS-level gesture takeover, touch/trackpad
- * cancellation), or `lostpointercapture` (capture stolen or released by the
- * platform) — funnels through the single `end()` below, so there is no path
- * that leaves `window` listeners attached or `draggingPath`/`dragOverTargetDir`/
+ * cancellation), `lostpointercapture` (capture stolen or released by the
+ * platform), or a window `blur` (Cmd-Tab, a Space switch, a native context
+ * menu — the one exit path `pointerup`/`pointercancel`/`lostpointercapture`
+ * can't cover, since none of the three is guaranteed to fire from an
+ * inactive window) — funnels through the single `end()` below, so there is
+ * no path that leaves `window` listeners attached, the shared drag lock
+ * (`dragLock.ts`) engaged, or `draggingPath`/`dragOverTargetDir`/
  * `dragOverTerminalPane`/`draggingEntry`/`dragPointerPosition` stuck set with
  * no active gesture behind them (the middle one is defined in
  * `terminalDropTargets.ts` and imported here — the guarantee is about what
@@ -71,17 +76,21 @@ const DRAG_THRESHOLD_PX = 4;
  * backstop, `onMove` also bails out if `e.buttons === 0` — a moved-without-a-
  * button-held event, which should never legitimately reach it mid-drag.
  *
- * Deliberately does **not** try to suppress text selection in the editor/
- * terminal panes the drag passes over via pointer capture alone — capture
- * retargets pointer events, not the mouse-event-driven text-selection
- * default, and relying on capture to suppress selection isn't safe across
- * engines. `onMove` calls `event.preventDefault()` once `dragging` is `true`
- * instead (safe at that point: only `pointerdown`'s default carries the
- * focus/blur semantics `InlineNameInput`'s `settleActiveEdit` needs, and by
- * the time `dragging` flips true the gesture has already committed to being
- * a drag, not a click).
+ * Text selection over the editor/terminal panes the drag passes over is
+ * suppressed by `dragLock.ts`, not by pointer capture — capture retargets
+ * pointer events, not the mouse-event-driven text-selection default, and
+ * relying on capture to suppress selection isn't safe across engines.
+ * `armDragSelectionGuard()` is called at the very top of this function, at
+ * `pointerdown`, so nothing can seed a selection inside the few pixels
+ * before the drag threshold is crossed; `beginDragLock("grabbing")` follows
+ * at threshold crossing, once the gesture has committed to being a drag —
+ * see `dragLock.ts` for why the pre-threshold guard and the cursor lock are
+ * deliberately two separate calls rather than one. Neither call touches
+ * `pointerdown`'s own default action, so the focus/blur
+ * transition `InlineNameInput`'s `settleActiveEdit` needs is untouched.
  */
 export function beginExplorerDrag(rowEl: HTMLElement, event: PointerEvent, entry: DirEntry, onRowStartedDragging: () => void): void {
+  armDragSelectionGuard();
   const sourcePath = entry.path;
   const startX = event.clientX;
   const startY = event.clientY;
@@ -101,6 +110,7 @@ export function beginExplorerDrag(rowEl: HTMLElement, event: PointerEvent, entry
       onRowStartedDragging();
       rowEl.setPointerCapture(pointerId);
       captured = true;
+      beginDragLock("grabbing");
     }
     e.preventDefault();
     lastX = e.clientX;
@@ -120,8 +130,10 @@ export function beginExplorerDrag(rowEl: HTMLElement, event: PointerEvent, entry
     window.removeEventListener("pointermove", onMove);
     window.removeEventListener("pointerup", onUp);
     window.removeEventListener("pointercancel", onCancel);
+    window.removeEventListener("blur", onBlur);
     rowEl.removeEventListener("lostpointercapture", onLostCapture);
     if (captured) rowEl.releasePointerCapture(pointerId);
+    endDragLock();
     const target = get(dragOverTargetDir);
     const overTerminal = get(dragOverTerminalPane);
     draggingPath.set(null);
@@ -152,10 +164,20 @@ export function beginExplorerDrag(rowEl: HTMLElement, event: PointerEvent, entry
   function onLostCapture(): void {
     end(false);
   }
+  // A blur mid-drag (Cmd-Tab, a Space switch, a native context menu) has no
+  // other exit path to lean on: pointerup never arrives from an inactive
+  // macOS window, pointercancel isn't guaranteed, and lostpointercapture
+  // can't fire for a gesture blurred before the 4px threshold, since
+  // setPointerCapture above hasn't run yet. No commit — an interrupted drag
+  // must not move a file.
+  function onBlur(): void {
+    end(false);
+  }
 
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onUp);
   window.addEventListener("pointercancel", onCancel);
+  window.addEventListener("blur", onBlur);
   rowEl.addEventListener("lostpointercapture", onLostCapture);
 }
 

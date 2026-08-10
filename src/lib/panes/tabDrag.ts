@@ -1,5 +1,6 @@
 import { writable, get } from "svelte/store";
 import { resolveTabDropTarget, type TabDropTarget, type TabSurface } from "./tabDropTargets";
+import { armDragSelectionGuard, beginDragLock, endDragLock } from "../ui/dragLock";
 
 export interface ActiveTabDrag {
   key: string;
@@ -49,6 +50,7 @@ export function beginTabDrag(
   onReorder: (path: string, toIndex: number) => void,
   options?: TabDragOptions,
 ): void {
+  armDragSelectionGuard();
   const startX = event.clientX;
   const startY = event.clientY;
   const pointerId = event.pointerId;
@@ -73,7 +75,7 @@ export function beginTabDrag(
       if (Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_THRESHOLD_PX) return;
       dragging = true;
       draggingTabKey.set(key);
-      document.documentElement.classList.add("tab-drag-active");
+      beginDragLock("grabbing");
     }
     lastPointerX = e.clientX;
 
@@ -120,7 +122,7 @@ export function beginTabDrag(
         options.onDrop(currentTarget);
       }
     }
-    document.documentElement.classList.remove("tab-drag-active");
+    endDragLock();
     activeTabDrag.set(null);
     draggingTabKey.set(null);
     options?.onDragEnd?.(dragging);
@@ -144,11 +146,18 @@ export function beginTabDrag(
   window.addEventListener("blur", onBlur);
 }
 
-/** Clears a stale gesture state when a surface is unmounted during a drag. */
+/**
+ * Clears a stale gesture state when a surface is unmounted during a drag.
+ * Exported for a consumer that unmounts the dragged surface out from under
+ * `beginTabDrag`'s own `window` listeners to call explicitly; not wired to
+ * any unmount hook itself, and currently unreferenced by any call site in
+ * `src/` — `end()`'s own `pointerup`/`pointercancel`/`blur` funnel already
+ * covers every exit path a live gesture takes today.
+ */
 export function clearTabDrag(): void {
   if (get(activeTabDrag)) activeTabDrag.set(null);
   draggingTabKey.set(null);
-  document.documentElement.classList.remove("tab-drag-active");
+  endDragLock();
 }
 
 export type { TabDropTarget, TabDropZone, TabSurface } from "./tabDropTargets";

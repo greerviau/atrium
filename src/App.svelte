@@ -101,6 +101,7 @@
   } from "./lib/editor/editorPaneTree";
   import { focusedEditorPaneId, editorPaneTree } from "./lib/stores/editorPanes";
   import type { TabDropTarget } from "./lib/panes/tabDrag";
+  import { beginDragLock, endDragLock } from "./lib/ui/dragLock";
 
   const initialLayout = loadTerminalLayout();
 
@@ -790,6 +791,14 @@
 
   function startDragExplorer(event: PointerEvent): void {
     event.preventDefault();
+    // Engages the full lock immediately, with no pre-threshold
+    // armDragSelectionGuard() phase — unlike explorer rows and tabs, a
+    // resizer's pointerdown *is* the drag; there's no plain-click affordance
+    // on a divider to protect a threshold for, so there's nothing the eager
+    // cursor change could wrongly fire for. Same reasoning applies to
+    // startDragTerminal below and to both EditorPaneSplit.svelte/
+    // PaneSplit.svelte's startDragResizer.
+    beginDragLock("col-resize");
     const startX = event.clientX;
     const startWidth = explorerWidth;
     function onMove(e: PointerEvent): void {
@@ -810,8 +819,11 @@
     // onMove, so a direct DOM read here could still reflect a stale,
     // pre-drag sidebar width.
     function onUp(): void {
+      endDragLock();
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("blur", onUp);
       if (appEl && appEl.clientWidth > 0) {
         explorerRatio = explorerWidth / appEl.clientWidth;
         const content = mainContentWidth(appEl.clientWidth, explorerWidth);
@@ -821,6 +833,13 @@
     }
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    // A window blur mid-drag otherwise leaves the shared drag lock's
+    // app-wide cursor and selection block stuck until the next unrelated
+    // pointerup anywhere. Persisting the width here is correct even for an
+    // interrupted drag: it already changed live and the user should not
+    // lose it.
+    window.addEventListener("blur", onUp);
   }
 
   type MainSlot = "editor" | "resizer" | "terminal";
@@ -1066,9 +1085,16 @@
 
   function startDragTerminal(event: PointerEvent): void {
     event.preventDefault();
+    // See startDragExplorer's own comment above for why this engages the
+    // full lock immediately rather than splitting into an
+    // armDragSelectionGuard()/beginDragLock() pair.
+    beginDragLock($terminalPosition === "bottom" ? "row-resize" : "col-resize");
     function onUp(): void {
+      endDragLock();
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("blur", onUp);
       if ($terminalPosition === "bottom") {
         if (mainEl && mainEl.clientHeight > 0) terminalHeightRatio = terminalHeight / mainEl.clientHeight;
       } else {
@@ -1095,6 +1121,12 @@
     }
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    // Same rationale as startDragExplorer's blur exit above: without it, a
+    // mid-drag blur strands the app-wide cursor/selection lock with no
+    // teardown. Persisting the size on interruption is correct for the same
+    // reason — it already changed live.
+    window.addEventListener("blur", onUp);
   }
 
   // Avoids notifying every row's `$derived` read of dragOverTargetDir on

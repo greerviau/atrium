@@ -458,29 +458,23 @@ body.cm-table-dragging-active .cm-table-col-bar {
   opacity: 1;
 }
 
-/* Keeps the drag cursor a consistent `grabbing` over the whole app for the
-   duration of a row/column drag, regardless of what's actually under the
-   pointer — `attachDragReorder` tracks the pointer at the `window` level, so
-   the gesture routinely continues after the pointer leaves the handle (and
-   the table) entirely. Toggled on `document.body` by `attachDragReorder`'s
-   `pointerdown` handler and torn down by its shared `cleanup`, run on both
-   `pointerup` and `pointercancel`. */
-body.cm-table-dragging-active,
-body.cm-table-dragging-active * {
-  cursor: grabbing !important;
-}
+/* The drag cursor itself now comes from the shared `dragLock.ts` lock
+   (see the `html[data-drag-cursor=...]` rules in app.css) rather than from
+   this class — `cm-table-dragging-active` now drives only the handle-rail
+   visibility above. */
 
-/* Same pattern as .cm-table-dragging-active above, for the editor
-   minimap's own drag: an inline `document.body.style.cursor` write loses
-   to WebKit's auto-cursor-over-editable-content heuristic once the
-   pointer crosses into a `.cm-content` region, because nothing in the
+/* For the editor minimap's own drag: an inline `document.body.style.cursor`
+   write loses to WebKit's auto-cursor-over-editable-content heuristic once
+   the pointer crosses into a `.cm-content` region, because nothing in the
    cascade gives that element an explicit value there — inheritance alone
    isn't enough. An `!important` rule matching the element directly always
-   wins over that heuristic instead, which is exactly why the table-drag
-   cursor above already survives crossing over live editable text on the
-   same WebKit target this app runs. Toggled on `document.body` by the
+   wins over that heuristic instead — the same pattern the table-drag cursor
+   already proved, and that `dragLock.ts`'s own rules in app.css now use for
+   every other drag gesture in the app. Toggled on `document.body` by the
    vendored minimap patch's `onMouseDown`/`_endDrag`
-   (patches/@replit+codemirror-minimap+0.5.2.patch). */
+   (patches/@replit+codemirror-minimap+0.5.2.patch) — left as its own,
+   unconsolidated rule; see the plan's "Explicitly confirmed non-changes"
+   for why the minimap's patch isn't wired into the shared lock. */
 body.cm-minimap-dragging-active,
 body.cm-minimap-dragging-active * {
   cursor: default !important;
