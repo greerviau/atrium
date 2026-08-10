@@ -18,7 +18,7 @@ describe("rendered markdown: horizontal rule cursor placement (issue #366)", () 
     const rule = await $(".cm-hr");
     await rule.waitForExist({ timeout: 5000 });
 
-    const lineAfterRule = await $("//div[contains(@class, 'cm-line') and contains(., 'After the rule')]");
+    const lineAfterRule = await $(`//div[${hasClass("cm-line")} and contains(., 'After the rule')]`);
     await lineAfterRule.waitForExist({ timeout: 5000 });
     await lineAfterRule.click();
 
@@ -37,7 +37,7 @@ describe("rendered markdown: horizontal rule cursor placement (issue #366)", () 
       timeout: 3000,
       timeoutMsg: "expected the horizontal rule to reveal its raw marker while editing",
     });
-    const rawRule = await $("//div[contains(@class, 'cm-line') and normalize-space(.)='---']");
+    const rawRule = await $(`//div[${hasClass("cm-line")} and normalize-space(.)='---']`);
     await expect(rawRule).toHaveText("---");
   });
 });

@@ -52,15 +52,25 @@ describe("e2e selectors", () => {
     expect(offenders).toEqual([]);
   });
 
-  // The near-miss fix: `contains()` looks like it solves the hash problem, but
-  // Svelte appends `class:` directive tokens *after* the hash, so an active tab
-  // renders `class="tab svelte-w72ddb active"` and `contains(@class, 'tab
-  // active')` never matches either. A multi-token literal inside `contains()`
-  // is therefore always wrong — use `.tab.active` (CSS) or compose one
-  // `hasClass` call per token.
-  it("never test a multi-token class literal with contains()", () => {
+  // `contains()` looks like it solves the scoping-hash problem, and it does not.
+  // Two distinct ways it silently fails, both already shipped here:
+  //
+  //   - Multi-token literals never match. Svelte appends `class:`-directive
+  //     tokens *after* the scoping hash, so an active tab renders
+  //     `class="tab svelte-w72ddb active"` and `contains(@class, 'tab active')`
+  //     is false — the tokens are not adjacent (issue #412).
+  //   - Single-token literals match too much. `contains()` is a substring test,
+  //     so `contains(@class, 'cm-line')` also matches `cm-lineWrapping`, which
+  //     CodeMirror puts on `.cm-content` — the ancestor of every line, holding
+  //     all of their text, and first in document order (issue #424).
+  //
+  // There is no sound bare form. Use `.tab.active` (CSS, token-matched by
+  // specification) or `hasClass()` from `helpers/selectors.js`. `hasClass()`
+  // itself does not trip this: its `contains()` first argument is `concat(...)`,
+  // not `@class`.
+  it("never test a class with a bare contains(@class, …)", () => {
     const offenders = e2eSourceLines()
-      .filter(({ line }) => /contains\(\s*@class\s*,\s*['"][^'"]*\s[^'"]*['"]\s*\)/.test(line))
+      .filter(({ line }) => /contains\(\s*@class\b/.test(line))
       .map(at);
 
     expect(offenders).toEqual([]);
