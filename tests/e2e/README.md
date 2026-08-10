@@ -77,4 +77,6 @@ This focused spec runs under Xvfb in Linux CI.
 ## Status
 
 The focused launch-open spec runs in Linux CI.
-The broader smoke suite still requires a real Linux or Windows display and is not part of the default CI workflow.
+The broader smoke suite still requires a real Linux or Windows display (or Xvfb) and is not part of the default CI workflow.
+
+`smoke.e2e.js` has been run once, under Xvfb. 3 of its 12 scenarios pass: "markdown live preview" (open a workspace, edit `note.md`, save, reload, and confirm the edit persisted), and both syntax-highlighting scenarios (`config.toml`, `main.tf`) — each of these exercises `openWorkspace` and the file-tree `name` lookup end to end, which is what this fix targets. The remaining 9 scenarios fail for reasons unrelated to this fix (terminal-pane interactability, the search overlay not appearing, and a status-bar block that cascades from those) — tracked in issue #421.
