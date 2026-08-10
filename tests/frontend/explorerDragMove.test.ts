@@ -407,7 +407,7 @@ describe("explorer drag-move", () => {
     expect(dispatchSelectStart()).toBe(false);
   }
 
-  it("arms the selectstart guard on pointerdown alone, below the drag threshold, without writing the cursor attribute or user-select", async () => {
+  it("arms the selectstart guard on pointerdown alone, below the drag threshold, without writing the cursor attribute", async () => {
     const { container } = await renderExpandedTree();
     stubDropTargets(container);
 
@@ -415,22 +415,31 @@ describe("explorer drag-move", () => {
 
     expect(dispatchSelectStart()).toBe(true);
     expect(document.documentElement.dataset.dragCursor).toBeUndefined();
-    expect(document.documentElement.style.userSelect).toBe("");
 
     await pointerUp(Y.src);
   });
 
-  it("engages the full lock — grabbing cursor and user-select: none — once the drag threshold is crossed", async () => {
+  it("engages the full lock — grabbing cursor, selectstart still prevented — once the drag threshold is crossed", async () => {
     const { container } = await renderExpandedTree();
     stubDropTargets(container);
 
     dragTo(rowFor(container, SRC), Y.src, Y.lib);
 
     expect(document.documentElement.dataset.dragCursor).toBe("grabbing");
-    expect(document.documentElement.style.userSelect).toBe("none");
     expect(dispatchSelectStart()).toBe(true);
 
     await pointerUp(Y.lib);
+  });
+
+  it("never writes document.documentElement.style.userSelect — see dragLock.ts's own doc comment for why that write was dropped", async () => {
+    const { container } = await renderExpandedTree();
+    stubDropTargets(container);
+
+    dragTo(rowFor(container, SRC), Y.src, Y.lib);
+    expect(document.documentElement.style.userSelect).toBe("");
+
+    await pointerUp(Y.lib);
+    expect(document.documentElement.style.userSelect).toBe("");
   });
 
   it("clears the lock on pointerup", async () => {

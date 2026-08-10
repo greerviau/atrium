@@ -8,7 +8,9 @@
 export type DragCursor = "grabbing" | "col-resize" | "row-resize";
 
 /**
- * Prevents a selection from *beginning* anywhere while a drag is in flight.
+ * Prevents a selection from *beginning* anywhere while a drag is in flight —
+ * the only mechanism this module uses to block selection, everywhere, not
+ * one layer of several.
  *
  * Capture phase, on `document`: WebKit's `effectiveUserSelect` deliberately
  * ignores an inherited `user-select: none` on any element carrying
@@ -16,9 +18,20 @@ export type DragCursor = "grabbing" | "col-resize" | "row-resize";
  * base theme sets on `.cm-content` when it is contenteditable (WebKit
  * changeset 293028). That exemption governs how the `user-select` *property*
  * resolves and nothing more, so it has no bearing on `selectstart`, which
- * fires at the point a selection is actually about to begin. Intercepting the
- * event is what actually holds over the editor; the `user-select` writes below
- * are the belt to this braces, covering ordinary non-editable regions.
+ * fires at the point a selection is actually about to begin.
+ *
+ * An earlier version of this module also wrote `user-select: none` on
+ * `<html>` as a second, "belt and braces" layer alongside this guard. It was
+ * dropped after a real-device check (`tests/e2e/specs/dragCursor.e2e.js`)
+ * found that write alone *clears an existing selection* held elsewhere in
+ * the DOM on this app's WebKit target — confirmed against the CSV/Parquet
+ * result table, which sets no `user-select` of its own and isn't
+ * contenteditable, so it was never covered by the exemption above. That is
+ * exactly the failure mode this lock exists to prevent, not a redundant
+ * safeguard against it: writing `user-select: none` while a selection is
+ * live can wipe a selection this drag never touched. `selectstart`
+ * interception has no such side effect — it only ever refuses a selection
+ * that hasn't started yet, never touches one already in progress.
  *
  * Module-level, so the same function reference is added and removed every
  * time: `addEventListener`/`removeEventListener` are then no-ops on repeat
@@ -30,18 +43,16 @@ function preventSelectStart(event: Event): void {
 }
 
 /**
- * Blocks a selection from beginning, and nothing else — no cursor change, no
- * `user-select` write.
+ * Blocks a selection from beginning, and nothing else — no cursor change.
  *
  * Armed at `pointerdown`, before a gesture is known to be a drag at all, so
  * nothing can seed a selection inside the few pixels before the drag
- * threshold is crossed. It is safe to arm this eagerly on every press in a way
- * the rest of the lock is not: a plain click starts no selection, so this is
- * inert for one, whereas writing `user-select: none` on <html> for every
- * click would touch a document-wide property (and, on engines that clear a
- * selection when one is applied to its ancestor, could drop a selection the
- * user is holding) for a gesture that turns out not to be a drag at all.
- * That is why this is separate from `beginDragLock` rather than a mode of it.
+ * threshold is crossed. Safe to arm eagerly on every press: a plain click
+ * starts no selection, so this is inert for one. That is why this is
+ * separate from `beginDragLock` rather than a mode of it — the split
+ * predates the `user-select` write's removal above and remains useful on its
+ * own merits: a resting cursor (below) has no business changing for a
+ * gesture that turns out not to be a drag at all.
  */
 export function armDragSelectionGuard(): void {
   document.addEventListener("selectstart", preventSelectStart, true);
@@ -60,10 +71,7 @@ export function armDragSelectionGuard(): void {
  * deliberately accepts.
  */
 export function beginDragLock(cursor: DragCursor): void {
-  const root = document.documentElement;
-  root.dataset.dragCursor = cursor;
-  root.style.userSelect = "none";
-  root.style.webkitUserSelect = "none";
+  document.documentElement.dataset.dragCursor = cursor;
   document.addEventListener("selectstart", preventSelectStart, true);
 }
 
@@ -90,9 +98,6 @@ export function beginDragLock(cursor: DragCursor): void {
  * left permanently uncursorable and unselectable, with no self-healing path.
  */
 export function endDragLock(): void {
-  const root = document.documentElement;
-  delete root.dataset.dragCursor;
-  root.style.userSelect = "";
-  root.style.webkitUserSelect = "";
+  delete document.documentElement.dataset.dragCursor;
   document.removeEventListener("selectstart", preventSelectStart, true);
 }

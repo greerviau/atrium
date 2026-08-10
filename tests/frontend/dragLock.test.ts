@@ -13,11 +13,10 @@ describe("dragLock", () => {
     endDragLock();
   });
 
-  it("beginDragLock sets the cursor attribute and both user-select styles", () => {
+  it("beginDragLock sets the cursor attribute and prevents selectstart", () => {
     beginDragLock("grabbing");
     expect(document.documentElement.dataset.dragCursor).toBe("grabbing");
-    expect(document.documentElement.style.userSelect).toBe("none");
-    expect(document.documentElement.style.webkitUserSelect).toBe("none");
+    expect(dispatchSelectStart()).toBe(true);
   });
 
   it("a selectstart dispatched from a nested element is prevented after beginDragLock", () => {
@@ -28,12 +27,10 @@ describe("dragLock", () => {
     nested.remove();
   });
 
-  it("armDragSelectionGuard alone prevents selectstart while writing neither the cursor attribute nor the user-select styles", () => {
+  it("armDragSelectionGuard alone prevents selectstart while writing no cursor attribute", () => {
     armDragSelectionGuard();
     expect(dispatchSelectStart()).toBe(true);
     expect(document.documentElement.dataset.dragCursor).toBeUndefined();
-    expect(document.documentElement.style.userSelect).toBe("");
-    expect(document.documentElement.style.webkitUserSelect).toBe("");
   });
 
   it("beginDragLock upgrades an armed guard in place, and one endDragLock fully clears the result", () => {
@@ -44,17 +41,13 @@ describe("dragLock", () => {
 
     endDragLock();
     expect(document.documentElement.dataset.dragCursor).toBeUndefined();
-    expect(document.documentElement.style.userSelect).toBe("");
-    expect(document.documentElement.style.webkitUserSelect).toBe("");
     expect(dispatchSelectStart()).toBe(false);
   });
 
-  it("endDragLock clears the attribute, both inline styles, and the guard", () => {
+  it("endDragLock clears the attribute and the guard", () => {
     beginDragLock("row-resize");
     endDragLock();
     expect(document.documentElement.dataset.dragCursor).toBeUndefined();
-    expect(document.documentElement.style.userSelect).toBe("");
-    expect(document.documentElement.style.webkitUserSelect).toBe("");
     expect(dispatchSelectStart()).toBe(false);
   });
 
@@ -66,5 +59,13 @@ describe("dragLock", () => {
     expect(() => endDragLock()).not.toThrow();
     expect(document.documentElement.dataset.dragCursor).toBeUndefined();
     expect(dispatchSelectStart()).toBe(false);
+  });
+
+  it("never writes document.documentElement.style.userSelect — a real-device check found that write alone clears an existing selection held elsewhere in the DOM (see dragLock.ts's own doc comment)", () => {
+    armDragSelectionGuard();
+    beginDragLock("grabbing");
+    expect(document.documentElement.style.userSelect).toBe("");
+    endDragLock();
+    expect(document.documentElement.style.userSelect).toBe("");
   });
 });

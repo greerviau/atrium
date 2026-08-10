@@ -84,9 +84,9 @@ const DRAG_THRESHOLD_PX = 4;
  * `pointerdown`, so nothing can seed a selection inside the few pixels
  * before the drag threshold is crossed; `beginDragLock("grabbing")` follows
  * at threshold crossing, once the gesture has committed to being a drag —
- * see `dragLock.ts` for why the pre-threshold guard and the cursor/
- * `user-select` lock are deliberately two separate calls rather than one.
- * Neither call touches `pointerdown`'s own default action, so the focus/blur
+ * see `dragLock.ts` for why the pre-threshold guard and the cursor lock are
+ * deliberately two separate calls rather than one. Neither call touches
+ * `pointerdown`'s own default action, so the focus/blur
  * transition `InlineNameInput`'s `settleActiveEdit` needs is untouched.
  */
 export function beginExplorerDrag(rowEl: HTMLElement, event: PointerEvent, entry: DirEntry, onRowStartedDragging: () => void): void {

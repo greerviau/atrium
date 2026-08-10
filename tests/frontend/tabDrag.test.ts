@@ -270,28 +270,37 @@ describe("beginTabDrag", () => {
   // no selection engine, so these can only prove the lock is engaged/torn
   // down at the right moments.
 
-  it("arms the selectstart guard on pointerdown alone, below the drag threshold, without writing the cursor attribute or user-select", () => {
+  it("arms the selectstart guard on pointerdown alone, below the drag threshold, without writing the cursor attribute", () => {
     const tabEl = makeTabEl(0, 50);
     beginTabDrag(tabEl, pointerEvt("pointerdown", { clientX: 10 }), "leaf:a", "a", threeTabRects, vi.fn());
 
     expect(dispatchSelectStart()).toBe(true);
     expect(document.documentElement.dataset.dragCursor).toBeUndefined();
-    expect(document.documentElement.style.userSelect).toBe("");
 
     window.dispatchEvent(pointerEvt("pointerup", { clientX: 10 }));
   });
 
-  it("engages the full lock — grabbing cursor and user-select: none — once the drag threshold is crossed", () => {
+  it("engages the full lock — grabbing cursor, selectstart still prevented — once the drag threshold is crossed", () => {
     const tabEl = makeTabEl(0, 50);
     beginTabDrag(tabEl, pointerEvt("pointerdown", { clientX: 10 }), "leaf:a", "a", threeTabRects, vi.fn());
 
     window.dispatchEvent(pointerEvt("pointermove", { clientX: 80 }));
 
     expect(document.documentElement.dataset.dragCursor).toBe("grabbing");
-    expect(document.documentElement.style.userSelect).toBe("none");
     expect(dispatchSelectStart()).toBe(true);
 
     window.dispatchEvent(pointerEvt("pointerup", { clientX: 80 }));
+  });
+
+  it("never writes document.documentElement.style.userSelect — see dragLock.ts's own doc comment for why that write was dropped", () => {
+    const tabEl = makeTabEl(0, 50);
+    beginTabDrag(tabEl, pointerEvt("pointerdown", { clientX: 10 }), "leaf:a", "a", threeTabRects, vi.fn());
+
+    window.dispatchEvent(pointerEvt("pointermove", { clientX: 80 }));
+    expect(document.documentElement.style.userSelect).toBe("");
+
+    window.dispatchEvent(pointerEvt("pointerup", { clientX: 80 }));
+    expect(document.documentElement.style.userSelect).toBe("");
   });
 
   it("clears the lock on pointerup", () => {
