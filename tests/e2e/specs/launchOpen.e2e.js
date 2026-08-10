@@ -36,6 +36,6 @@ describe("file-manager launch argument", () => {
     expect(thirdInstance.status).toBe(0);
 
     const dataPane = await $(".data-pane");
-    await dataPane.waitForExist({ timeout: 10000 });
+    await dataPane.waitForDisplayed({ timeout: 10000 });
   });
 });
