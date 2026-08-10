@@ -6,6 +6,7 @@ import {
   clampHeight,
   clampWidth,
   clampToContainer,
+  rebaselineRatio,
   WIDTH_MIN,
   loadExplorerWidth,
   saveExplorerWidth,
@@ -66,6 +67,56 @@ describe("clampToContainer", () => {
 
   it("never returns less than min, even when the container is smaller than min + reserved", () => {
     expect(clampToContainer(50, WIDTH_MIN, 300, 204)).toBe(WIDTH_MIN);
+  });
+});
+
+describe("rebaselineRatio", () => {
+  const clampTerminalWidth = (value: number, containerWidth: number): number => clampToContainer(value, WIDTH_MIN, containerWidth);
+
+  it("returns null for a container that is zero, negative, or NaN — \"change nothing\"", () => {
+    expect(rebaselineRatio(300, 0, clampTerminalWidth)).toBeNull();
+    expect(rebaselineRatio(300, -100, clampTerminalWidth)).toBeNull();
+    expect(rebaselineRatio(300, NaN, clampTerminalWidth)).toBeNull();
+  });
+
+  it("clamps before dividing, not after: a pixel value past the container's max never yields a ratio above 1 (issue #417)", () => {
+    // 592 no longer fits a 396px container (max = 396 - 204 = 192). Taking the
+    // ratio from the raw 592 would give 592/396 = 1.4949…; clamping first
+    // gives the pixel that actually fits and the ratio that describes it.
+    expect(rebaselineRatio(592, 396, clampTerminalWidth)).toEqual({ pixel: 192, ratio: 192 / 396 });
+  });
+
+  it("the returned ratio never exceeds 1, even when the clamp floor beats the container", () => {
+    // A 100px container is smaller than WIDTH_MIN (140) itself, so
+    // clampToContainer's floor and ceiling collapse to the same point (140,
+    // above the container) — clampToContainer(140, 140, 100, 204) === 140.
+    // Taking the raw ratio would give 140/100 = 1.4. This is the one regime
+    // where `Math.min(1, ...)` is not inert (see rebaselineRatio's own doc
+    // comment): applied downstream at any container size, a ratio of 1 and a
+    // ratio of 1.4 both saturate to the same pixel value regardless, so this
+    // assertion pins the returned value's own range, not a behavioural
+    // difference in how it renders.
+    expect(rebaselineRatio(300, 100, clampTerminalWidth)).toEqual({ pixel: 140, ratio: 1 });
+  });
+
+  it("round-trip identity: clamp(round(ratio * container)) always reproduces the clamped pixel", () => {
+    const cases: Array<[number, number]> = [
+      [592, 396],
+      [300, 1000],
+      [140, 100],
+      [900, 1000],
+      [50, 300],
+    ];
+    for (const [pixel, container] of cases) {
+      const next = rebaselineRatio(pixel, container, clampTerminalWidth);
+      expect(next).not.toBeNull();
+      const { pixel: clampedPixel, ratio } = next!;
+      expect(clampToContainer(Math.round(ratio * container), WIDTH_MIN, container)).toBe(clampedPixel);
+    }
+  });
+
+  it("honours a different clamp function: the explorer's own EXPLORER_WIDTH_MAX ceiling", () => {
+    expect(rebaselineRatio(700, 1000, clampExplorerToContainer)).toEqual({ pixel: 600, ratio: 0.6 });
   });
 });
 
