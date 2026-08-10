@@ -1,6 +1,26 @@
-html.tab-drag-active,
-html.tab-drag-active * {
-  cursor: pointer !important;
+/* Forces one cursor across the entire app for the duration of a drag,
+   whatever sits under the pointer. Set by `ui/dragLock.ts` on
+   <html>; one explicit rule per `DragCursor` value.
+
+   `!important`, and matching every element directly rather than relying on
+   inheritance from <html>, because an inline `style.cursor` write on an
+   ancestor loses to WebKit's auto-cursor-over-editable-content heuristic the
+   moment the pointer crosses into a `.cm-content` region — nothing in the
+   cascade gives that element an explicit value there, and inheritance alone
+   is not enough. A rule matching the element directly always wins over that
+   heuristic instead. This exact pattern is already proven on this app's
+   WebKit target by the table-row drag it replaces. */
+html[data-drag-cursor="grabbing"],
+html[data-drag-cursor="grabbing"] * {
+  cursor: grabbing !important;
+}
+html[data-drag-cursor="col-resize"],
+html[data-drag-cursor="col-resize"] * {
+  cursor: col-resize !important;
+}
+html[data-drag-cursor="row-resize"],
+html[data-drag-cursor="row-resize"] * {
+  cursor: row-resize !important;
 }
 
 :root {
