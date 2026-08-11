@@ -1,11 +1,4 @@
-/** Last path segment, with any trailing slash stripped; falls back to the full path for "/" or a single-segment path. */
-export function folderName(path: string): string {
-  const trimmed = path.endsWith("/") && path !== "/" ? path.slice(0, -1) : path;
-  const lastSlash = trimmed.lastIndexOf("/");
-  if (lastSlash === -1) return trimmed;
-  const segment = trimmed.slice(lastSlash + 1);
-  return segment === "" ? trimmed : segment;
-}
+import { basename } from "../util/path";
 
 export interface TitleState {
   cwd: string;
@@ -29,7 +22,7 @@ export interface TitleState {
 
 /** Composes the display title: `folder`, or `folder — label` when a program is running. */
 export function computeTabTitle(state: TitleState): string {
-  const folder = folderName(state.cwd);
+  const folder = basename(state.cwd);
   const label = state.program ? (state.explicitTitle ?? state.program) : null;
   return label ? `${folder} — ${label}` : folder;
 }
