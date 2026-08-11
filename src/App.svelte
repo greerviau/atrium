@@ -110,6 +110,19 @@
   let explorerWidth = $state(loadExplorerWidth());
   let terminalHeight = $state(initialLayout.height);
   let terminalWidth = $state(initialLayout.width);
+  // The width the user asked the terminal panel to be, while docked
+  // left/right — as opposed to `terminalWidth`, the width it is actually
+  // rendered at. The two differ exactly while `.main` has no room for the
+  // preference, and the gap closes again the moment the room comes back
+  // (issue #427). Which field is the durable memory switches on whether the
+  // clamp is currently binding, not on which field a caller happens to
+  // touch: while the clamp does NOT bind, `terminalWidthRatio` is the
+  // memory and this merely shadows the rendered width — a plain
+  // proportional rescale (window resize, sidebar toggle, mount) rewrites it
+  // too, with no gesture involved. While the clamp DOES bind — a squeeze —
+  // this is the memory instead, and the ratio (now above 1) carries the
+  // squeeze; nothing rewrites this field until the squeeze lifts.
+  let terminalWidthPreferred = $state(initialLayout.width);
   let appEl: HTMLElement | undefined = $state();
   let mainEl: HTMLDivElement | undefined = $state();
 
@@ -125,12 +138,17 @@
 
   // Every write to `explorerRatio`/`terminalWidthRatio`/`terminalHeightRatio`
   // goes through one of these three wrappers, and nothing else in this file
-  // assigns to them. Each re-establishes a (pixel value, ratio) pair against a
-  // live container: clamp the pixel into the container, then take the ratio
-  // from the clamped value (see `rebaselineRatio`). Holding that in one place
-  // is what stops the rule from being re-derived, and half-derived, at each of
-  // the seven moments a ratio has to be established — which is how #416 and
-  // #417 happened.
+  // assigns to them. Two of the three — the explorer's and the terminal
+  // height's — re-establish a (pixel value, ratio) pair against a live
+  // container by clamping the pixel into the container first, then taking
+  // the ratio from the clamped value (see `rebaselineRatio`). The terminal's
+  // width is the one dimension that does NOT follow that clamp-first rule:
+  // its re-baseline takes the ratio from the unclamped preference instead,
+  // which is the whole of issue #427 — see `rebaselineTerminalWidth`'s own
+  // doc comment for why. Holding the other two in one place is what stops
+  // the rule from being re-derived, and half-derived, at each of the seven
+  // moments a ratio has to be established — which is how #416 and #417
+  // happened.
   const clampTerminalWidth = (value: number, containerWidth: number): number =>
     clampToContainer(value, WIDTH_MIN, containerWidth);
   const clampTerminalHeight = (value: number, containerHeight: number): number =>
@@ -143,11 +161,57 @@
     explorerRatio = next.ratio;
   }
 
+  /**
+   * The terminal width's own re-baseline, which cannot use `rebaselineRatio`:
+   * it takes the ratio from `terminalWidthPreferred` *unclamped*, where every
+   * other ratio in the app clamps its pixel value into the container first.
+   *
+   * That difference is the whole of issue #427. Clamping first is what makes a
+   * ratio's round trip exact (see `rebaselineRatio`), but it also means a
+   * container too small to hold the panel silently rewrites the panel's
+   * recorded size to whatever fits — so a sidebar drag wide enough to squeeze
+   * the terminal destroyed the width the user had chosen, and nothing could
+   * give it back until the next launch. Here the preference is the memory that
+   * round-trips, and the ratio is derived from it, so a squeeze leaves both
+   * untouched.
+   *
+   * The ratio may therefore exceed 1, meaning "the panel wants more of `.main`
+   * than `.main` can give". That is not a drift bug (the failure mode
+   * `rebaselineRatio`'s clamp-first rule exists to prevent); it is the signal
+   * `rescaleTerminalWidth` reads to tell a squeeze from a deliberate layout
+   * change, and it can never be applied as a width, because any ratio at or
+   * above 1 always lands above `clampTerminalWidth`'s ceiling.
+   */
   function rebaselineTerminalWidth(containerWidth: number): void {
-    const next = rebaselineRatio(terminalWidth, containerWidth, clampTerminalWidth);
-    if (!next) return;
-    terminalWidth = next.pixel;
-    terminalWidthRatio = next.ratio;
+    if (!Number.isFinite(containerWidth) || containerWidth <= 0) return;
+    terminalWidthRatio = terminalWidthPreferred / containerWidth;
+    terminalWidth = clampTerminalWidth(terminalWidthPreferred, containerWidth);
+  }
+
+  /**
+   * Re-derives the panel's width for a container change that is meant to
+   * rescale it proportionally: a window resize (issue #301), a sidebar
+   * visibility toggle (issue #402), or the first pass after mount.
+   *
+   * The `containerWidth` clamp is what distinguishes the two cases the fix for
+   * issue #427 turns on. When it does not bind, the proportional share fits,
+   * the user is looking at a layout they deliberately chose, and that share
+   * becomes the new preference. When it *reduces* the share — the editor would
+   * otherwise be pushed below its reserved minimum — the panel is being
+   * squeezed, which is a temporary property of the container and not a choice:
+   * the preference and the ratio are both left alone, and the panel renders as
+   * much of the preference as currently fits, so it grows back on its own as
+   * soon as the sidebar narrows or the window widens.
+   */
+  function rescaleTerminalWidth(ratio: number, containerWidth: number): void {
+    const share = Math.round(ratio * containerWidth);
+    const fitted = clampTerminalWidth(share, containerWidth);
+    if (fitted < share) {
+      terminalWidth = clampTerminalWidth(terminalWidthPreferred, containerWidth);
+      return;
+    }
+    terminalWidthPreferred = fitted;
+    terminalWidth = fitted;
   }
 
   function rebaselineTerminalHeight(containerHeight: number): void {
@@ -183,6 +247,14 @@
    * ratio already established and rescales from it, rather than rendering a
    * persisted value that was never checked against any container size and
    * could squeeze the editor to 0 width/height.
+   *
+   * The two arms are no longer symmetric. The height arm still applies its
+   * ratio directly — nothing squeezes the terminal's height but the window
+   * itself, and a window shrink is exactly the proportional rescale this
+   * function exists to perform. The width arm cannot: the sidebar can also
+   * squeeze the width, and a squeeze must not overwrite the preference the
+   * way a deliberate rescale does, so it goes through `rescaleTerminalWidth`
+   * instead, which tells the two apart (issue #427).
    */
   function syncTerminalToContainer(containerWidth: number, containerHeight: number): void {
     if (Number.isFinite(containerHeight) && containerHeight > 0) {
@@ -196,7 +268,7 @@
       if (terminalWidthRatio === null) {
         rebaselineTerminalWidth(containerWidth);
       } else if ($terminalPosition !== "bottom") {
-        terminalWidth = clampToContainer(Math.round(terminalWidthRatio * containerWidth), WIDTH_MIN, containerWidth);
+        rescaleTerminalWidth(terminalWidthRatio, containerWidth);
       }
     }
   }
@@ -875,27 +947,26 @@
     beginDragLock("col-resize");
     const startX = event.clientX;
     const startWidth = explorerWidth;
-    // The terminal's own width at the moment the gesture began. Every move
-    // re-clamps *this* value, never the current one, so a drag that overshoots
-    // the point where the terminal still fits and then comes back restores it
-    // exactly, instead of ratcheting it down one move at a time and never
-    // giving it back.
-    const startTerminalWidth = terminalWidth;
     function onMove(e: PointerEvent): void {
       const appWidth = appEl?.clientWidth ?? Infinity;
       explorerWidth = clampExplorerToContainer(startWidth + (e.clientX - startX), appWidth);
       // Widening the sidebar shrinks `.main`. Past the point where the
       // terminal panel no longer fits inside it, the terminal keeps its
       // inline width (`flex-shrink: 0`) and the editor — the only flexible
-      // child — is squeezed to 0 and then clipped off-screen. Clamping the
-      // terminal here keeps the editor at its reserved minimum instead, and
-      // keeps the pixel value the drag-end is about to take a ratio from
-      // inside the container it is measured against (issue #417). Guarded on
-      // the dock position because `terminalWidth` is only the active
-      // dimension while docked left/right.
+      // child — is squeezed to 0 and then clipped off-screen. Clamping
+      // `terminalWidthPreferred` here — not a gesture-local starting value —
+      // keeps the editor at its reserved minimum, and a drag that overshoots
+      // the point where the terminal still fits and then comes back restores
+      // it exactly, instead of ratcheting it down one move at a time and
+      // never giving it back: the preference is untouched by this clamp, so
+      // there is nothing to ratchet. That is also why no gesture-local
+      // capture of the terminal's starting width exists here any more — the
+      // preference already generalizes it across gestures, which is issue
+      // #427's fix. Guarded on the dock position because `terminalWidth` is
+      // only the active dimension while docked left/right.
       if (!appEl || $terminalPosition === "bottom") return;
       const content = mainContentWidth(appEl.clientWidth, explorerWidth);
-      if (content > 0) terminalWidth = clampTerminalWidth(startTerminalWidth, content);
+      if (content > 0) terminalWidth = clampTerminalWidth(terminalWidthPreferred, content);
     }
     // Re-baselines terminalWidthRatio here too, not just explorerRatio: an
     // explorer drag changes `.main`'s content width while (by design,
@@ -910,7 +981,11 @@
     // same reason mainContentWidth exists at all (see its own doc comment):
     // this site runs in the same handler that just repeatedly wrote
     // explorerWidth via onMove, so a direct DOM read here could still reflect
-    // a stale, pre-drag sidebar width.
+    // a stale, pre-drag sidebar width. `rebaselineTerminalWidth` now takes
+    // the ratio from `terminalWidthPreferred`, not from the live (possibly
+    // clamped) `terminalWidth`, so this call is harmless while the panel is
+    // squeezed: it records a ratio above 1 — the squeeze itself — rather
+    // than overwriting the preference with whatever fits (issue #427).
     function onUp(): void {
       endDragLock();
       window.removeEventListener("pointermove", onMove);
@@ -1192,9 +1267,15 @@
       if ($terminalPosition === "bottom") {
         if (mainEl) rebaselineTerminalHeight(mainEl.clientHeight);
       } else {
-        if (mainEl) rebaselineTerminalWidth(mainEl.clientWidth);
+        // Uses the analytic mainContentWidth, not mainEl.clientWidth, for
+        // consistency with every other container-width derivation in this
+        // file (see mainContentWidth's own doc comment) — pre-existing here
+        // (this handler never writes explorerWidth itself, so the direct DOM
+        // read was never actually stale), but a direct read is still the odd
+        // one out among seven sites that otherwise agree on one source.
+        if (appEl) rebaselineTerminalWidth(mainContentWidth(appEl.clientWidth, explorerWidth));
       }
-      saveTerminalLayout({ position: $terminalPosition, height: terminalHeight, width: terminalWidth });
+      saveTerminalLayout({ position: $terminalPosition, height: terminalHeight, width: terminalWidthPreferred });
     }
     let onMove: (e: PointerEvent) => void;
     if ($terminalPosition === "bottom") {
@@ -1209,8 +1290,21 @@
       const startWidth = terminalWidth;
       const sign = $terminalPosition === "left" ? 1 : -1;
       onMove = (e: PointerEvent): void => {
-        const available = mainEl?.clientWidth ?? Infinity;
+        // Same mainContentWidth consistency note as onUp above.
+        const available = appEl ? mainContentWidth(appEl.clientWidth, explorerWidth) : Infinity;
+        // Records the clamped value the resizer visibly stopped at, not the
+        // raw pointer offset — the width the gesture ends at *is* the width
+        // the user chose, so it is what becomes the new preference below.
+        // Starting the gesture from `terminalWidth` (not the preference) is
+        // also deliberate: the resizer has to move from what is actually on
+        // screen, so dragging it while the panel is squeezed is a fresh
+        // deliberate choice that correctly replaces the preference. One
+        // known edge case this does not special-case: a "drag" that is
+        // really a click-and-release with a 1px jitter while squeezed still
+        // runs onMove once and records the squeezed width as the new
+        // preference, same as a real drag would.
         terminalWidth = clampToContainer(startWidth + sign * (e.clientX - startX), WIDTH_MIN, available);
+        terminalWidthPreferred = terminalWidth;
       };
     }
     window.addEventListener("pointermove", onMove);
