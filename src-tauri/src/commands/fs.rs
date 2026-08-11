@@ -1,7 +1,9 @@
 use crate::error::AppError;
-use crate::link_resolve::{self, PathCandidate};
+use crate::link_resolve::{self, PathCandidate, ResolvedPath};
 use crate::state::AppState;
+use crate::workspace::standalone::STANDALONE_WORKSPACE_ID;
 use crate::workspace::{DirEntry, Workspace};
+use serde::Serialize;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -212,16 +214,163 @@ pub async fn fs_import_external_paths(
         .await
 }
 
+/// What terminal-link resolution should resolve against for a given
+/// workspace. Three states, deliberately distinct -- see §4.6 of the #406
+/// plan for why collapsing `Rootless` and `Unusable` is a security-relevant
+/// defect rather than a tidiness question.
+enum ResolutionRoot {
+    /// A usable workspace root.
+    Rooted(String),
+    /// Genuinely no root: no project is open (so `"local"` was never
+    /// registered by `workspace_set_root`), or the workspace is root-less by
+    /// design (`StandaloneWorkspace`). Resolution falls back to the shell's
+    /// cwd, `~`, and absolute paths, and everything it finds is external.
+    Rootless,
+    /// A root is configured but unusable -- today only a `LocalWorkspace`
+    /// whose path is not valid UTF-8, since `root()` returns `""` for it
+    /// (`local.rs`, `self.root.to_str().unwrap_or("")`). Must resolve
+    /// nothing, exactly as today, rather than declare the whole project
+    /// external.
+    Unusable,
+}
+
+/// The pure decision behind `resolution_root`, split out so it's testable
+/// without a live `AppState` -- `root` is `None` when `workspace_id` is not
+/// registered at all.
+fn classify_root(workspace_id: &str, root: Option<&str>) -> ResolutionRoot {
+    let Some(root) = root else {
+        return ResolutionRoot::Rootless; // no project open
+    };
+    if !root.is_empty() {
+        ResolutionRoot::Rooted(root.to_string())
+    } else if workspace_id == STANDALONE_WORKSPACE_ID {
+        ResolutionRoot::Rootless
+    } else {
+        ResolutionRoot::Unusable
+    }
+}
+
+fn resolution_root(state: &State<'_, AppState>, workspace_id: &str) -> ResolutionRoot {
+    let root = workspace(state, workspace_id)
+        .ok()
+        .map(|ws| ws.root().to_string());
+    classify_root(workspace_id, root.as_deref())
+}
+
 #[tauri::command]
 pub async fn fs_resolve_candidates(
     state: State<'_, AppState>,
     workspace_id: String,
     candidates: Vec<PathCandidate>,
-) -> Result<Vec<Option<String>>, AppError> {
-    let root = workspace(&state, &workspace_id)?.root().to_string();
-    tokio::task::spawn_blocking(move || link_resolve::resolve_candidates(&candidates, &root))
-        .await
-        .map_err(|err| AppError::Other(format!("file-path resolution task failed: {err}")))
+) -> Result<Vec<Option<ResolvedPath>>, AppError> {
+    let root = match resolution_root(&state, &workspace_id) {
+        ResolutionRoot::Rooted(root) => Some(root),
+        ResolutionRoot::Rootless => None,
+        // Fail closed: nothing resolves, and the filesystem is never touched.
+        ResolutionRoot::Unusable => return Ok(vec![None; candidates.len()]),
+    };
+    tokio::task::spawn_blocking(move || {
+        link_resolve::resolve_candidates(&candidates, root.as_deref())
+    })
+    .await
+    .map_err(|err| AppError::Other(format!("file-path resolution task failed: {err}")))
+}
+
+/// One authorized terminal link: the path to open, and the workspace whose
+/// grant now authorizes it -- which is also the workspace the frontend must
+/// read it through.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthorizedLink {
+    pub path: String,
+    pub workspace_id: String,
+}
+
+/// Authorizes one terminal file-path link at click time -- the only place a
+/// terminal link produces an external-file grant (§4.2, §4.2a of the #406
+/// plan). Only called by the frontend for a link whose resolution reported
+/// `external: true`; an in-workspace link opens directly, with no grant and
+/// no round trip, because `resolve_within_root` already enforces containment
+/// on the read path independently of anything the terminal did.
+///
+/// A separate command, rather than widening `fs_grant_external_file`'s
+/// `require_recent_external_open` gate with a third provenance: a terminal
+/// link activation is a renderer-side mouse event on a renderer-side link,
+/// and there is no backend-observed event corresponding to it -- there
+/// cannot be one without the backend hit-testing the DOM. A third origin
+/// would be definitionally weaker than both of that gate's existing origins,
+/// so it stays out, and this command keeps its own authorization narrow
+/// instead: grant creation happens in one backend-owned place, once per user
+/// activation, for one candidate.
+///
+/// Be honest about what this command's own gate is and is not. It is not a
+/// barrier against a compromised renderer: the renderer supplies `candidate`,
+/// so it can ask to authorize any absolute path it likes, and re-resolving in
+/// the backend constrains nothing -- a compromised renderer already has
+/// arbitrary local execution via the PTY, so nothing new becomes reachable
+/// (the same argument `recently_opened_externally`'s own doc comment makes
+/// for the OS-open origin, only stronger here since the surface in question
+/// *is* the PTY). What the re-resolution *does* guard against is a
+/// non-compromised renderer echoing a stale or manipulated result: this
+/// command re-resolves `candidate` itself and trusts only that answer.
+///
+/// Re-resolution deliberately uses `resolve_exact_candidate`, not
+/// `resolve_candidates`: falling back to the workspace-wide partial-suffix
+/// walk here would let a click on a link whose external target vanished
+/// between render and click silently authorize a *different*, unrelated
+/// in-workspace file that merely shares a path suffix (issue #406 round-2
+/// review). If the exact tier no longer finds the candidate, the link simply
+/// no longer resolves.
+#[tauri::command]
+pub async fn fs_authorize_terminal_link(
+    state: State<'_, AppState>,
+    workspace_id: String,
+    candidate: PathCandidate,
+) -> Result<AuthorizedLink, AppError> {
+    let root = match resolution_root(&state, &workspace_id) {
+        ResolutionRoot::Rooted(root) => Some(root),
+        ResolutionRoot::Rootless => None,
+        ResolutionRoot::Unusable => {
+            return Err(AppError::InvalidPath(
+                "terminal link no longer resolves".to_string(),
+            ))
+        }
+    };
+    let resolved = tokio::task::spawn_blocking(move || {
+        link_resolve::resolve_exact_candidate(&candidate, root.as_deref())
+    })
+    .await
+    .map_err(|err| AppError::Other(format!("file-path resolution task failed: {err}")))?
+    .ok_or_else(|| AppError::InvalidPath("terminal link no longer resolves".to_string()))?;
+
+    // Re-resolution can disagree with the frontend's cached classification
+    // (the file moved, the project changed) -- trust this one, and grant
+    // nothing if it is in-workspace after all.
+    if !resolved.external {
+        return Ok(AuthorizedLink {
+            path: resolved.path,
+            workspace_id,
+        });
+    }
+
+    // The grant needs a registered workspace to live on. With a project
+    // open that is the requested one; with none, `"local"` is absent from
+    // the registry and `StandaloneWorkspace` -- registered once at startup
+    // in `main.rs`'s `.setup()` -- is the workspace that holds standalone
+    // tabs anyway.
+    let (host_id, host) = match workspace(&state, &workspace_id) {
+        Ok(host) => (workspace_id, host),
+        Err(_) => {
+            let id = STANDALONE_WORKSPACE_ID.to_string();
+            let host = workspace(&state, &id)?;
+            (id, host)
+        }
+    };
+    host.grant_external_file(&resolved.path).await?;
+    Ok(AuthorizedLink {
+        path: resolved.path,
+        workspace_id: host_id,
+    })
 }
 
 /// Classifies each of `paths` as a directory (`true`) or not (`false`),
@@ -274,6 +423,45 @@ pub async fn fs_grant_external_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // `classify_root` -- the pure decision behind `resolution_root` (§4.6,
+    // §6.2 of the #406 plan). `None` means "not registered."
+    #[test]
+    fn classify_root_is_rooted_for_a_registered_workspace_with_a_usable_root() {
+        assert!(matches!(
+            classify_root("local", Some("/some/project")),
+            ResolutionRoot::Rooted(root) if root == "/some/project"
+        ));
+    }
+
+    #[test]
+    fn classify_root_is_rootless_for_an_unregistered_workspace_id() {
+        assert!(matches!(
+            classify_root("local", None),
+            ResolutionRoot::Rootless
+        ));
+    }
+
+    #[test]
+    fn classify_root_is_rootless_for_the_standalone_id_with_an_empty_root() {
+        assert!(matches!(
+            classify_root(STANDALONE_WORKSPACE_ID, Some("")),
+            ResolutionRoot::Rootless
+        ));
+    }
+
+    // The second half of the MF3 guard: a registered "local" workspace
+    // reporting an empty root (the non-UTF8-path case, `local.rs`'s
+    // `self.root.to_str().unwrap_or("")`) must classify as `Unusable`, not
+    // `Rootless` -- collapsing the two would silently grant and `⌁`-badge a
+    // user's own project files the moment the root stops being representable.
+    #[test]
+    fn classify_root_is_unusable_for_local_with_an_empty_root() {
+        assert!(matches!(
+            classify_root("local", Some("")),
+            ResolutionRoot::Unusable
+        ));
+    }
 
     #[cfg(unix)]
     #[tokio::test]

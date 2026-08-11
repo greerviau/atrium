@@ -2,14 +2,25 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { Terminal } from "@xterm/xterm";
 import type { ILink, ILinkProvider, IMarker } from "@xterm/xterm";
 import { registerLinkProviders } from "../../src/lib/terminal/linkProviders";
-import { shellOpenExternal, fsResolveCandidates } from "../../src/lib/ipc/commands";
+import {
+  shellOpenExternal,
+  fsResolveCandidates,
+  fsAuthorizeTerminalLink,
+  type ResolvedPath,
+} from "../../src/lib/ipc/commands";
 import { showErrorToast } from "../../src/lib/stores/errorToast";
 import { openFileReportingErrors } from "../../src/lib/stores/tabs";
 
 vi.mock("../../src/lib/ipc/commands", () => ({
   shellOpenExternal: vi.fn(),
   fsResolveCandidates: vi.fn(() => Promise.resolve([])),
+  fsAuthorizeTerminalLink: vi.fn(),
 }));
+
+/** Shorthand for an in-workspace `fsResolveCandidates` result. */
+function inWorkspace(path: string): ResolvedPath {
+  return { path, external: false };
+}
 
 vi.mock("../../src/lib/stores/errorToast", () => ({
   showErrorToast: vi.fn(),
@@ -166,12 +177,13 @@ describe("PrLinkProvider.activate", () => {
 describe("FilePathLinkProvider.activate", () => {
   beforeEach(() => {
     vi.mocked(fsResolveCandidates).mockReset();
+    vi.mocked(fsAuthorizeTerminalLink).mockReset();
     vi.mocked(openFileReportingErrors).mockReset();
     vi.mocked(showErrorToast).mockReset();
   });
 
   it("opens the resolved file with parsed line/col on a modifier click", async () => {
-    vi.mocked(fsResolveCandidates).mockResolvedValue(["/repo/src/lib/foo.ts"]);
+    vi.mocked(fsResolveCandidates).mockResolvedValue([inWorkspace("/repo/src/lib/foo.ts")]);
     vi.mocked(openFileReportingErrors).mockReturnValue(undefined);
     const { terminal, providers } = fakeTerminal("error at src/lib/foo.ts:42:7");
     registerLinkProviders(terminal, "local", "/repo");
@@ -184,7 +196,7 @@ describe("FilePathLinkProvider.activate", () => {
   });
 
   it("does not call openFileReportingErrors on a plain click without a modifier", async () => {
-    vi.mocked(fsResolveCandidates).mockResolvedValue(["/repo/src/lib/foo.ts"]);
+    vi.mocked(fsResolveCandidates).mockResolvedValue([inWorkspace("/repo/src/lib/foo.ts")]);
     const { terminal, providers } = fakeTerminal("error at src/lib/foo.ts:42:7");
     registerLinkProviders(terminal, "local", "/repo");
 
@@ -193,6 +205,65 @@ describe("FilePathLinkProvider.activate", () => {
 
     await new Promise((r) => setTimeout(r, 0));
     expect(openFileReportingErrors).not.toHaveBeenCalled();
+  });
+
+  it("does not call fsAuthorizeTerminalLink for an in-workspace link (MF2 guard: no round trip, no walk on the click path)", async () => {
+    vi.mocked(fsResolveCandidates).mockResolvedValue([inWorkspace("/repo/src/lib/foo.ts")]);
+    const { terminal, providers } = fakeTerminal("error at src/lib/foo.ts:42:7");
+    registerLinkProviders(terminal, "local", "/repo");
+
+    const link = await getFirstLink(providers[1]);
+    link.activate(modifierClick(), link.text);
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fsAuthorizeTerminalLink).not.toHaveBeenCalled();
+    expect(openFileReportingErrors).toHaveBeenCalledWith("/repo/src/lib/foo.ts", { line: 42, col: 7 });
+  });
+
+  it("authorizes an external link before opening it, and opens the path/workspaceId the authorize call returned, not the ones resolution returned", async () => {
+    vi.mocked(fsResolveCandidates).mockResolvedValue([{ path: "/etc/resolution-time-path.txt", external: true }]);
+    vi.mocked(fsAuthorizeTerminalLink).mockResolvedValue({
+      path: "/etc/authorized-path.txt",
+      workspaceId: "standalone",
+    });
+    const { terminal, providers } = fakeTerminal("cat /etc/resolution-time-path.txt");
+    registerLinkProviders(terminal, "local", "/repo");
+
+    const link = await getFirstLink(providers[1]);
+    link.activate(modifierClick(), link.text);
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(fsAuthorizeTerminalLink).toHaveBeenCalledWith(
+      "local",
+      expect.objectContaining({ raw: "/etc/resolution-time-path.txt" }),
+    );
+    expect(openFileReportingErrors).toHaveBeenCalledWith("/etc/authorized-path.txt", undefined, "standalone");
+  });
+
+  it("toasts and does not open the file when fsAuthorizeTerminalLink rejects", async () => {
+    vi.mocked(fsResolveCandidates).mockResolvedValue([{ path: "/etc/resolution-time-path.txt", external: true }]);
+    vi.mocked(fsAuthorizeTerminalLink).mockRejectedValue(new Error("terminal link no longer resolves"));
+    const { terminal, providers } = fakeTerminal("cat /etc/resolution-time-path.txt");
+    registerLinkProviders(terminal, "local", "/repo");
+
+    const link = await getFirstLink(providers[1]);
+    link.activate(modifierClick(), link.text);
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(showErrorToast).toHaveBeenCalledWith(expect.stringContaining("terminal link no longer resolves"));
+    expect(openFileReportingErrors).not.toHaveBeenCalled();
+  });
+
+  it("resolves the whole batch to nulls and creates no links when fsResolveCandidates rejects", async () => {
+    vi.mocked(fsResolveCandidates).mockRejectedValue(new Error("IPC transport closed"));
+    const { terminal, providers } = fakeTerminal("error at src/lib/foo.ts:42:7");
+    registerLinkProviders(terminal, "local", "/repo");
+
+    const links = await new Promise<ILink[] | undefined>((resolve) => {
+      providers[1].provideLinks(1, resolve);
+    });
+
+    expect(links).toBeUndefined();
   });
 
   it("resolves an old scrollback line against the cwd in effect when it was printed, not the cwd at click time (issue #305, MF3)", async () => {
@@ -205,7 +276,9 @@ describe("FilePathLinkProvider.activate", () => {
     });
     vi.mocked(fsResolveCandidates).mockImplementation((_workspaceId, candidates) =>
       Promise.resolve(
-        candidates.map((c) => (c.cwdHint === "/repo" ? "/repo/docs/plan.md" : "/repo/project/docs/plan.md")),
+        candidates.map((c) =>
+          inWorkspace(c.cwdHint === "/repo" ? "/repo/docs/plan.md" : "/repo/project/docs/plan.md"),
+        ),
       ),
     );
     const handle = registerLinkProviders(terminal, "local", "/repo");
@@ -229,7 +302,7 @@ describe("FilePathLinkProvider.activate", () => {
   });
 
   it("re-resolves relative candidates against an updated cwd hint after setCwdHint, for a line at or after the cd", async () => {
-    vi.mocked(fsResolveCandidates).mockResolvedValue(["/repo/project/docs/plan.md"]);
+    vi.mocked(fsResolveCandidates).mockResolvedValue([inWorkspace("/repo/project/docs/plan.md")]);
     const { terminal, providers } = fakeTerminal("open docs/plan.md");
     const handle = registerLinkProviders(terminal, "local", "/repo");
     handle.setCwdHint("/repo/project"); // fake's registerMarker defaults to line 0, at-or-before the queried line 1
@@ -243,7 +316,7 @@ describe("FilePathLinkProvider.activate", () => {
   });
 
   it("strips surrounding quotes before sending a quoted candidate for resolution", async () => {
-    vi.mocked(fsResolveCandidates).mockResolvedValue(["/repo/my file.txt"]);
+    vi.mocked(fsResolveCandidates).mockResolvedValue([inWorkspace("/repo/my file.txt")]);
     const { terminal, providers } = fakeTerminal("cat: 'my file.txt': No such file or directory");
     registerLinkProviders(terminal, "local", "/repo");
 
@@ -291,7 +364,7 @@ describe("FilePathLinkProvider.activate", () => {
     } as unknown as Terminal;
 
     vi.mocked(fsResolveCandidates).mockImplementation((_workspaceId, candidates) =>
-      Promise.resolve(candidates.map((c) => (c.cwdHint === "/repo/sub_b" ? "/repo/sub_b/docs/plan.md" : null))),
+      Promise.resolve(candidates.map((c) => (c.cwdHint === "/repo/sub_b" ? inWorkspace("/repo/sub_b/docs/plan.md") : null))),
     );
 
     const handle = registerLinkProviders(terminal, "local", "/repo");
@@ -365,7 +438,7 @@ describe("FilePathLinkProvider — N1 real-terminal regression (screen clear / a
   }
 
   it("does not hang when the real terminfo clear sequence disposes a still-current segment's marker", async () => {
-    vi.mocked(fsResolveCandidates).mockResolvedValue(["/repo/project/docs/plan.md"]);
+    vi.mocked(fsResolveCandidates).mockResolvedValue([inWorkspace("/repo/project/docs/plan.md")]);
     const { terminal, providers } = realTerminal();
     const handle = registerLinkProviders(terminal, "local", "/repo");
 
@@ -389,7 +462,7 @@ describe("FilePathLinkProvider — N1 real-terminal regression (screen clear / a
   }, 2000);
 
   it("does not hang when leaving the alt screen disposes a still-current segment's marker", async () => {
-    vi.mocked(fsResolveCandidates).mockResolvedValue(["/repo/project/docs/plan.md"]);
+    vi.mocked(fsResolveCandidates).mockResolvedValue([inWorkspace("/repo/project/docs/plan.md")]);
     const { terminal, providers } = realTerminal();
     const handle = registerLinkProviders(terminal, "local", "/repo");
 

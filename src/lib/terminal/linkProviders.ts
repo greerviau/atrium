@@ -1,8 +1,15 @@
 import type { Terminal, ILink, ILinkProvider, IMarker } from "@xterm/xterm";
 import { PR_LINK_REGEX } from "./prLinkRegex";
 import { FILE_PATH_REGEX } from "./filePathRegex";
-import { fsResolveCandidates, shellOpenExternal, type PathCandidate } from "../ipc/commands";
-import { openFileReportingErrors } from "../stores/tabs";
+import {
+  fsResolveCandidates,
+  fsAuthorizeTerminalLink,
+  shellOpenExternal,
+  type PathCandidate,
+  type ResolvedPath,
+  type AuthorizedLink,
+} from "../ipc/commands";
+import { openFileReportingErrors, type PendingSelection } from "../stores/tabs";
 import { showErrorToast, describeError } from "../stores/errorToast";
 
 /** Extracts an optional trailing `:<line>` or `:<line>:<col>` suffix from a matched candidate. */
@@ -78,7 +85,7 @@ class PrLinkProvider implements ILinkProvider {
  * scrolling) coalesce into one IPC round trip instead of one per line.
  */
 class ResolveBatcher {
-  private pending: { candidates: PathCandidate[]; resolve: (r: (string | null)[]) => void }[] = [];
+  private pending: { candidates: PathCandidate[]; resolve: (r: (ResolvedPath | null)[]) => void }[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
@@ -86,7 +93,7 @@ class ResolveBatcher {
     private delayMs = 50,
   ) {}
 
-  resolve(candidates: PathCandidate[]): Promise<(string | null)[]> {
+  resolve(candidates: PathCandidate[]): Promise<(ResolvedPath | null)[]> {
     return new Promise((resolve) => {
       this.pending.push({ candidates, resolve });
       if (this.timer) {
@@ -107,12 +114,19 @@ class ResolveBatcher {
       offsets.push(all.length);
       all.push(...entry.candidates);
     }
-    void fsResolveCandidates(this.workspaceId, all).then((results) => {
-      batch.forEach((entry, i) => {
-        const start = offsets[i];
-        entry.resolve(results.slice(start, start + entry.candidates.length));
+    void fsResolveCandidates(this.workspaceId, all)
+      .catch((err: unknown) => {
+        // Degrade to "nothing linkified" rather than leaving every pending
+        // provideLinks callback un-called forever.
+        console.warn("atrium: fs_resolve_candidates failed", err);
+        return all.map(() => null);
+      })
+      .then((results) => {
+        batch.forEach((entry, i) => {
+          const start = offsets[i];
+          entry.resolve(results.slice(start, start + entry.candidates.length));
+        });
       });
-    });
   }
 }
 
@@ -212,6 +226,11 @@ class FilePathLinkProvider implements ILinkProvider {
       return;
     }
     const cwdHint = this.cwdForLine(bufferLineNumber);
+    // The constructor-injected `workspaceId` is a resolution hint only -- the
+    // backend resolves its root at call time, so a project opened or
+    // switched after the terminal mounted is picked up automatically, and
+    // the backend overrides the id entirely when it has to place a grant
+    // somewhere else (§4.2b of the #406 plan).
     const candidates: PathCandidate[] = matches.map((m) => ({ raw: unquotePathCandidate(m[0]), cwdHint }));
     void this.batcher.resolve(candidates).then((resolved) => {
       const links: ILink[] = [];
@@ -232,12 +251,50 @@ class FilePathLinkProvider implements ILinkProvider {
             if (!(event.metaKey || event.ctrlKey)) {
               return;
             }
-            openFileReportingErrors(resolvedPath, targetLine ? { line: targetLine, col } : undefined);
+            void this.openLink(resolvedPath, candidates[i], targetLine ? { line: targetLine, col } : undefined);
           },
         });
       });
       callback(links.length > 0 ? links : undefined);
     });
+  }
+
+  /**
+   * Opens one activated terminal file-path link.
+   *
+   * An in-workspace link opens directly: no grant is involved, and
+   * `fsReadFile` enforces containment through `resolve_within_root` on its
+   * own, so a second round trip would buy nothing and would put the
+   * workspace-wide suffix walk on the click path (§4.2a of the #406 plan).
+   *
+   * An external link is authorized first, through the same grant machinery
+   * the editor's drop handler and OS "Open With" already use. The backend
+   * picks and reports the workspace the grant went on, so this module never
+   * has to infer it -- which is also what keeps it free of any store import
+   * (§4.2b).
+   *
+   * The in-workspace branch relies on the invariant that `external: false` is
+   * only ever produced when a usable workspace root exists (§4.2a), so
+   * `openFileReportingErrors`'s default `localWorkspaceId()` is always right
+   * there.
+   */
+  private async openLink(resolved: ResolvedPath, candidate: PathCandidate, selection?: PendingSelection): Promise<void> {
+    if (!resolved.external) {
+      openFileReportingErrors(resolved.path, selection);
+      return;
+    }
+    let authorized: AuthorizedLink;
+    try {
+      authorized = await fsAuthorizeTerminalLink(this.workspaceId, candidate);
+    } catch (err: unknown) {
+      // Unlike the drop handler, which swallows its grant failure because
+      // `openFileReportingErrors` surfaces the follow-on read failure
+      // anyway, this toasts directly: a failed authorize means the open is
+      // never attempted, so there would otherwise be no signal at all.
+      showErrorToast(`Couldn't open file: ${describeError(err)}`);
+      return;
+    }
+    openFileReportingErrors(authorized.path, selection, authorized.workspaceId);
   }
 }
 

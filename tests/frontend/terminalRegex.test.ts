@@ -34,6 +34,9 @@ describe("FILE_PATH_REGEX", () => {
     ["open /workspace/bin/tool:4:2", ["/workspace/bin/tool:4:2"]],
     ["failed in 'nested/build script':8", ["'nested/build script':8"]],
     ["Makefile:10:2 failed", ["Makefile:10:2"]],
+    // Issue #406: a bare `../sibling/` path now carries user-visible behavior
+    // (it resolves as an external link instead of being dropped silently).
+    ["open ../sibling/README.md", ["../sibling/README.md"]],
   ];
 
   it.each(cases)("matches candidates in %j", (line, expected) => {
