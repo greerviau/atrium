@@ -87,8 +87,8 @@ async function textEdgeOf(selector, side) {
  * elsewhere in this file) don't need this: native browser text selection
  * there extends correctly from a single interpolated move.
  */
-async function dragSelect(from, to, steps = 8) {
-  let chain = browser.action("pointer", { id: "drag" }).move({ x: from.x, y: from.y, origin: "viewport" }).down();
+async function dragSelect(from, to, steps = 8, id = "drag") {
+  let chain = browser.action("pointer", { id }).move({ x: from.x, y: from.y, origin: "viewport" }).down();
   for (let i = 1; i <= steps; i++) {
     const x = Math.round(from.x + ((to.x - from.x) * i) / steps);
     const y = Math.round(from.y + ((to.y - from.y) * i) / steps);
@@ -173,9 +173,20 @@ describe("drag cursor and text selection (issue #420)", () => {
     // `dragSelect`, not a keyboard Home/Shift+End): this is the mechanism
     // the fix actually touches (the `selectstart` guard, torn down by
     // `endDragLock()`), so it's what a regression here should be caught by.
+    //
+    // Uses a fresh pointer id ("drag2") rather than reusing "drag" from the
+    // gesture above. Measured directly: once `drawSelection()` is in play
+    // (#435), reusing the same id back-to-back for two unrelated gestures
+    // intermittently left this drag-select's own mousemove/mouseup events
+    // never reaching CodeMirror's mouse-selection tracking at all — only its
+    // mousedown did — producing a collapsed selection instead of a real one.
+    // Neither an explicit `browser.releaseActions()` nor a fixed pause
+    // between the two gestures fixed it reliably; a fresh id, which by
+    // construction carries no state from the prior gesture, did (5/5 clean
+    // runs against 0-3/5 for the other approaches tried).
     const lineStart = await textEdgeOf(".cm-line", "left");
     const lineEnd = await textEdgeOf(".cm-line", "right");
-    await dragSelect(lineStart, lineEnd);
+    await dragSelect(lineStart, lineEnd, 8, "drag2");
     const restoredSelection = await browser.execute(() => window.getSelection().toString());
     expect(restoredSelection.length).toBeGreaterThan(0);
   });
