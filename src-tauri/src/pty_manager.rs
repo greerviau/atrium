@@ -62,6 +62,29 @@ fn default_shell() -> String {
     std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
 }
 
+/// Trims trailing path separators from a cwd the OS reported, so every
+/// platform reports the same shape.
+///
+/// Windows keeps the PEB's `CurrentDirectory.DosPath` with a trailing
+/// backslash (`C:\Users\me\proj\`), while `/proc/<pid>/cwd` and macOS's
+/// `proc_pidinfo` report a bare path. `windows_style` controls whether `\`
+/// counts as a separator — it is a legal filename character on Unix, so it
+/// must only be trimmed on Windows. It is a parameter rather than a
+/// `cfg!(windows)` read inside the body so the Windows rule stays unit
+/// testable on every platform.
+///
+/// Roots are left alone: `/` would trim to the empty string, and `C:\` would
+/// trim to the *relative* path `C:` ("the current directory on drive C"),
+/// which is a different location.
+fn trim_trailing_separators(path: &str, windows_style: bool) -> &str {
+    let trimmed = path.trim_end_matches(|c| c == '/' || (windows_style && c == '\\'));
+    if trimmed.is_empty() || trimmed.ends_with(':') {
+        path
+    } else {
+        trimmed
+    }
+}
+
 /// One session's poll-tick inputs: its id, shell pid, event channel,
 /// last-reported title, and last-seen foreign foreground pid, snapshotted
 /// together while the sessions map is briefly locked (see
@@ -660,8 +683,8 @@ impl PtyManager {
         let cwd = system
             .process(Pid::from_u32(shell_pid))?
             .cwd()?
-            .to_string_lossy()
-            .into_owned();
+            .to_string_lossy();
+        let cwd = trim_trailing_separators(&cwd, cfg!(windows)).to_string();
 
         let program = foreign_pid
             .and_then(|pid| system.process(Pid::from_u32(pid)))
@@ -694,6 +717,48 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    #[test]
+    fn trim_trailing_separators_trims_windows_backslash() {
+        assert_eq!(
+            trim_trailing_separators("C:\\Users\\me\\proj\\", true),
+            "C:\\Users\\me\\proj"
+        );
+    }
+
+    #[test]
+    fn trim_trailing_separators_preserves_windows_drive_root() {
+        assert_eq!(trim_trailing_separators("C:\\", true), "C:\\");
+    }
+
+    #[test]
+    fn trim_trailing_separators_is_a_no_op_on_a_clean_unix_path() {
+        assert_eq!(
+            trim_trailing_separators("/home/me/proj", false),
+            "/home/me/proj"
+        );
+    }
+
+    #[test]
+    fn trim_trailing_separators_preserves_unix_root() {
+        assert_eq!(trim_trailing_separators("/", false), "/");
+    }
+
+    #[test]
+    fn trim_trailing_separators_trims_unix_trailing_slash() {
+        assert_eq!(
+            trim_trailing_separators("/home/me/proj/", false),
+            "/home/me/proj"
+        );
+    }
+
+    #[test]
+    fn trim_trailing_separators_keeps_a_legal_unix_backslash_filename() {
+        assert_eq!(
+            trim_trailing_separators("/home/me/we\\ird", false),
+            "/home/me/we\\ird"
+        );
     }
 
     type ReceivedTitles = Arc<Mutex<Vec<TitleSnapshot>>>;
@@ -766,7 +831,7 @@ mod tests {
         manager.subscribe(&terminal_id, channel).unwrap();
 
         manager
-            .write(&terminal_id, "echo atrium-test-marker\n")
+            .write(&terminal_id, "echo atrium-test-marker\r")
             .unwrap();
 
         wait_for(
@@ -972,16 +1037,18 @@ mod tests {
     /// Proves the cwd half of #152's fix: the reported cwd updates after a
     /// plain `cd`, with nothing written to the pty by the shell itself (no
     /// OSC 7) — the poller reads it independently via the shell's own pid.
-    /// `#[cfg(unix)]` despite spawning nothing Unix-specific: on Windows this
-    /// depends on `sysinfo`'s `Process::cwd()`, which reads the target
-    /// process's PEB via a `ReadProcessMemory` handle opened once when the
-    /// pid is first seen — if that open only secures
-    /// `PROCESS_QUERY_LIMITED_INFORMATION` (observed in CI), every later cwd
-    /// read fails silently for the life of the `System`, so the poller never
-    /// reports the post-`cd` directory. Confirmed failing empirically in
-    /// windows-latest CI; revisit if `sysinfo`'s Windows cwd tracking
-    /// changes.
-    #[cfg(unix)]
+    ///
+    /// Submits with `\r`, not `\n`, and must keep doing so. That is what
+    /// xterm.js sends for Enter (see `TerminalPane.svelte`), and it is the
+    /// only byte that works on both backends. A Unix pty's `ICRNL` translates
+    /// CR to NL, so either byte submits there. Windows has no line
+    /// discipline: `cmd.exe` reads through conhost's cooked read, whose
+    /// `COOKED_READ_DATA::_handleChar` completes the line on the character
+    /// `UNICODE_CARRIAGERETURN` (0x0D) and on nothing else — the virtual key
+    /// is not consulted — so LF is inserted as an ordinary character and the
+    /// line is never submitted. Written with `\n`, this test typed the `cd` at
+    /// the Windows prompt and never ran it, which is why it was
+    /// `#[cfg(unix)]`-gated until #413.
     #[test]
     fn cwd_updates_after_cd_with_no_shell_cooperation() {
         let manager = PtyManager::new();
@@ -999,7 +1066,7 @@ mod tests {
         manager
             .write(
                 &terminal_id,
-                &format!("cd {}\n", target_dir.path().display()),
+                &format!("cd {}\r", target_dir.path().display()),
             )
             .unwrap();
 
@@ -1016,6 +1083,70 @@ mod tests {
         );
 
         manager.kill(&terminal_id).unwrap();
+    }
+
+    /// Asserts that `sysinfo`'s Windows cwd read *tracks a change*. That the
+    /// read succeeds at all is already covered incidentally by
+    /// `no_title_event_when_nothing_changed_since_last_tick`; the tracking
+    /// half is covered only here and by
+    /// `cwd_updates_after_cd_with_no_shell_cooperation`, which confounds it
+    /// with the ConPTY input path. #413 was misdiagnosed for exactly that
+    /// reason, so this keeps the two halves independently falsifiable: if both
+    /// fail, the cwd read is at fault; if only the pty test fails, the input
+    /// path is.
+    ///
+    /// Drives `cmd.exe` over a stdin pipe rather than a pty — it reads that as
+    /// a command stream, not console line input, so `\r\n` is the correct
+    /// terminator here and the cooked-read submission gate above does not
+    /// apply.
+    #[cfg(windows)]
+    #[test]
+    fn sysinfo_reports_a_live_cwd_change_for_a_plain_windows_child() {
+        use std::process::{Command, Stdio};
+
+        let start_dir = tempfile::tempdir().unwrap();
+        let target_dir = tempfile::tempdir().unwrap();
+        let target_canonical = std::fs::canonicalize(target_dir.path()).unwrap();
+
+        // stdout/stderr to `null`, not `piped`: nothing reads them, and a
+        // `cmd.exe` that fills its pipe buffer would block instead of running
+        // the `cd`.
+        let mut child = Command::new(default_shell())
+            .current_dir(start_dir.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = Pid::from_u32(child.id());
+
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(format!("cd /d {}\r\n", target_dir.path().display()).as_bytes())
+            .unwrap();
+
+        let mut system = System::new();
+        wait_for(
+            Duration::from_secs(10),
+            "sysinfo never reported the post-cd cwd for a plain cmd.exe child",
+            || {
+                system.refresh_processes_specifics(
+                    ProcessesToUpdate::Some(&[pid]),
+                    true,
+                    ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always),
+                );
+                system
+                    .process(pid)
+                    .and_then(|process| process.cwd())
+                    .and_then(|cwd| std::fs::canonicalize(cwd).ok())
+                    .is_some_and(|resolved| resolved == target_canonical)
+            },
+        );
+
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     /// A poll tick that finds nothing changed since the last one must not
