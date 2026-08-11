@@ -173,11 +173,31 @@ export function fsImportExternalPaths(
   return invoke("fs_import_external_paths", { workspaceId, destDir, sourcePaths });
 }
 
+/** One resolved terminal file-path link. `external` marks a file outside the workspace root (or resolved with no root at all), which needs a grant before it can be opened. */
+export interface ResolvedPath {
+  path: string;
+  external: boolean;
+}
+
 export function fsResolveCandidates(
   workspaceId: string,
   candidates: PathCandidate[],
-): Promise<(string | null)[]> {
+): Promise<(ResolvedPath | null)[]> {
   return invoke("fs_resolve_candidates", { workspaceId, candidates });
+}
+
+/** One authorized terminal link: the path to open, and the workspace whose grant authorizes it — which is the workspace the file must be read through. */
+export interface AuthorizedLink {
+  path: string;
+  workspaceId: string;
+}
+
+/** Resolves one terminal link at activation time, creating the external-file grant that makes it readable. Called only for a link resolution reported as `external`; it is the only path by which a terminal link produces a grant. */
+export function fsAuthorizeTerminalLink(
+  workspaceId: string,
+  candidate: PathCandidate,
+): Promise<AuthorizedLink> {
+  return invoke("fs_authorize_terminal_link", { workspaceId, candidate });
 }
 
 /** Classifies each of `paths` as a directory (`true`) or not (`false`), following symlinks. */
