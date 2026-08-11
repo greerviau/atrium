@@ -97,6 +97,17 @@ describe("EditorPanel", () => {
     expect(names[1]).not.toContain("•");
   });
 
+  it("shows only the filename in a tab label for a Windows backslash path", () => {
+    const path = "C:\\ws\\src\\notes.md";
+    tabsState.set({ tabs: [tab(path)], activeTabPath: path });
+    const { container } = render(EditorPanel, {
+      tree: { type: "leaf", id: "p1", tabs: [path], activeTabPath: path },
+      ...baseProps,
+    });
+
+    expect(container.querySelector(".tab-name")?.textContent?.trim()).toBe("notes.md");
+  });
+
   it("renders a markdown view-mode toggle only for markdown tabs", () => {
     tabsState.set({
       tabs: [tab("/a.ts"), tab("/b.md", { mode: "markdown", viewMode: "rendered" })],

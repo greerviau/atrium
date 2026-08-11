@@ -16,6 +16,7 @@
   import EditorSplitMenu from "./EditorSplitMenu.svelte";
   import { tooltip } from "../ui/tooltip";
   import { beginTabDrag, draggingTabKey, type TabDropTarget } from "./tabDrag";
+  import { basename } from "../util/path";
 
   /**
    * One leaf's full top bar (tab strip + controls) and its stack of editor,
@@ -62,10 +63,6 @@
    * response to a tab-strip drag at all.
    */
   let stablePaneOrder = $derived($tabsState.tabs.map((t) => t.path).filter((path) => tree.tabs.includes(path)));
-
-  function basename(path: string): string {
-    return path.split("/").pop() ?? path;
-  }
 
   function onTabListWheel(event: WheelEvent): void {
     if (event.deltaY === 0) return;
