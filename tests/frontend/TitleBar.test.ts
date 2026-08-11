@@ -82,6 +82,16 @@ describe("TitleBar", () => {
     expect(queryByText("/projects/demo")).toBeNull();
   });
 
+  it("heads the project menu with a Recent Projects title, matching the worktree and branch menus", async () => {
+    workspace.set({ id: "local", root: current.path });
+    recents.set([current, other]);
+
+    const { getByRole, findByText } = render(TitleBar);
+    await fireEvent.click(getByRole("button", { name: "Switch project" }));
+
+    expect(await findByText("Recent Projects")).toBeTruthy();
+  });
+
   it("clicking a recent row calls openWorkspacePath with that project's path", async () => {
     workspace.set({ id: "local", root: current.path });
     recents.set([current, other]);
@@ -218,6 +228,7 @@ describe("TitleBar", () => {
     await fireEvent.click(getByRole("button", { name: "Switch project" }));
 
     expect(await findByText("No other recent projects")).toBeTruthy();
+    expect(await findByText("Recent Projects")).toBeTruthy();
   });
 
   it("marks the strip as a deep drag region and the switcher as an opt-out, so the dropdown never drags the window", () => {

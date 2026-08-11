@@ -242,14 +242,6 @@
     overflow-y: auto;
   }
 
-  .menu-heading {
-    padding: 5px 14px 3px;
-    color: var(--atrium-text-muted);
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-  }
-
   .git-menu button {
     flex-direction: column;
     align-items: flex-start;

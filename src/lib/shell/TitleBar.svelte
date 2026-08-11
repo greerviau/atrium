@@ -66,6 +66,7 @@
       {#if open}
         <ContextMenu anchorEl={buttonEl}>
           <div class="switcher-menu" role="none">
+            <div class="menu-heading">Recent Projects</div>
             {#if otherRecents.length === 0}
               <p class="empty-state">No other recent projects</p>
             {:else}
