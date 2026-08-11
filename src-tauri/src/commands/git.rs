@@ -156,7 +156,7 @@ fn inspect(path: &Path) -> Result<Option<GitContext>, AppError> {
         )?,
         &["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
     )?;
-    let branches = branches_text
+    let mut branches: Vec<GitBranch> = branches_text
         .lines()
         .filter(|name| !name.is_empty())
         .map(|name| {
@@ -171,6 +171,11 @@ fn inspect(path: &Path) -> Result<Option<GitContext>, AppError> {
             }
         })
         .collect();
+    // `for-each-ref` orders by ref name, which buries the checked-out branch wherever it
+    // happens to fall alphabetically — out of sight in a repository with enough branches to
+    // scroll. Lift it to the front. The sort is stable, so every other branch keeps git's
+    // order, and a detached HEAD (no branch is current) leaves the list untouched.
+    branches.sort_by_key(|branch| !branch.is_current);
 
     Ok(Some(GitContext {
         repository_root,
@@ -228,6 +233,14 @@ mod tests {
         );
     }
 
+    fn branch_names(context: &GitContext) -> Vec<&str> {
+        context
+            .branches
+            .iter()
+            .map(|branch| branch.name.as_str())
+            .collect()
+    }
+
     #[test]
     fn inspect_reports_the_current_branch_worktree_and_local_branches() {
         let repo = tempfile::tempdir().unwrap();
@@ -245,14 +258,7 @@ mod tests {
         assert_eq!(context.worktrees.len(), 1);
         assert_eq!(context.worktrees[0].branch.as_deref(), Some("main"));
         assert!(context.worktrees[0].is_current);
-        assert_eq!(
-            context
-                .branches
-                .iter()
-                .map(|branch| branch.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["feature", "main"]
-        );
+        assert_eq!(branch_names(&context), vec!["main", "feature"]);
         assert!(context
             .branches
             .iter()
@@ -272,6 +278,51 @@ mod tests {
         assert_eq!(context.branch.as_deref(), Some("main"));
         assert_eq!(context.head, "unborn");
         assert_eq!(context.worktrees.len(), 1);
+    }
+
+    fn repo_with_branches() -> tempfile::TempDir {
+        let repo = tempfile::tempdir().unwrap();
+        git(repo.path(), &["init", "-q", "-b", "main"]);
+        git(repo.path(), &["config", "user.name", "Atrium Tests"]);
+        git(repo.path(), &["config", "user.email", "tests@example.com"]);
+        fs::write(repo.path().join("README.md"), "content\n").unwrap();
+        git(repo.path(), &["add", "README.md"]);
+        git(repo.path(), &["commit", "-qm", "initial"]);
+        for name in ["alpha", "feat/zeta", "zzz"] {
+            git(repo.path(), &["branch", name]);
+        }
+        repo
+    }
+
+    #[test]
+    fn inspect_lists_the_checked_out_branch_first() {
+        let repo = repo_with_branches();
+        // `feat/zeta` sits second alphabetically, so a pass-through of git's own order
+        // would not put it first by accident.
+        git(repo.path(), &["switch", "-q", "feat/zeta"]);
+
+        let context = inspect(repo.path()).unwrap().unwrap();
+
+        assert_eq!(
+            branch_names(&context),
+            vec!["feat/zeta", "alpha", "main", "zzz"]
+        );
+        assert!(context.branches[0].is_current);
+    }
+
+    #[test]
+    fn inspect_keeps_gits_branch_order_when_head_is_detached() {
+        let repo = repo_with_branches();
+        git(repo.path(), &["switch", "-q", "--detach"]);
+
+        let context = inspect(repo.path()).unwrap().unwrap();
+
+        assert_eq!(context.branch, None);
+        assert_eq!(
+            branch_names(&context),
+            vec!["alpha", "feat/zeta", "main", "zzz"]
+        );
+        assert!(context.branches.iter().all(|branch| !branch.is_current));
     }
 
     #[test]
