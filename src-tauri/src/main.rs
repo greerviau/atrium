@@ -78,7 +78,9 @@ fn webdriver_unreachable_accelerator(id: &str) -> &'static str {
         .iter()
         .find(|(item_id, _)| *item_id == id)
         .map(|(_, accelerator)| *accelerator)
-        .unwrap_or_else(|| panic!("no accelerator registered in WEBDRIVER_UNREACHABLE_ACCELERATORS for {id}"))
+        .unwrap_or_else(|| {
+            panic!("no accelerator registered in WEBDRIVER_UNREACHABLE_ACCELERATORS for {id}")
+        })
 }
 
 /// The `Help` submenu's title is the literal string `"Help"`: on macOS,
