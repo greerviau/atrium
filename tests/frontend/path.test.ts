@@ -14,8 +14,16 @@ describe("basename", () => {
     expect(basename("C:\\a\\b\\folder")).toBe("folder");
   });
 
+  it("strips a trailing backslash before taking the last segment", () => {
+    expect(basename("C:\\a\\b\\folder\\")).toBe("folder");
+  });
+
   it("returns a single-segment path unchanged", () => {
     expect(basename("folder")).toBe("folder");
+  });
+
+  it("returns the segment of a rooted single-segment path", () => {
+    expect(basename("/atrium")).toBe("atrium");
   });
 
   it("falls back to the input when the basename is empty", () => {

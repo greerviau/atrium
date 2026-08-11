@@ -28,7 +28,7 @@
   } from "./lib/stores/tabs";
   import { closePrompt } from "./lib/stores/closePrompt";
   import { refreshDirectoryContaining } from "./lib/stores/fileTree";
-  import { isPathUnderOrEqual, dirOf } from "./lib/util/path";
+  import { isPathUnderOrEqual, dirOf, basename } from "./lib/util/path";
   import { rekeyPath } from "./lib/editor/editorViewRegistry";
   import { get } from "svelte/store";
   import { onFsChanged, onDockOpenPath, onCloseRequested, onDragDropEvent } from "./lib/ipc/events";
@@ -66,7 +66,6 @@
   } from "./lib/stores/layout";
   import { restoreEditorSession, saveEditorSession, flushEditorSession } from "./lib/stores/editorSession";
   import { restoreTabsOnStartup } from "./lib/stores/restoreTabsOnStartup";
-  import { folderName } from "./lib/terminal/tabTitle";
   import {
     splitPane,
     resizeSplit,
@@ -439,7 +438,7 @@
   }
 
   function spawnSession(cwd: string): TerminalSession {
-    return { id: genId("term"), cwd, title: folderName(cwd) };
+    return { id: genId("term"), cwd, title: basename(cwd) };
   }
 
   /**

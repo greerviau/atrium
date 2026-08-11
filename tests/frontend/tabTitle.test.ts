@@ -1,23 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { folderName, computeTabTitle, reduceTitleState, type TitleState } from "../../src/lib/terminal/tabTitle";
-
-describe("folderName", () => {
-  it("returns the last segment of a multi-segment path", () => {
-    expect(folderName("/Users/greer/github/atrium")).toBe("atrium");
-  });
-
-  it("strips a trailing slash before taking the last segment", () => {
-    expect(folderName("/Users/greer/github/atrium/")).toBe("atrium");
-  });
-
-  it("falls back to the full path for the root path", () => {
-    expect(folderName("/")).toBe("/");
-  });
-
-  it("returns the segment for a single-segment path", () => {
-    expect(folderName("/atrium")).toBe("atrium");
-  });
-});
+import { computeTabTitle, reduceTitleState, type TitleState } from "../../src/lib/terminal/tabTitle";
 
 describe("computeTabTitle", () => {
   it("returns the folder alone when idle (program: null)", () => {
@@ -62,6 +44,28 @@ describe("computeTabTitle", () => {
         explicitTitleIsFresh: false,
       }),
     ).toBe("atrium");
+  });
+
+  it("shows only the folder name for a Windows backslash cwd", () => {
+    expect(
+      computeTabTitle({
+        cwd: "C:\\Users\\greer\\github\\atrium",
+        program: null,
+        explicitTitle: null,
+        explicitTitleIsFresh: false,
+      }),
+    ).toBe("atrium");
+  });
+
+  it("shows `folder — program` for a Windows backslash cwd", () => {
+    expect(
+      computeTabTitle({
+        cwd: "C:\\Users\\greer\\github\\atrium",
+        program: "npm",
+        explicitTitle: null,
+        explicitTitleIsFresh: false,
+      }),
+    ).toBe("atrium — npm");
   });
 });
 
