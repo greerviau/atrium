@@ -514,6 +514,7 @@ fn main() {
             commands::fs::fs_resolve_candidates,
             commands::fs::fs_external_paths_are_dirs,
             commands::fs::fs_grant_external_file,
+            commands::fs::fs_authorize_terminal_link,
             commands::git::git_get_context,
             commands::git::git_switch_branch,
             commands::search::search_workspace,

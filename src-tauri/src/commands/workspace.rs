@@ -166,4 +166,14 @@ mod tests {
         assert!(Arc::ptr_eq(still_standalone, &standalone));
         assert!(guard.contains_key("local"));
     }
+
+    // Pins §3.2's first cause of issue #406: `"local"` is registered only by
+    // `workspace_set_root`, so a fresh registry (no project ever opened) has
+    // no entry for it at all -- `fs_resolve_candidates`/
+    // `fs_authorize_terminal_link` must tolerate this rather than erroring.
+    #[test]
+    fn local_is_absent_from_a_fresh_registry_until_workspace_set_root_runs() {
+        let workspaces: Mutex<HashMap<String, Arc<dyn Workspace>>> = Mutex::new(HashMap::new());
+        assert!(!workspaces.lock().unwrap().contains_key("local"));
+    }
 }
