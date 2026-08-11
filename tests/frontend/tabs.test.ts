@@ -673,6 +673,26 @@ describe("markPathDeleted", () => {
     expect(get(tabsState).tabs).toHaveLength(1);
     expect(get(errorToast)).toBeNull();
   });
+
+  it("names only the filename in the toast for a Windows backslash path", () => {
+    tabsState.set({ tabs: [codeTab("C:\\ws\\notes.md")], activeTabPath: "C:\\ws\\notes.md" });
+
+    markPathDeleted("C:\\ws\\notes.md");
+
+    expect(get(errorToast)).toBe("notes.md was deleted — its tab was closed.");
+  });
+
+  it("cascades to tabs under a deleted directory on a Windows backslash path", () => {
+    tabsState.set({
+      tabs: [codeTab("C:\\ws\\src\\a.ts"), codeTab("C:\\ws\\src\\b.ts")],
+      activeTabPath: "C:\\ws\\src\\a.ts",
+    });
+
+    markPathDeleted("C:\\ws\\src");
+
+    expect(get(tabsState).tabs).toHaveLength(0);
+    expect(get(errorToast)).toBe("a.ts, b.ts were deleted — their tabs were closed.");
+  });
 });
 
 describe("renameOpenTabs", () => {
@@ -773,6 +793,20 @@ describe("renameOpenTabs", () => {
     renameOpenTabs("/a.md", "/b.md");
 
     expect(get(errorToast)).toBe("b.md was overwritten by an external rename — its unsaved edits were discarded.");
+  });
+
+  it("names only the filename when toasting a displaced dirty tab on a Windows backslash path", () => {
+    errorToast.set(null);
+    tabsState.set({
+      tabs: [codeTab("C:\\ws\\a.md"), codeTab("C:\\ws\\b.md", { isDirty: true, savedDoc: "unsaved" })],
+      activeTabPath: "C:\\ws\\a.md",
+    });
+
+    renameOpenTabs("C:\\ws\\a.md", "C:\\ws\\b.md");
+
+    expect(get(errorToast)).toBe(
+      "b.md was overwritten by an external rename — its unsaved edits were discarded.",
+    );
   });
 
   it("does not toast when the displaced tab was clean", () => {

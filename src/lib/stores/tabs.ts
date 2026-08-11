@@ -456,7 +456,7 @@ export function reloadFromDiskReportingErrors(path: string): void {
  */
 export function markPathDeleted(path: string): void {
   const state = get(tabsState);
-  const affected = state.tabs.filter((t) => t.path === path || t.path.startsWith(path + "/"));
+  const affected = state.tabs.filter((t) => isPathUnderOrEqual(t.path, path));
   if (affected.length === 0) {
     return;
   }
@@ -478,7 +478,7 @@ export function markPathDeleted(path: string): void {
   });
 
   if (closedPaths.size > 0) {
-    const names = [...closedPaths].map((p) => p.split("/").pop() ?? p);
+    const names = [...closedPaths].map(basename);
     const message =
       names.length === 1
         ? `${names[0]} was deleted — its tab was closed.`
@@ -526,7 +526,7 @@ export function renameOpenTabs(oldPath: string, newPath: string): void {
 
     displacedDirtyNames = renamed
       .filter((r) => !r.wasRenamed && renamedDestinations.has(r.tab.path) && r.tab.isDirty)
-      .map((r) => r.tab.path.split("/").pop() ?? r.tab.path);
+      .map((r) => basename(r.tab.path));
 
     const tabs = renamed.filter((r) => r.wasRenamed || !renamedDestinations.has(r.tab.path)).map((r) => r.tab);
 
