@@ -31,8 +31,10 @@ cargo install tauri-driver --locked              # once
 
 cd tests/e2e
 npm install
-dbus-run-session -- xvfb-run --auto-servernum npm test
+dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1600x1200x24" npm test
 ```
+
+The explicit `--server-args` doesn't fix anything by itself — Xvfb's own default (`1280x1024x24`) is already large enough for the app's configured `1280x800` window — it just pins the geometry the suite runs against to a known value with horizontal slack, rather than inheriting whatever a distro's default happens to be, so a future geometry-sensitive failure has a stated baseline to diagnose against.
 
 ## Coverage
 
@@ -43,7 +45,7 @@ dbus-run-session -- xvfb-run --auto-servernum npm test
 3. Open `pixel.png` and verify the dedicated image pane loads it through the scoped asset protocol.
 4. Open a terminal tab, run `echo`, and verify the output renders.
 5. Split the active terminal pane, run a distinct command in each of the two resulting panes, confirm neither pane's output leaks into the other's, then close one pane and confirm the other survives with its output intact.
-6. Open the project-wide search overlay via Cmd/Ctrl+Shift+F, search for a string that matches `note.md`, click the result, and confirm the overlay closes and the editor jumps to `note.md`.
+6. Open the project-wide search overlay via the Find in Files command (its native `CmdOrCtrl+Shift+F` accelerator is unreachable from WebDriver — see Environment notes below), search for a string that matches `note.md`, click the result, and confirm the overlay closes and the editor jumps to `note.md`.
 7. Confirm the bottom status bar shows the active file's path and cursor position and updates as the caret moves, that its search button opens the search overlay, and that its explorer/terminal toggle buttons show and hide their respective panels.
 8. (Follow-up, not yet in the spec) feed a synthetic buffer containing a PR URL and a unique partial file path with a line suffix, then verify both linkify and that clicking the file path opens the matching workspace file at that line.
 
@@ -59,6 +61,7 @@ It also covers issue #250 (a failed save going silently unreported): `chmod`s `n
 `specs/scrollThenClick.e2e.js` covers the rendered-markdown scroll-then-click regressions (issues #183 and #367).
 It opens `long.md`, scrolls the pane down, clicks a visible rendered heading shortly after the scroll on a pane that has never yet been clicked into, and confirms both that the scroll position is preserved and that the cursor resolves to the heading's source line rather than the pre-scroll location.
 These are real-display, real-input-timing bugs that jsdom/vitest tests cannot exercise (see `tests/frontend/scrollSettleMousedown.test.ts` for the unit-level coverage of the fix's mechanics).
+This spec is intermittently red on the untouched baseline, unrelated to anything in this change — see Environment notes below and the tracked follow-up issue.
 
 `specs/horizontalRuleCursor.e2e.js` covers issue #366: open `horizontal-rule.md`, click rendered text below a horizontal rule, and confirm the cursor position remains on the clicked source line.
 
@@ -69,8 +72,8 @@ This focused spec runs under Xvfb in Linux CI.
 
 `specs/keyboardShortcuts.e2e.js` covers issue #156's two kinds of shortcut:
 
-1. The five file-explorer shortcuts, which are plain DOM `keydown` handlers scoped to whichever tree row holds focus rather than native accelerators (see the plan's safety-constraint note): click a row to focus it, press ⌘N, type a name, and confirm the new file appears in the tree; press F2 on that file's own row and confirm the inline rename opens prefilled with its current name; press ⌘⌫ and confirm the permanent-delete confirmation modal opens (and the entry survives) before actually deleting it via the modal's own button.
-2. The four split-direction shortcuts, which unlike the explorer shortcuts *are* native `main.rs` accelerators — reached the same way this suite's own Cmd+Shift+F/Cmd+P/Cmd+S accelerator tests already reach theirs, by sending the raw key combo via `browser.keys()` rather than clicking a per-pane split button: click into a terminal pane, press ⌥⌘→, and confirm a second `.xterm-screen` appears; click into an editor pane, press ⌥⌘↓, and confirm a second `.editor-panel` appears.
+1. The five file-explorer shortcuts, which are plain DOM `keydown` handlers scoped to whichever tree row holds focus rather than native accelerators (see the plan's safety-constraint note): click a row to focus it, press Ctrl+N, type a name, and confirm the new file appears in the tree; press F2 on that file's own row and confirm the inline rename opens prefilled with its current name; press Ctrl+Backspace and confirm the permanent-delete confirmation modal opens (and the entry survives) before actually deleting it via the modal's own button.
+2. The four split-direction shortcuts, which unlike the explorer shortcuts *are* native `main.rs` accelerators. WebDriver cannot reach a native accelerator at all, with any modifier: a synthetic chord arrives in the DOM with the right modifiers and the menu item still never fires, because nothing in `src/` listens for it. These two scenarios instead emit the same `menu:*` event `main.rs` emits when the accelerator fires (`helpers/menu.js`'s `invokeMenuCommand`), which drives the real frontend path (`App.svelte`'s `splitFocusedSurface`): click into a terminal pane, invoke the Split Right command, and confirm a second `.xterm-screen` appears; click into an editor pane, invoke the Split Down command, and confirm a second `.editor-panel` appears.
 
 `specs/explorerDragScroll.e2e.js` covers issue #390: opens a dedicated temp workspace (not the shared `fixtures/` directory — none of its entries are wide enough to force horizontal overflow) containing a deeply nested, long-named file, expands the tree to it, confirms `.file-tree` is horizontally scrollable, then drags the row toward and past the tree's right edge and holds it there — the window in which the reported native drag-autoscroll occurs — before releasing back onto the row itself (a guaranteed no-op drop) and asserting `scrollLeft` never moved during the gesture. Like `scrollThenClick.e2e.js`, this is a real-WebView, real-input-timing behavior that jsdom/vitest cannot exercise (see `tests/frontend/explorerDragMove.test.ts` for the unit-level coverage of the fix's `scrollLeft`-correction mechanics).
 
@@ -81,10 +84,13 @@ This focused spec runs under Xvfb in Linux CI.
 The focused launch-open spec runs in Linux CI.
 The broader smoke suite still requires a real Linux or Windows display (or Xvfb) and is not part of the default CI workflow.
 
-`smoke.e2e.js` has been run once, under Xvfb. 3 of its 12 scenarios pass: "markdown live preview" (open a workspace, edit `note.md`, save, reload, and confirm the edit persisted), and both syntax-highlighting scenarios (`config.toml`, `main.tf`) — each of these exercises `openWorkspace` and the file-tree `name` lookup end to end, which is what this fix targets. The remaining 9 scenarios fail for reasons unrelated to this fix (terminal-pane interactability, the search overlay not appearing, and a status-bar block that cascades from those) — tracked in issue #421.
+`smoke.e2e.js` (12 scenarios), `unsavedChanges.e2e.js` (4 scenarios) and `keyboardShortcuts.e2e.js` (4 scenarios) each pass in full, repeatably, whether run standalone or as part of the whole suite.
 
-`horizontalRuleCursor.e2e.js` has been run under Xvfb with its `cm-line` selectors converted to `hasClass()`. Its one scenario passes end to end: the click resolves to the source line rather than `.cm-content`, and the `Ln 5` cursor-position assertion is reached and passes.
+Running the whole suite (`npm test`, all 9 spec files sharing one webview profile per run) passes 8 of 9 spec files. `scrollThenClick.e2e.js` is the one spec that remains intermittently red — a pre-existing flake in the rendered-markdown scroll/measure path, reproducible on an unmodified checkout and unrelated to anything else here (tracked in its own follow-up issue).
 
-`unsavedChanges.e2e.js` has been run under Xvfb with its close-button selector converted to `.tab-close`. All four scenarios (both describes) still fail, but not on the close-button selector this change targets — they fail earlier, inside the pre-existing `openNoteAndDirtyIt` helper, which times out waiting for the tab's dirty marker after typing. That helper is unmodified by this change and shared by both describes, so none of the four scenarios reach `clickTabClose()` in this run. The fixed selector was confirmed directly, bypassing the blocked helper: given an already-dirty tab, it finds `.tab-close`, reads back an `aria-label` of the form `Close <absolute path ending in note.md>`, and reaches the close-confirmation dialog — 3 of 3 repeated attempts. The `openNoteAndDirtyIt` timeout is tracked separately in issue #425.
+## Environment notes
 
-`dragCursor.e2e.js` has been run under Xvfb after consolidating its private `openWorkspace` copy into the shared helper. All three scenarios still pass.
+Two behaviors of this target are worth knowing before adding a new spec or assertion, since both look like bugs and are not:
+
+- **`getText()` returns `""` for any `overflow: hidden` element.** WebKitWebDriver's Get Element Text comes back empty for a clipped element however visible and non-empty it is — confirmed with `isDisplayed()`, `getSize()` and `getHTML()` all reporting the element correctly regardless. Read such an element's text with `elementText()` (`helpers/text.js`), which reads `textContent` through the DOM instead. `.tab-name` (both the editor's and the terminal's tab names) and `.status-item.path` are deliberately clipped in this app's own CSS; `tests/frontend/e2eSelectors.test.ts` guards against reintroducing a `getText()`/`toHaveText…()` read on either.
+- **Native menu accelerators are unreachable from WebDriver.** The `muda` menu-item accelerators registered in `src-tauri/src/main.rs` (Find in Files, Go to File, Save, the four Split-direction items) are handled above the WebView. A WebDriver-synthesized key combo arrives in the DOM with the correct modifiers and still never fires the menu item, because nothing in `src/` listens for the chord — the frontend path behind each of these is only ever reached through the real native menu event. `invokeMenuCommand()` (`helpers/menu.js`) emits the same `menu:*` event `main.rs` emits when the accelerator fires, driving that real frontend path from its first reachable point; the accelerator strings themselves are covered separately, by a Rust unit test in `src-tauri/src/main.rs`.
