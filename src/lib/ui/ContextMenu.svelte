@@ -111,4 +111,16 @@
     border-top: 1px solid var(--atrium-border);
     margin: 4px 0;
   }
+  /* A section heading naming the group of rows beneath it — used by the
+     project, worktree, and branch switchers, which sit side by side in the
+     title bar and must label their lists identically. The 14px horizontal
+     padding matches the row buttons above, so the heading's left edge lines
+     up with the row labels. */
+  .context-menu :global(.menu-heading) {
+    padding: 5px 14px 3px;
+    color: var(--atrium-text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
 </style>
