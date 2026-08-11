@@ -173,6 +173,80 @@ describe("TitleBar", () => {
     expect(window.getComputedStyle(container.querySelector(".git-menu-list")!).overflowY).toBe("auto");
   });
 
+  it("renders the branch rows in the order git_get_context supplies, current branch first", async () => {
+    workspace.set({ id: "local", root: current.path });
+    vi.mocked(commands.gitGetContext).mockResolvedValue({
+      repositoryRoot: "/projects",
+      worktreePath: current.path,
+      branch: "main",
+      head: "abc1234",
+      worktrees: [{ path: current.path, branch: "main", head: "abc1234", isCurrent: true }],
+      // The order git_get_context guarantees: checked-out branch first, the rest
+      // alphabetical. "main" is last alphabetically, so a component-side re-sort would
+      // move it and fail this test.
+      branches: [
+        { name: "main", worktreePath: current.path, isCurrent: true },
+        { name: "feature/login", worktreePath: null, isCurrent: false },
+        { name: "local-only", worktreePath: null, isCurrent: false },
+      ],
+    });
+
+    const { container, findByRole, findAllByRole } = render(TitleBar);
+    await fireEvent.click(await findByRole("button", { name: "Switch branch" }));
+
+    const rows = await findAllByRole("menuitem");
+    expect(rows.map((row) => row.textContent?.trim())).toEqual([
+      "main",
+      "feature/login",
+      "local-only",
+    ]);
+    expect((rows[0] as HTMLButtonElement).disabled).toBe(true);
+
+    // The pinned row is divided off from the switchable ones.
+    const children = Array.from(container.querySelector(".git-menu-list")!.children);
+    expect(children[1]?.className).toContain("menu-separator");
+  });
+
+  it("draws no separator in the branch menu when HEAD is detached", async () => {
+    workspace.set({ id: "local", root: current.path });
+    vi.mocked(commands.gitGetContext).mockResolvedValue({
+      repositoryRoot: "/projects",
+      worktreePath: current.path,
+      branch: null,
+      head: "abc1234",
+      worktrees: [{ path: current.path, branch: null, head: "abc1234", isCurrent: true }],
+      branches: [
+        { name: "feature/login", worktreePath: null, isCurrent: false },
+        { name: "main", worktreePath: null, isCurrent: false },
+      ],
+    });
+
+    const { container, findByRole } = render(TitleBar);
+    await fireEvent.click(await findByRole("button", { name: "Switch branch" }));
+
+    expect(container.querySelector(".git-menu-list .menu-separator")).toBeNull();
+  });
+
+  it("draws no separator in the branch menu when the current branch is the only branch", async () => {
+    workspace.set({ id: "local", root: current.path });
+    vi.mocked(commands.gitGetContext).mockResolvedValue({
+      repositoryRoot: "/projects",
+      worktreePath: current.path,
+      branch: "main",
+      head: "abc1234",
+      worktrees: [{ path: current.path, branch: "main", head: "abc1234", isCurrent: true }],
+      branches: [{ name: "main", worktreePath: current.path, isCurrent: true }],
+    });
+
+    const { container, findByRole } = render(TitleBar);
+    await fireEvent.click(await findByRole("button", { name: "Switch branch" }));
+
+    // A rule beneath the last row would divide nothing — a fresh clone with only `main`
+    // is the ordinary case here, not an edge case (a `git init` with no commits yet has
+    // zero branches, which is the empty state, not this one).
+    expect(container.querySelector(".git-menu-list .menu-separator")).toBeNull();
+  });
+
   it("switches to the worktree that owns a selected branch", async () => {
     workspace.set({ id: "local", root: current.path });
     vi.mocked(commands.gitGetContext).mockResolvedValue({
