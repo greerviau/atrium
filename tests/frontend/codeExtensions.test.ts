@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { EditorState } from "@codemirror/state";
+import { language } from "@codemirror/language";
 import { isDataPath, isTextPaneMode, loadCodeExtensions, modeForPath } from "../../src/lib/editor/codeExtensions";
 import { languageLabel } from "../../src/lib/editor/languageLabel";
 
@@ -10,8 +12,12 @@ describe("pane modes", () => {
     expect(isTextPaneMode("image")).toBe(false);
   });
 
-  it("leaves unrecognized code files in plain-text mode", async () => {
-    expect(await loadCodeExtensions("notes.unknown-language")).toEqual([]);
+  it("leaves unrecognized code files in plain-text mode with only the word-completion fallback registered", async () => {
+    const extensions = await loadCodeExtensions("notes.unknown-language");
+    const state = EditorState.create({ doc: "hello world", extensions });
+
+    expect(state.facet(language)).toBeNull();
+    expect(state.languageDataAt("autocomplete", state.doc.length)).toHaveLength(1);
   });
 });
 
