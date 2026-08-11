@@ -282,8 +282,18 @@ describe("go to file", () => {
     await searchInput.click();
     await browser.keys("note");
 
+    // Files mode's empty-query state is a real "browse all files" list, not
+    // a blank slate — unlike content mode, which never searches below its
+    // three-character minimum. A `.search-result-row` can already exist
+    // from that browse list the instant the overlay opens, so waiting for
+    // mere existence can click a row that predates the debounced "note"
+    // query settling. Wait for the first row's own text to actually reflect
+    // the typed query before clicking it.
     const resultRow = await $(".search-result-row");
-    await resultRow.waitForExist({ timeout: 10000 });
+    await browser.waitUntil(
+      async () => ((await elementText(".search-result-row .search-result-filename")) ?? "").toLowerCase().includes("note"),
+      { timeout: 10000, timeoutMsg: "expected the first result row to reflect the \"note\" query" },
+    );
     await resultRow.click();
 
     // Selecting a file result closes the overlay and jumps straight to the

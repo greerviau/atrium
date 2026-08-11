@@ -40,4 +40,16 @@ export async function openWorkspace(root) {
   const recentRow = await $(`//span[${hasClass("recent-path")} and text()='${root}']`);
   await recentRow.waitForExist({ timeout: 10000 });
   await recentRow.click();
+
+  // Waits for the workspace shell to actually mount before returning, not
+  // just for the click that requests it to open. A caller whose first
+  // action is a file-tree lookup gets this wait for free — but one whose
+  // first action is `invokeMenuCommand()` (no such lookup) can otherwise
+  // race the real app: `App.svelte`'s `initMenuBar()` registers its Tauri
+  // event listeners asynchronously on mount, and an event emitted before
+  // that registration completes is simply never received, since nothing is
+  // listening yet. `.explorer` existing is a reliable proxy for "the
+  // workspace shell, including its menu-event listeners, has mounted."
+  const explorer = await $(".explorer");
+  await explorer.waitForExist({ timeout: 10000 });
 }
