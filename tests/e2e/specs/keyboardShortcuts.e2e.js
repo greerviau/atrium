@@ -1,11 +1,15 @@
 import { expect } from "@wdio/globals";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openWorkspace } from "../helpers/workspace.js";
 import { hasClass } from "../helpers/selectors.js";
+import { invokeMenuCommand } from "../helpers/menu.js";
+import { waitForEditorFocus } from "../helpers/editorFocus.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(__dirname, "../fixtures");
+const newFilePath = path.join(fixturesDir, "e2e-shortcut-new-file.txt");
 
 // The five file-explorer shortcuts (§ Gap 1a) are plain DOM `keydown`
 // handlers scoped to whichever tree row holds focus, not native `main.rs`
@@ -13,14 +17,23 @@ const fixturesDir = path.join(__dirname, "../fixtures");
 // row focuses it exactly the way a real user would before pressing one of
 // these chords.
 describe("file-explorer keyboard shortcuts (issue #156)", () => {
-  it("⌘N on a focused row creates a new file, and F2 opens an inline rename prefilled with its name", async () => {
+  // The second scenario normally deletes the file the first scenario
+  // creates, but a mid-spec failure can leave it behind — this guarantees
+  // cleanup regardless of outcome, rather than relying on the happy path.
+  after(() => {
+    if (fs.existsSync(newFilePath)) {
+      fs.rmSync(newFilePath);
+    }
+  });
+
+  it("Ctrl+N on a focused row creates a new file, and F2 opens an inline rename prefilled with its name", async () => {
     await openWorkspace(fixturesDir);
 
     const noteNode = await $(`//span[${hasClass("name")} and text()='note.md']`);
     await noteNode.waitForExist({ timeout: 10000 });
     await noteNode.click();
 
-    await browser.keys(["Meta", "n"]);
+    await browser.keys(["Control", "n"]);
 
     const createInput = await $(".inline-edit-input");
     await createInput.waitForExist({ timeout: 5000 });
@@ -44,12 +57,16 @@ describe("file-explorer keyboard shortcuts (issue #156)", () => {
     await renameInput.waitForExist({ timeout: 5000, reverse: true });
   });
 
-  it("⌘⌫ on a focused row opens the permanent-delete confirmation modal rather than deleting immediately", async () => {
+  it("Ctrl+Backspace on a focused row opens the permanent-delete confirmation modal rather than deleting immediately", async () => {
+    // Depends on the file the previous scenario created; re-establishes the
+    // workspace but not that file, which is a real on-disk entry.
+    await openWorkspace(fixturesDir);
+
     const targetNode = await $(`//span[${hasClass("name")} and text()='e2e-shortcut-new-file.txt']`);
     await targetNode.waitForExist({ timeout: 10000 });
     await targetNode.click();
 
-    await browser.keys(["Meta", "Backspace"]);
+    await browser.keys(["Control", "Backspace"]);
 
     const modal = await $(".modal-backdrop");
     await modal.waitForExist({ timeout: 5000 });
@@ -68,12 +85,18 @@ describe("file-explorer keyboard shortcuts (issue #156)", () => {
 });
 
 // The four split-direction shortcuts (§ Gap 1b) are native `main.rs`
-// accelerators, reached the same way the existing Cmd+Shift+F/Cmd+P/Cmd+S
-// accelerator tests already reach theirs in `smoke.e2e.js`: send the raw
-// key combo via `browser.keys()` and let the native menu event drive the
-// frontend, rather than clicking the per-pane split button/dropdown.
+// accelerators, and WebDriver cannot reach them: a synthetic chord arrives in
+// the DOM with the right modifiers and the menu item still never fires,
+// because nothing in `src/` listens for it. `invokeMenuCommand` emits the
+// same `menu:*` event `main.rs` emits when the accelerator fires, driving the
+// real frontend path (`App.svelte`'s `splitFocusedSurface`) rather than
+// clicking the per-pane split button/dropdown.
 describe("split-direction keyboard shortcuts (issue #156)", () => {
-  it("⌥⌘→ splits the last-focused terminal pane", async () => {
+  beforeEach(async () => {
+    await openWorkspace(fixturesDir);
+  });
+
+  it("splits the last-focused terminal pane via the Split Right command", async () => {
     let terminal = await $(".xterm-screen");
     if (!(await terminal.isExisting())) {
       const newTerminalButton = await $(".new-tab");
@@ -83,15 +106,15 @@ describe("split-direction keyboard shortcuts (issue #156)", () => {
     }
     await terminal.click();
 
-    await browser.keys(["Alt", "Meta", "ArrowRight"]);
+    await invokeMenuCommand("menu:split-right");
 
     await browser.waitUntil(async () => (await $$(".xterm-screen")).length === 2, {
       timeout: 5000,
-      timeoutMsg: "expected a second terminal pane after ⌥⌘→",
+      timeoutMsg: "expected a second terminal pane after the Split Right command",
     });
   });
 
-  it("⌥⌘↓ splits the last-focused editor pane", async () => {
+  it("splits the last-focused editor pane via the Split Down command", async () => {
     const fileNode = await $(`//span[${hasClass("name")} and text()='note.md']`);
     await fileNode.waitForExist({ timeout: 5000 });
     await fileNode.click();
@@ -99,12 +122,13 @@ describe("split-direction keyboard shortcuts (issue #156)", () => {
     const editor = await $(".cm-content");
     await editor.waitForExist({ timeout: 5000 });
     await editor.click();
+    await waitForEditorFocus();
 
-    await browser.keys(["Alt", "Meta", "ArrowDown"]);
+    await invokeMenuCommand("menu:split-down");
 
     await browser.waitUntil(async () => (await $$(".editor-panel")).length === 2, {
       timeout: 5000,
-      timeoutMsg: "expected a second editor pane after ⌥⌘↓",
+      timeoutMsg: "expected a second editor pane after the Split Down command",
     });
   });
 });

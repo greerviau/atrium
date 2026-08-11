@@ -97,15 +97,13 @@ async function dragSelect(from, to, steps = 8) {
   await chain.up().perform();
 }
 
-/**
- * Samples `window.getSelection().toString()` and the cursor at `(x, y)`
- * repeatedly over `durationMs`, rather than only before/after — a selection
- * or cursor change that appears and reverts within the hold would be
- * invisible to a single before/after check, the same reasoning
- * `explorerDragScroll.e2e.js` already applies to `scrollLeft`. Always takes
- * at least one sample regardless of how `durationMs`/timing interact, so a
- * caller's `samples.every(...)` can never pass vacuously on an empty array.
- */
+// Samples `window.getSelection().toString()` and the cursor at `(x, y)`
+// repeatedly over `durationMs`, rather than only before/after — a selection
+// or cursor change that appears and reverts within the hold would be
+// invisible to a single before/after check, the same reasoning
+// `explorerDragScroll.e2e.js` already applies to `scrollLeft`. Always takes
+// at least one sample regardless of how `durationMs`/timing interact, so a
+// caller's `samples.every(...)` can never pass vacuously on an empty array.
 async function sampleSelectionAndCursorDuring(durationMs, x, y) {
   const samples = [];
   const until = Date.now() + durationMs;
@@ -124,14 +122,12 @@ async function sampleSelectionAndCursorDuring(durationMs, x, y) {
   return samples;
 }
 
-/**
- * WebDriver's Execute Script clones its return value through the internal
- * JSON clone algorithm, which maps a `undefined` result to `null` — so
- * `expect(await browser.execute(() => el.dataset.foo)).toBeUndefined()` can
- * never hold even when the attribute is genuinely absent. Checking
- * `hasAttribute` in-browser and returning a plain boolean sidesteps the
- * serialization entirely.
- */
+// WebDriver's Execute Script clones its return value through the internal
+// JSON clone algorithm, which maps a `undefined` result to `null` — so
+// `expect(await browser.execute(() => el.dataset.foo)).toBeUndefined()` can
+// never hold even when the attribute is genuinely absent. Checking
+// `hasAttribute` in-browser and returning a plain boolean sidesteps the
+// serialization entirely.
 async function dragCursorAttributeIsSet() {
   return browser.execute(() => document.documentElement.hasAttribute("data-drag-cursor"));
 }
@@ -189,7 +185,9 @@ describe("drag cursor and text selection (issue #420)", () => {
     await openFile("long.md");
     await openFile("note.md");
 
-    const tab = await centerOf(`.tab[data-tab-path="${path.join(fixturesDir, "long.md")}"]`);
+    // `.tab` is rendered by both the editor and terminal tab strips; scoped
+    // to `.editor-panel` even though `data-tab-path` is editor-only today.
+    const tab = await centerOf(`.editor-panel .tab[data-tab-path="${path.join(fixturesDir, "long.md")}"]`);
     const statusBar = await centerOf(".status-bar");
 
     await browser
