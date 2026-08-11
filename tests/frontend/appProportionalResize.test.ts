@@ -230,10 +230,17 @@ describe("App proportional panel resize (#301)", () => {
     await tick();
     expect(explorerStyleWidth(container)).toBe(250);
 
-    // Establish terminalWidthRatio = 0.3 at a clean mainEl.clientWidth = 1000
-    // (a drag-end establishment just needs some container-width snapshot at
-    // that moment, independent of whatever produced it).
-    setMainSize(container, { width: 1000 });
+    // Establish terminalWidthRatio = 0.3 at a clean .main content width of
+    // 1000 (a drag-end establishment just needs some container-width
+    // snapshot at that moment, independent of whatever produced it) —
+    // appEl.clientWidth 1254 minus the explorer's already-committed 250 and
+    // the resizer's 4px. Issue #427 routed this establishment through the
+    // analytic mainContentWidth too (it used to read mainEl.clientWidth
+    // directly, correct only because this handler never writes explorerWidth
+    // in the same pass, not by construction — see the "seven sites, three
+    // sources" note in rebaselineTerminalWidth's dock-switch-era callers),
+    // so the snapshot is set on appEl now rather than on mainEl directly.
+    setAppWidth(container, 1254);
     dragTerminal(container, 0);
     await tick();
     expect(terminalStyle(container).width).toBe("300px");
@@ -539,14 +546,16 @@ describe("App proportional panel resize (#301)", () => {
     expect(terminalStyle(container).width).toBe("300px");
   });
 
-  it("dragging the explorer past the terminal's container-relative maximum clamps it live and re-baselines the ratio, so a sidebar toggle round-trips exactly (#417 AC1 and AC2)", async () => {
+  it("dragging the explorer past the terminal's container-relative maximum clamps it live, and hiding the sidebar afterward recovers the pre-squeeze preference (#417 AC1/AC2, #427)", async () => {
     // Issue #417's own reproduction reads "Expected: terminal width stays at
-    // 592px throughout" — that describes `main`'s current, buggy behaviour,
-    // not this fix's. The live clamp below squeezes the terminal the moment
-    // it no longer fits, during the drag itself, so 592px is gone the instant
-    // the sidebar passes that point; what survives is AC2's actual
-    // requirement — an exact round trip from whatever the post-drag width is
-    // — not the reproduction's "stays at 592" prose.
+    // 592px throughout" — that still describes buggy behaviour, not this
+    // fix's: the live clamp below squeezes the terminal to 192px the moment
+    // it no longer fits, during the drag itself, so 592px is gone the
+    // instant the sidebar passes that point, exactly as it was pre-#427.
+    // What #427 changes is what happens next: hiding the sidebar is room
+    // becoming available, so it now recovers the 592px the user actually
+    // chose, rather than re-deriving a fraction of the squeezed 192px that
+    // corresponds to nothing anyone asked for (issue #427).
     terminalPosition.set("left");
     const { container } = renderApp();
     await tick();
@@ -570,18 +579,20 @@ describe("App proportional panel resize (#301)", () => {
     explorerVisible.set(false);
     await tick();
     await tick();
-    // round(192 / 396 * 1000) = 485.
-    expect(terminalStyle(container).width).toBe("485px");
+    // Before #427: round(192 / 396 * 1000) = 485, a number corresponding to
+    // nothing anyone chose. After #427: the panel renders as much of its
+    // 592px preference as the now-unconstrained 1000px container allows —
+    // clampTerminalWidth(592, 1000) = 592, the full preference.
+    expect(terminalStyle(container).width).toBe("592px");
 
     explorerVisible.set(true);
     await tick();
     await tick();
-    // Exact round trip: round(192 / 396 * 396) = 192. Without the fix this
-    // sequence is 592 -> 796 -> 192 (the issue's own reported numbers).
+    // Exact round trip back to the squeezed width: only its midpoint moved.
     expect(terminalStyle(container).width).toBe("192px");
   });
 
-  it("the terminal clamp is taken from the gesture's starting width, so an overshoot-and-return within one drag is non-destructive", async () => {
+  it("the terminal clamp is taken from the preference, so an overshoot-and-return within one drag is non-destructive", async () => {
     terminalPosition.set("left");
     const { container } = renderApp();
     await tick();
@@ -592,25 +603,29 @@ describe("App proportional panel resize (#301)", () => {
     await tick();
 
     setMainSize(container, { width: 796, height: 796 });
-    dragTerminal(container, 592 - 320); // terminalWidth -> 592
+    dragTerminal(container, 592 - 320); // terminalWidth -> 592, and terminalWidthPreferred -> 592
     await tick();
 
     const resizer = container.querySelector(".explorer + .resizer")!;
     resizer.dispatchEvent(pointerLikeEvent("pointerdown", 200));
 
-    // Drag to explorer 600 (delta 400 from a start of 200): the terminal's
-    // start-of-gesture width (592) clamps to 192 against the shrunk .main
-    // content width (396), and the editor keeps its reserved minimum instead
-    // of collapsing.
+    // Drag to explorer 600 (delta 400 from a start of 200): the preference
+    // (592) clamps to 192 against the shrunk .main content width (396), and
+    // the editor keeps its reserved minimum instead of collapsing. Issue
+    // #427 replaced the gesture-local `startTerminalWidth` this comment used
+    // to name with `terminalWidthPreferred`, a cross-gesture generalization
+    // of the same value — this drag doesn't touch the preference itself
+    // (only the explorer's own drag-end and the terminal's own resizer do),
+    // so the mechanism this test pins is otherwise unchanged.
     window.dispatchEvent(pointerLikeEvent("pointermove", 600));
     await tick();
     expect(terminalStyle(container).width).toBe("192px");
 
     // Back to explorer 200 within the same gesture: the clamp is always
-    // taken from the gesture's starting width (592), not the current one, so
-    // this restores 592 exactly rather than ratcheting down and staying
-    // there. A "clamp the current value" implementation would return 192
-    // here instead.
+    // taken from the preference (592), not the live, possibly-clamped
+    // `terminalWidth`, so this restores 592 exactly rather than ratcheting
+    // down and staying there. A "clamp the current value" implementation
+    // would return 192 here instead.
     window.dispatchEvent(pointerLikeEvent("pointermove", 200));
     await tick();
     expect(terminalStyle(container).width).toBe("592px");
@@ -620,7 +635,7 @@ describe("App proportional panel resize (#301)", () => {
     expect(terminalStyle(container).width).toBe("592px");
   });
 
-  it("a dock switch cannot record an out-of-range ratio either (#416 + #417)", async () => {
+  it("a dock switch cannot record an out-of-range ratio either (#416 + #417), and that ratio is now #427's squeeze carrier", async () => {
     // The D6 scenario: fixing #416 (re-baseline on a dock switch) without
     // #417's clamp would reintroduce #417's unclamped-ratio bug at the new
     // site, since a dock switch is exactly a moment the pixel value can be
@@ -647,17 +662,23 @@ describe("App proportional panel resize (#301)", () => {
 
     setTerminalPosition("left");
     await tick();
-    // clamp(592, 140, 396) = 192, ratio 192 / 396 = 0.4848 — the same clamp
-    // #417 needed, now exercised at the dock-switch site instead of the
-    // explorer drag-end. Without D1's clamp at this site this would record
-    // ratio 592 / 396 = 1.4949 and reproduce #417 exactly, at a call site
-    // neither issue names.
+    // clampTerminalWidth(592, 396) = 192 — the same clamp #417 needed, still
+    // exercised at the dock-switch site instead of the explorer drag-end.
+    // The ratio it records is 592 / 396 = 1.4949, taken from the preference
+    // rather than from this clamped 192: an out-of-range ratio here is no
+    // longer #417's bug, it is issue #427's carrier for the squeeze (see
+    // rebaselineTerminalWidth's own doc comment), and it is what makes the
+    // hide-the-sidebar step below recover 592 instead of a re-derived
+    // fraction of 192.
     expect(terminalStyle(container).width).toBe("192px");
 
     explorerVisible.set(false);
     await tick();
     await tick();
-    expect(terminalStyle(container).width).toBe("485px");
+    // Before #427: round(192 / 396 * 1000) = 485. After: the panel recovers
+    // as much of its 592px preference as the now-unconstrained 1000px
+    // container allows, which is the full 592.
+    expect(terminalStyle(container).width).toBe("592px");
 
     explorerVisible.set(true);
     await tick();
@@ -897,6 +918,237 @@ describe("App proportional panel resize (#301)", () => {
 
     expect(terminalStyle(container).height).toBe("400px");
     expect(terminalStyle(container).width).toBe("");
+  });
+});
+
+describe("App terminal preferred width (#427)", () => {
+  beforeEach(() => {
+    resetStores();
+  });
+
+  afterEach(() => {
+    cleanup();
+    endDragLock();
+  });
+
+  /**
+   * Establishes the geometry worked through in the plan: app 1000, sidebar
+   * dragged to 200, `.main` content 796, terminal dragged to 400 with its
+   * own resizer. Ratio at the end is 400 / 796 = 0.5025...
+   */
+  async function squeezeSetup(container: HTMLElement): Promise<void> {
+    setAppWidth(container, 1000);
+    dragExplorer(container, 200 - 240); // explorerWidth -> 200
+    await tick();
+
+    setMainSize(container, { width: 796, height: 796 });
+    dragTerminal(container, 400 - 320); // terminalWidth -> 400
+    await tick();
+  }
+
+  /** Widens the sidebar to its max (600), shrinking `.main` to 396 — below the terminal's preference, so it clamps to its floor of 192 (max(140, 396 - 204)). */
+  async function squeeze(container: HTMLElement): Promise<void> {
+    dragExplorer(container, 600 - 200); // explorerWidth -> 600
+    await tick();
+  }
+
+  it("AC1: dragging the sidebar back after a squeeze restores the terminal to its pre-squeeze width", async () => {
+    terminalPosition.set("left");
+    const { container } = renderApp();
+    await tick();
+    await tick();
+
+    await squeezeSetup(container);
+    expect(terminalStyle(container).width).toBe("400px");
+
+    await squeeze(container);
+    expect(terminalStyle(container).width).toBe("192px");
+
+    dragExplorer(container, 200 - 600); // sidebar 600 -> 200
+    await tick();
+    expect(terminalStyle(container).width).toBe("400px");
+  });
+
+  it("AC1, bounded: a partial drag back only recovers as far as the new container allows", async () => {
+    terminalPosition.set("left");
+    const { container } = renderApp();
+    await tick();
+    await tick();
+
+    await squeezeSetup(container);
+    await squeeze(container);
+    expect(terminalStyle(container).width).toBe("192px");
+
+    dragExplorer(container, 400 - 600); // sidebar 600 -> 400, .main content -> 596
+    await tick();
+    // clamp(400, 140, 596 - 204) = 392: a naive "restore the remembered
+    // value unconditionally" would render 400 here and push the editor
+    // below its reserved minimum.
+    expect(terminalStyle(container).width).toBe("392px");
+
+    dragExplorer(container, 200 - 400); // sidebar 400 -> 200, full recovery
+    await tick();
+    expect(terminalStyle(container).width).toBe("400px");
+  });
+
+  it("AC1 across a window resize: recovers as far as each container allows, and resumes proportional scaling once the squeeze fully lifts", async () => {
+    terminalPosition.set("left");
+    const { container } = renderApp();
+    await tick();
+    await tick();
+
+    await squeezeSetup(container);
+    await squeeze(container);
+    expect(terminalStyle(container).width).toBe("192px");
+
+    // The sidebar is pinned at EXPLORER_WIDTH_MAX (600) throughout this
+    // sequence, so the window's growth and shrinkage lands entirely in
+    // `.main`. The recorded ratio (400 / 396, over 1) keeps taking the
+    // squeeze branch at every one of these sizes.
+    setAppWidth(container, 1200);
+    await fireResize();
+    expect(terminalStyle(container).width).toBe("392px");
+
+    setAppWidth(container, 1400);
+    await fireResize();
+    expect(terminalStyle(container).width).toBe("400px");
+
+    setAppWidth(container, 1000);
+    await fireResize();
+    expect(terminalStyle(container).width).toBe("192px");
+
+    dragExplorer(container, 200 - 600); // sidebar 600 -> 200, squeeze lifts
+    await tick();
+    expect(terminalStyle(container).width).toBe("400px");
+
+    // The squeeze is over and the drag-end re-baselined the ratio, so a
+    // later resize scales proportionally again instead of staying pinned at
+    // the preference — this is where §4 item 5's residual ends.
+    setAppWidth(container, 1200);
+    await fireResize();
+    expect(terminalStyle(container).width).toBe("480px");
+  });
+
+  it("AC1 across a dock switch: the switch itself never resizes the squeezed panel, and the sidebar drag back still recovers it", async () => {
+    terminalPosition.set("left");
+    const { container } = renderApp();
+    await tick();
+    await tick();
+
+    await squeezeSetup(container);
+    await squeeze(container);
+    expect(terminalStyle(container).width).toBe("192px");
+
+    setTerminalPosition("bottom");
+    await tick();
+    setTerminalPosition("left");
+    await tick();
+    expect(terminalStyle(container).width).toBe("192px");
+
+    dragExplorer(container, 200 - 600); // sidebar 600 -> 200
+    await tick();
+    expect(terminalStyle(container).width).toBe("400px");
+  });
+
+  it("AC1 across a sidebar toggle: hiding and showing the sidebar round-trips exactly, and hiding it alone already recovers the preference", async () => {
+    terminalPosition.set("left");
+    const { container } = renderApp();
+    await tick();
+    await tick();
+
+    await squeezeSetup(container);
+    await squeeze(container);
+    expect(terminalStyle(container).width).toBe("192px");
+
+    explorerVisible.set(false);
+    await tick();
+    await tick();
+    // Hiding the sidebar is room becoming available, so the panel returns
+    // to the width the user chose (400) rather than to a re-derived
+    // fraction of the squeeze (issue #427's behaviour change).
+    expect(terminalStyle(container).width).toBe("400px");
+
+    explorerVisible.set(true);
+    await tick();
+    await tick();
+    // Exact round trip: the toggle consumed nothing.
+    expect(terminalStyle(container).width).toBe("192px");
+
+    dragExplorer(container, 200 - 600); // sidebar 600 -> 200
+    await tick();
+    expect(terminalStyle(container).width).toBe("400px");
+  });
+
+  it("cold-start recovery: an oversized persisted width clamps at mount, then grows back as the sidebar narrows", async () => {
+    terminalPosition.set("left");
+    saveTerminalLayout({ position: "left", height: 240, width: 1200 });
+
+    await withStubbedContainerSize(1000, 1000, async () => {
+      const { container } = renderApp();
+      await tick();
+      await tick();
+
+      // .main content at mount: 1000 - 240 (default explorer width) - 4 =
+      // 756; clampTerminalWidth(1200, 756) = max(140, 756 - 204) = 552.
+      expect(terminalStyle(container).width).toBe("552px");
+
+      dragExplorer(container, EXPLORER_WIDTH_MIN - 240); // explorerWidth -> 140
+      await tick();
+      // .main content -> 1000 - 140 - 4 = 856; clamp(1200, 856) = 652: the
+      // 1200 preference, seeded unclamped from the persisted width, grows
+      // back toward its own value as room comes back, bounded by
+      // clampTerminalWidth same as any other render.
+      expect(terminalStyle(container).width).toBe("652px");
+    });
+  });
+
+  it("a non-binding proportional rescale updates the preference too, not just the rendered width", async () => {
+    terminalPosition.set("left");
+    const { container } = renderApp();
+    await tick();
+    await tick();
+
+    await squeezeSetup(container); // terminalWidth -> 400 at content 796
+    expect(terminalStyle(container).width).toBe("400px");
+
+    setAppWidth(container, 1200);
+    await fireResize();
+    // round(0.5025... * 956) = 480, and the clamp doesn't bind (480 fits
+    // well inside 956 - 204 = 752), so this rescale is a deliberate layout
+    // change and 480 becomes the new preference, not just the new render.
+    expect(terminalStyle(container).width).toBe("480px");
+
+    dragExplorer(container, 600 - 240); // sidebar 240 -> 600 (post-resize width), squeeze
+    await tick();
+    expect(terminalStyle(container).width).toBe("392px");
+
+    dragExplorer(container, 240 - 600); // sidebar back to 240
+    await tick();
+    // Recovers to 480, the preference set by the resize above — not 400,
+    // which would mean the resize never actually updated it.
+    expect(terminalStyle(container).width).toBe("480px");
+  });
+
+  it("the resizer's own limit is what gets recorded as the preference, not room the container has to spare afterward", async () => {
+    terminalPosition.set("left");
+    const { container } = renderApp();
+    await tick();
+    await tick();
+
+    setAppWidth(container, 1000);
+    dragExplorer(container, 200 - 240); // explorerWidth -> 200
+    await tick();
+
+    setMainSize(container, { width: 796, height: 796 });
+    dragTerminal(container, 2000); // 2000px past the edge; stops at its container-relative maximum, 592
+    await tick();
+    expect(terminalStyle(container).width).toBe("592px");
+
+    dragExplorer(container, EXPLORER_WIDTH_MIN - 200); // explorerWidth -> 140, room for 652
+    await tick();
+    // The preference is 592, not 652: there is more room now, but nothing
+    // asked the panel to grow into it, only to stop being squeezed.
+    expect(terminalStyle(container).width).toBe("592px");
   });
 });
 
