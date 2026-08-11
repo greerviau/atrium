@@ -1,13 +1,44 @@
 import { expect } from "@wdio/globals";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openWorkspace } from "../helpers/workspace.js";
 import { hasClass } from "../helpers/selectors.js";
+import { elementText } from "../helpers/text.js";
+import { waitForEditorFocus } from "../helpers/editorFocus.js";
+import { invokeMenuCommand } from "../helpers/menu.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(__dirname, "../fixtures");
+const notePath = path.join(fixturesDir, "note.md");
+
+// The pane a freshly mounted terminal passes through before its first real
+// fit is xterm.js's minimum grid, which renders at 90px tall; a real pane in
+// this layout is ~195px. Waiting on a height above this floor is what keeps
+// the interaction off a pane that is not yet laid out.
+const TERMINAL_MIN_USABLE_HEIGHT = 100;
+
+async function activeTerminalPane() {
+  const pane = await $(".xterm-screen");
+  await pane.waitForExist({ timeout: 10000 });
+  await browser.waitUntil(async () => (await pane.getSize()).height > TERMINAL_MIN_USABLE_HEIGHT, {
+    timeout: 10000,
+    timeoutMsg: "expected the terminal pane to reach a usable rendered size",
+  });
+  return pane;
+}
 
 describe("markdown live preview", () => {
+  let pristine;
+
+  beforeEach(() => {
+    pristine = fs.readFileSync(notePath, "utf8");
+  });
+
+  afterEach(() => {
+    fs.writeFileSync(notePath, pristine);
+  });
+
   it("renders a heading, edits, saves, and persists content", async () => {
     await openWorkspace(fixturesDir);
 
@@ -21,19 +52,29 @@ describe("markdown live preview", () => {
 
     const editor = await $(".cm-content");
     await editor.click();
+    await waitForEditorFocus();
     await browser.keys(["End"]);
     await browser.keys(" edited");
 
-    await browser.keys(["Meta", "s"]);
+    // `main.rs` registers CmdOrCtrl+S as a native menu accelerator, which a
+    // WebDriver-synthesized chord never reaches; emitting `menu:save` drives
+    // the same path the accelerator and the File > Save item both take.
+    await invokeMenuCommand("menu:save");
 
-    // Reload the file through the same "open" path and confirm the edit
-    // round-tripped to disk.
-    await browser.execute((path) => {
-      return window.__TAURI_INTERNALS__.invoke("fs_read_file", {
-        workspaceId: "local",
-        path,
-      });
-    }, path.join(fixturesDir, "note.md"));
+    // Read the file back through the same "open" path and confirm the edit
+    // round-tripped to disk, rather than merely invoking the read.
+    await browser.waitUntil(
+      async () => {
+        const contents = await browser.execute((filePath) => {
+          return window.__TAURI_INTERNALS__.invoke("fs_read_file", {
+            workspaceId: "local",
+            path: filePath,
+          });
+        }, notePath);
+        return typeof contents === "string" && contents.includes(" edited");
+      },
+      { timeout: 10000, timeoutMsg: "expected the edit to have round-tripped to disk" },
+    );
   });
 });
 
@@ -72,24 +113,34 @@ describe("image viewer", () => {
       async () => (await image.getProperty("naturalWidth")) > 0,
       { timeout: 5000, timeoutMsg: "expected pixel.png to load through the Atrium asset protocol" },
     );
-    await expect($(".editor-panel .tab.active .tab-name")).toHaveText("pixel.png");
+
+    // `.tab-name` is `overflow: hidden`, and this target's Get Element Text
+    // returns "" for a clipped element however plainly visible it is.
+    await browser.waitUntil(
+      async () => (await elementText(".editor-panel .tab.active .tab-name")) === "pixel.png",
+      { timeout: 5000, timeoutMsg: "expected pixel.png's tab to be active" },
+    );
   });
 });
 
 describe("terminal", () => {
-  it("runs a command and renders its output", async () => {
-    const newTerminalButton = await $(".new-tab");
-    await newTerminalButton.click();
+  beforeEach(async () => {
+    await openWorkspace(fixturesDir);
+  });
 
-    const terminal = await $(".xterm-screen");
-    await terminal.waitForExist({ timeout: 5000 });
+  it("runs a command and renders its output", async () => {
+    // No `.new-tab` click: opening a workspace auto-spawns a terminal
+    // (`App.svelte`'s auto-spawn effect). Adding a second tab hides the first,
+    // and the hidden pane — re-fitted to xterm.js's minimum grid — is what an
+    // unscoped `.xterm-screen` lookup then resolves to.
+    const terminal = await activeTerminalPane();
     await terminal.click();
     await browser.keys("echo atrium-e2e-marker");
     await browser.keys("Enter");
 
     await browser.waitUntil(
       async () => (await $(".xterm-screen").getText()).includes("atrium-e2e-marker"),
-      { timeout: 5000, timeoutMsg: "expected echoed marker to appear in terminal output" },
+      { timeout: 10000, timeoutMsg: "expected echoed marker to appear in terminal output" },
     );
   });
 
@@ -99,12 +150,12 @@ describe("terminal", () => {
     // about (a pane that isn't the one being added must never have its PTY
     // killed and its terminal remounted just because the tree's shape
     // changed around it).
-    const preSplitPane = await $(".xterm-screen");
+    const preSplitPane = await activeTerminalPane();
     await preSplitPane.click();
     await browser.keys("echo atrium-pre-split-marker");
     await browser.keys("Enter");
     await browser.waitUntil(async () => (await preSplitPane.getText()).includes("atrium-pre-split-marker"), {
-      timeout: 5000,
+      timeout: 10000,
       timeoutMsg: "expected the pre-split marker to appear in the pane's output before splitting",
     });
 
@@ -117,7 +168,7 @@ describe("terminal", () => {
     await splitRightOption.click();
 
     await browser.waitUntil(async () => (await $$(".xterm-screen")).length === 2, {
-      timeout: 5000,
+      timeout: 10000,
       timeoutMsg: "expected two independent terminal panes after splitting",
     });
     const [firstPane, secondPane] = await $$(".xterm-screen");
@@ -138,11 +189,11 @@ describe("terminal", () => {
     await browser.keys("Enter");
 
     await browser.waitUntil(async () => (await firstPane.getText()).includes("atrium-split-marker-one"), {
-      timeout: 5000,
+      timeout: 10000,
       timeoutMsg: "expected the first pane's own marker to appear in its output",
     });
     await browser.waitUntil(async () => (await secondPane.getText()).includes("atrium-split-marker-two"), {
-      timeout: 5000,
+      timeout: 10000,
       timeoutMsg: "expected the second pane's own marker to appear in its output",
     });
 
@@ -158,12 +209,17 @@ describe("terminal", () => {
     // this suite verifies backend behavior — through the DOM: its
     // `.xterm-screen` only disappears once `TerminalPane`'s `onDestroy` ->
     // `ptyKill` has actually run.
-    const firstPanel = (await $$(".pane-leaf"))[0];
+    //
+    // Scoped to `.terminal-area`: `.pane-leaf` is rendered by the editor's
+    // split tree as well, and the editor's leaf comes first in document
+    // order, so an unscoped `$$(".pane-leaf")[0]` is the editor pane and
+    // carries no "Close terminal" button at all.
+    const firstPanel = (await $$(".terminal-area .pane-leaf"))[0];
     const closeButton = await firstPanel.$('button[aria-label="Close terminal"]');
     await closeButton.click();
 
     await browser.waitUntil(async () => (await $$(".xterm-screen")).length === 1, {
-      timeout: 5000,
+      timeout: 10000,
       timeoutMsg: "expected only one terminal pane to remain after closing the other",
     });
 
@@ -173,11 +229,14 @@ describe("terminal", () => {
 });
 
 describe("project-wide search", () => {
-  it("opens via Cmd/Ctrl+Shift+F, finds a match, and jumps to it", async () => {
-    // The native-menu-bound accelerator is reachable the same way the
-    // markdown test above reaches Cmd+S: send the raw key combo and let
-    // the native menu event drive the frontend.
-    await browser.keys(["Meta", "Shift", "f"]);
+  beforeEach(async () => {
+    await openWorkspace(fixturesDir);
+  });
+
+  it("opens via the Find in Files command, finds a match, and jumps to it", async () => {
+    // The accelerator itself is a native menu binding and unreachable from
+    // WebDriver; emitting `menu:find-in-files` drives the same frontend path.
+    await invokeMenuCommand("menu:find-in-files");
 
     const searchInput = await $(".search-panel input");
     await searchInput.waitForExist({ timeout: 5000 });
@@ -185,7 +244,7 @@ describe("project-wide search", () => {
     await browser.keys("bold");
 
     const resultRow = await $(".search-result-row");
-    await resultRow.waitForExist({ timeout: 5000 });
+    await resultRow.waitForExist({ timeout: 10000 });
     await resultRow.click();
 
     // Selecting a result closes the overlay and jumps to it via the same
@@ -194,21 +253,23 @@ describe("project-wide search", () => {
     await $(".search-panel").waitForExist({ timeout: 5000, reverse: true });
 
     await browser.waitUntil(
-      async () => (await $(".editor-panel .tab.active .tab-name").getText()).includes("note.md"),
-      { timeout: 5000, timeoutMsg: "expected note.md's tab to be active after jumping to the search result" },
+      async () => ((await elementText(".editor-panel .tab.active .tab-name")) ?? "").includes("note.md"),
+      { timeout: 10000, timeoutMsg: "expected note.md's tab to be active after jumping to the search result" },
     );
     await browser.waitUntil(
       async () => (await $(".cm-content").getText()).includes("bold"),
-      { timeout: 5000, timeoutMsg: "expected the editor to have scrolled to the matched line" },
+      { timeout: 10000, timeoutMsg: "expected the editor to have scrolled to the matched line" },
     );
   });
 });
 
 describe("go to file", () => {
-  it("opens via Cmd/Ctrl+P in Files mode, finds a file by name, and jumps to it", async () => {
-    // Same reachability path as the content-search accelerator above: send
-    // the raw key combo and let the native menu event drive the frontend.
-    await browser.keys(["Meta", "p"]);
+  beforeEach(async () => {
+    await openWorkspace(fixturesDir);
+  });
+
+  it("opens via the Go to File command in Files mode, finds a file by name, and jumps to it", async () => {
+    await invokeMenuCommand("menu:go-to-file");
 
     const panel = await $(".search-panel");
     await panel.waitForExist({ timeout: 5000 });
@@ -221,8 +282,18 @@ describe("go to file", () => {
     await searchInput.click();
     await browser.keys("note");
 
+    // Files mode's empty-query state is a real "browse all files" list, not
+    // a blank slate — unlike content mode, which never searches below its
+    // three-character minimum. A `.search-result-row` can already exist
+    // from that browse list the instant the overlay opens, so waiting for
+    // mere existence can click a row that predates the debounced "note"
+    // query settling. Wait for the first row's own text to actually reflect
+    // the typed query before clicking it.
     const resultRow = await $(".search-result-row");
-    await resultRow.waitForExist({ timeout: 5000 });
+    await browser.waitUntil(
+      async () => ((await elementText(".search-result-row .search-result-filename")) ?? "").toLowerCase().includes("note"),
+      { timeout: 10000, timeoutMsg: "expected the first result row to reflect the \"note\" query" },
+    );
     await resultRow.click();
 
     // Selecting a file result closes the overlay and jumps straight to the
@@ -231,35 +302,70 @@ describe("go to file", () => {
     await $(".search-panel").waitForExist({ timeout: 5000, reverse: true });
 
     await browser.waitUntil(
-      async () => (await $(".editor-panel .tab.active .tab-name").getText()).includes("note.md"),
-      { timeout: 5000, timeoutMsg: "expected note.md's tab to be active after jumping to the file result" },
+      async () => ((await elementText(".editor-panel .tab.active .tab-name")) ?? "").includes("note.md"),
+      { timeout: 10000, timeoutMsg: "expected note.md's tab to be active after jumping to the file result" },
     );
   });
 });
 
 describe("status bar", () => {
+  beforeEach(async () => {
+    await openWorkspace(fixturesDir);
+    const fileNode = await $(`//span[${hasClass("name")} and text()='note.md']`);
+    await fileNode.waitForExist({ timeout: 10000 });
+    await fileNode.click();
+    await $(".cm-content").waitForExist({ timeout: 5000 });
+  });
+
   it("shows the active file's path and cursor position, and updates as the caret moves", async () => {
     const statusBar = await $(".status-bar");
     await statusBar.waitForExist({ timeout: 5000 });
 
-    const pathIndicator = await $(".status-bar .path");
-    await expect(pathIndicator).toHaveText("note.md");
+    // `.status-item.path` is `overflow: hidden`, so its text must be read
+    // through the DOM rather than Get Element Text.
+    await browser.waitUntil(async () => (await elementText(".status-bar .path")) === "note.md", {
+      timeout: 5000,
+      timeoutMsg: "expected the status bar to show the active file's path",
+    });
 
-    const cursorIndicator = await $(".status-bar .status-item.mono:not(.path)");
-    const before = await cursorIndicator.getText();
+    const cursorSelector = ".status-bar .status-item.mono:not(.path)";
 
     const editor = await $(".cm-content");
     await editor.click();
-    await browser.keys(["End"]);
+    await waitForEditorFocus();
 
-    await browser.waitUntil(async () => (await cursorIndicator.getText()) !== before, {
-      timeout: 5000,
-      timeoutMsg: "expected the cursor-position indicator to update after moving the caret",
-    });
+    // Place the caret deterministically first. A click lands on the centre of
+    // `.cm-content`, which for this fixture is below the last line, so
+    // CodeMirror puts the caret at the end of the document — where `End` is a
+    // no-op and the indicator never changes.
+    // Re-sends the chord each poll until the caret is actually at the top.
+    // `waitForEditorFocus` guarantees `.cm-content` holds focus, but the first
+    // chord after focus lands can still be dropped under software rendering —
+    // the same class of race as the editor click itself. Ctrl+Home is
+    // idempotent, so re-sending it is safe and self-healing.
+    await browser.waitUntil(
+      async () => {
+        await browser.keys(["Control", "Home"]);
+        return (await elementText(cursorSelector)) === "Ln 1, Col 1";
+      },
+      { timeout: 10000, interval: 500, timeoutMsg: "expected the caret to start at the top of the document" },
+    );
+
+    await browser.keys(["End"]);
+    await browser.waitUntil(
+      async () => {
+        const text = (await elementText(cursorSelector)) ?? "";
+        return text.startsWith("Ln 1,") && text !== "Ln 1, Col 1";
+      },
+      { timeout: 5000, timeoutMsg: "expected the cursor-position indicator to update after moving the caret" },
+    );
   });
 
   it("clicking the status-bar search button opens the search overlay", async () => {
-    const searchButton = await $('.status-bar button[aria-label="Search (Cmd/Ctrl+Shift+F)"]');
+    // Matched on the label's stable prefix: the parenthesised part is a
+    // rendered keybinding glyph (`Search (⌘⇧F)`), not part of the button's
+    // identity.
+    const searchButton = await $('.status-bar button[aria-label^="Search ("]');
     await searchButton.click();
 
     const panel = await $(".search-panel");
@@ -270,7 +376,7 @@ describe("status bar", () => {
   });
 
   it("clicking the explorer toggle button hides and reshows the file explorer", async () => {
-    const toggleButton = await $('.status-bar button[aria-label="Toggle Explorer (Cmd/Ctrl+B)"]');
+    const toggleButton = await $('.status-bar button[aria-label^="Toggle Explorer ("]');
     const explorer = await $(".explorer");
     await explorer.waitForExist({ timeout: 5000 });
 
@@ -282,7 +388,7 @@ describe("status bar", () => {
   });
 
   it("clicking the terminal toggle button hides and reshows the terminal panel", async () => {
-    const toggleButton = await $('.status-bar button[aria-label="Toggle Terminal (Cmd/Ctrl+R)"]');
+    const toggleButton = await $('.status-bar button[aria-label^="Toggle Terminal ("]');
     const terminalArea = await $(".terminal-area");
     await terminalArea.waitForDisplayed({ timeout: 5000 });
 

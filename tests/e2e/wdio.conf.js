@@ -1,4 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -7,6 +9,7 @@ const appBinary = path.join(__dirname, "../../src-tauri/target/debug/atrium");
 
 let frontendServer;
 let tauriDriver;
+let dataHomeDir;
 
 function stopProcessTree(child) {
   if (!child?.pid) return;
@@ -61,6 +64,17 @@ export const config = {
   // v2 Linux/Windows system dependencies (webkit2gtk + friends on Linux, or
   // WebView2 and C++ Build Tools on Windows) to already be installed.
   onPrepare: async () => {
+    // A fresh, per-run webview profile. Without this, the app's persisted
+    // `atrium.editorSession` (open tabs, split-pane tree) and `recents.json`
+    // carry over from whatever a *previous run* of this suite left behind —
+    // `restoreTabsOnStartup` defaults to true, and `openWorkspace`'s
+    // `browser.refresh()` picks up whatever the profile already has, so a
+    // stale session from an earlier run silently changes what a spec sees.
+    // Set before `beforeSession` spawns `tauri-driver`, so the app process
+    // inherits it from the start.
+    dataHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), `atrium-e2e-${process.pid}-`));
+    process.env.XDG_DATA_HOME = dataHomeDir;
+
     const npm = process.platform === "win32" ? "npm.cmd" : "npm";
     frontendServer = spawn(npm, ["run", "dev", "--", "--host", "127.0.0.1"], {
       cwd: path.join(__dirname, "../.."),
@@ -97,5 +111,8 @@ export const config = {
 
   onComplete: () => {
     stopProcessTree(frontendServer);
+    if (dataHomeDir) {
+      fs.rmSync(dataHomeDir, { recursive: true, force: true });
+    }
   },
 };

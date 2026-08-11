@@ -55,6 +55,34 @@ use workspace::Workspace;
 /// implemented as plain JS `keydown` handlers in
 /// `FileTreeNode.svelte`/`FileTree.svelte` instead.
 ///
+/// The accelerators for the menu items `tests/e2e/`'s WebDriver-based suite
+/// cannot verify, because they're `muda` menu-item accelerators handled
+/// above the WebView: a synthetic key combo arrives in the DOM with the
+/// right modifiers and never reaches native accelerator handling at all
+/// (`tests/e2e/helpers/menu.js` drives these by emitting the `menu:*` event
+/// directly instead, and documents why). `build_menu` consumes this table
+/// rather than hardcoding these seven strings inline, so it cannot drift
+/// from what this test asserts.
+const WEBDRIVER_UNREACHABLE_ACCELERATORS: &[(&str, &str)] = &[
+    ("menu:save", "CmdOrCtrl+S"),
+    ("menu:find-in-files", "CmdOrCtrl+Shift+F"),
+    ("menu:go-to-file", "CmdOrCtrl+P"),
+    ("menu:split-up", "CmdOrCtrl+Alt+Up"),
+    ("menu:split-down", "CmdOrCtrl+Alt+Down"),
+    ("menu:split-left", "CmdOrCtrl+Alt+Left"),
+    ("menu:split-right", "CmdOrCtrl+Alt+Right"),
+];
+
+fn webdriver_unreachable_accelerator(id: &str) -> &'static str {
+    WEBDRIVER_UNREACHABLE_ACCELERATORS
+        .iter()
+        .find(|(item_id, _)| *item_id == id)
+        .map(|(_, accelerator)| *accelerator)
+        .unwrap_or_else(|| {
+            panic!("no accelerator registered in WEBDRIVER_UNREACHABLE_ACCELERATORS for {id}")
+        })
+}
+
 /// The `Help` submenu's title is the literal string `"Help"`: on macOS,
 /// AppKit recognizes that exact title and automatically adds a menu-search
 /// field at its top, letting a user fuzzy-search every command across the
@@ -84,7 +112,13 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         true,
         Some("CmdOrCtrl+O"),
     )?;
-    let save = MenuItem::with_id(app, "menu:save", "Save", true, Some("CmdOrCtrl+S"))?;
+    let save = MenuItem::with_id(
+        app,
+        "menu:save",
+        "Save",
+        true,
+        Some(webdriver_unreachable_accelerator("menu:save")),
+    )?;
     let close_tab = MenuItem::with_id(
         app,
         "menu:close-tab",
@@ -118,14 +152,14 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         "menu:find-in-files",
         "Find in Files…",
         true,
-        Some("CmdOrCtrl+Shift+F"),
+        Some(webdriver_unreachable_accelerator("menu:find-in-files")),
     )?;
     let go_to_file = MenuItem::with_id(
         app,
         "menu:go-to-file",
         "Go to File…",
         true,
-        Some("CmdOrCtrl+P"),
+        Some(webdriver_unreachable_accelerator("menu:go-to-file")),
     )?;
     let edit_menu = Submenu::with_items(
         app,
@@ -171,28 +205,28 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         "menu:split-up",
         "Split Up",
         true,
-        Some("CmdOrCtrl+Alt+Up"),
+        Some(webdriver_unreachable_accelerator("menu:split-up")),
     )?;
     let split_down = MenuItem::with_id(
         app,
         "menu:split-down",
         "Split Down",
         true,
-        Some("CmdOrCtrl+Alt+Down"),
+        Some(webdriver_unreachable_accelerator("menu:split-down")),
     )?;
     let split_left = MenuItem::with_id(
         app,
         "menu:split-left",
         "Split Left",
         true,
-        Some("CmdOrCtrl+Alt+Left"),
+        Some(webdriver_unreachable_accelerator("menu:split-left")),
     )?;
     let split_right = MenuItem::with_id(
         app,
         "menu:split-right",
         "Split Right",
         true,
-        Some("CmdOrCtrl+Alt+Right"),
+        Some(webdriver_unreachable_accelerator("menu:split-right")),
     )?;
     let zoom_in = MenuItem::with_id(app, "menu:zoom-in", "Zoom In", true, Some("CmdOrCtrl+="))?;
     let zoom_out = MenuItem::with_id(app, "menu:zoom-out", "Zoom Out", true, Some("CmdOrCtrl+-"))?;
@@ -532,4 +566,43 @@ fn main() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `build_menu` takes `&tauri::AppHandle`, and every `MenuItem::with_id`
+    // needs one, so constructing real menu items here isn't the available
+    // route (`src-tauri/` has no `[lib]` target to drive a test harness app
+    // through either). `build_menu` consumes `WEBDRIVER_UNREACHABLE_ACCELERATORS`
+    // directly for these seven items, so asserting on the table's contents is
+    // asserting on what `build_menu` actually registers.
+    #[test]
+    fn webdriver_unreachable_accelerators_match_expected() {
+        let expected: &[(&str, &str)] = &[
+            ("menu:save", "CmdOrCtrl+S"),
+            ("menu:find-in-files", "CmdOrCtrl+Shift+F"),
+            ("menu:go-to-file", "CmdOrCtrl+P"),
+            ("menu:split-up", "CmdOrCtrl+Alt+Up"),
+            ("menu:split-down", "CmdOrCtrl+Alt+Down"),
+            ("menu:split-left", "CmdOrCtrl+Alt+Left"),
+            ("menu:split-right", "CmdOrCtrl+Alt+Right"),
+        ];
+
+        assert_eq!(WEBDRIVER_UNREACHABLE_ACCELERATORS, expected);
+    }
+
+    #[test]
+    fn webdriver_unreachable_accelerator_finds_every_table_entry() {
+        for (id, accelerator) in WEBDRIVER_UNREACHABLE_ACCELERATORS {
+            assert_eq!(webdriver_unreachable_accelerator(id), *accelerator);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "no accelerator registered")]
+    fn webdriver_unreachable_accelerator_panics_on_unknown_id() {
+        webdriver_unreachable_accelerator("menu:not-a-real-item");
+    }
 }

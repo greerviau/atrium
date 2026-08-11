@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openWorkspace } from "../helpers/workspace.js";
 import { hasClass } from "../helpers/selectors.js";
+import { waitForEditorFocus } from "../helpers/editorFocus.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(__dirname, "../fixtures");
@@ -18,6 +19,9 @@ describe("issue #359 reproduction", () => {
     await editor.waitForExist({ timeout: 5000 });
     const heading = await $(".cm-heading-1");
     await heading.click();
+    // The click returns before CodeMirror takes focus, so the `editorActive`
+    // precondition below and the `End` press both need it settled first.
+    await waitForEditorFocus();
     await browser.keys(["End"]);
 
     const before = await browser.execute(() => ({
