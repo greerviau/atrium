@@ -1,8 +1,8 @@
 import { EditorSelection, EditorState, Prec, findClusterBreak, type Extension } from "@codemirror/state";
-import { EditorView, ViewPlugin, keymap, type MouseSelectionStyle } from "@codemirror/view";
+import { EditorView, ViewPlugin, drawSelection, keymap, type MouseSelectionStyle } from "@codemirror/view";
 import { history, defaultKeymap, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { searchKeymap } from "@codemirror/search";
-import { autocompletion } from "@codemirror/autocomplete";
+import { acceptCompletion, autocompletion, completionKeymap } from "@codemirror/autocomplete";
 import { inFileSearch } from "./search/atriumSearchPanel";
 
 // --- Part 1: a mouse-selection style that never mistakes scroll-drift for a drag (issue #161) ---
@@ -380,26 +380,58 @@ export const firstFocusScrollGuard = Prec.highest(
  * Extensions shared by every pane (markdown rendered, markdown source, and
  * code — all via `EditorPane.svelte`'s `viewModeExtensions`): history, the
  * default/history keymaps, tab-to-indent, the find/replace panel, word-based
- * autocompletion, and the scroll-safe mouse-selection/focus handling above.
- * `EditorState.allowMultipleSelections` is turned on here since it's a
- * `static` facet that must be part of the initial configuration: without it,
- * every multi-cursor gesture (Alt-click, Cmd-D select-next, the search
- * panel's select-all-matches) silently collapses to a single cursor instead
- * of erroring, so the gap has no other way to surface than a passing-looking
- * click that does the wrong thing. The CM theme and syntax highlight style
- * (theme-driven, not a library default) live in `EditorPane.svelte`'s theme
- * `Compartment` instead, since they need to be reconfigured on a theme
- * change without tearing down everything else in this array. Line wrapping
- * is mode-dependent (prose wraps, code doesn't) so it lives in
- * `EditorPane.svelte` alongside the other mode-dependent extensions instead
- * of here.
+ * autocompletion, an app-drawn caret and selection, and the scroll-safe
+ * mouse-selection/focus handling above. `drawSelection()` is what makes
+ * `src/lib/theme/cmTheme.ts`'s `cursor` and `selectionBg` tokens take
+ * effect and what makes `allowMultipleSelections` below actually render more
+ * than one caret — without it, the caret and selection are the webview's own
+ * native `contenteditable` rendering, which this app does not control the
+ * painting or invalidation of. `EditorState.allowMultipleSelections` is
+ * turned on here since it's a `static` facet that must be part of the
+ * initial configuration: without it, every multi-cursor gesture (Alt-click,
+ * Cmd-D select-next, the search panel's select-all-matches) silently
+ * collapses to a single cursor instead of erroring, so the gap has no other
+ * way to surface than a passing-looking click that does the wrong thing.
+ * The CM theme and syntax highlight style (theme-driven, not a library
+ * default) live in `EditorPane.svelte`'s theme `Compartment` instead, since
+ * they need to be reconfigured on a theme change without tearing down
+ * everything else in this array. Line wrapping is mode-dependent (prose
+ * wraps, code doesn't) so it lives in `EditorPane.svelte` alongside the
+ * other mode-dependent extensions instead of here.
  */
 export function baseExtensions(): Extension[] {
   return [
     history(),
     inFileSearch(),
-    autocompletion(),
-    keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
+    drawSelection(),
+    autocompletion({ defaultKeymap: false }),
+    keymap.of([
+      // Tab must precede `indentWithTab` below: same-key bindings within one
+      // `keymap.of` array run in order until one returns `true`, and
+      // `indentMore` (inside `indentWithTab`) always returns `true`, so
+      // placed after it, a completion would never get the chance to accept.
+      // This is deliberately not `Prec.highest` — that precedence level is
+      // already occupied by `autocompletion()`'s own internal keymap and by
+      // the markdown table keymap
+      // (`src/lib/editor/markdown/livePreviewPlugin.ts`), so a third
+      // `Prec.highest` Tab binding would resolve by extension array order
+      // rather than by any stated rule. `completionKeymap` is spread rather
+      // than hand-transcribed because two of its nine entries
+      // (`{mac: "Alt-`"}`, `{mac: "Alt-i"}`) have no `key` field at all and
+      // are easy to drop by accident. Enter is filtered out: CodeMirror
+      // binds it to accept a completion by default, which is fine while the
+      // tooltip is rare, but the word-completion fallback below
+      // (`wordCompletion.ts`) makes the tooltip open on nearly every
+      // identifier typed in a code file — leaving Enter bound would mean
+      // pressing Enter for a plain newline can silently insert an unrelated
+      // completion instead. Tab accepts; Enter is always a newline.
+      { key: "Tab", run: acceptCompletion },
+      ...completionKeymap.filter((binding) => binding.key !== "Enter"),
+      ...defaultKeymap,
+      ...historyKeymap,
+      ...searchKeymap,
+      indentWithTab,
+    ]),
     EditorState.allowMultipleSelections.of(true),
     EditorView.mouseSelectionStyle.of(movementAwareMouseSelectionStyle),
     wheelTracker,

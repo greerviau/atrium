@@ -77,3 +77,26 @@ if (typeof Element.prototype.animate !== "function") {
     return animation;
   };
 }
+
+/**
+ * jsdom implements no layout, and in particular no `Range` geometry — neither
+ * `getClientRects` nor `getBoundingClientRect` exists on `Range.prototype`.
+ * `drawSelection()` measures every cursor and selection rectangle through
+ * `EditorView.coordsAtPos` -> `textRange(...).getClientRects()`, so without these
+ * every editor-mounting test throws on each measured update. vitest reports those
+ * as unhandled errors rather than failures, so they are pure output noise.
+ * Empty geometry is the honest answer under a layout-free DOM: the layers render,
+ * measure to nothing, and draw no rectangles.
+ */
+if (typeof Range.prototype.getClientRects !== "function") {
+  const emptyRects = { length: 0, item: () => null, [Symbol.iterator]: function* () {} } as unknown as DOMRectList;
+  Range.prototype.getClientRects = function (): DOMRectList {
+    return emptyRects;
+  };
+}
+
+if (typeof Range.prototype.getBoundingClientRect !== "function") {
+  Range.prototype.getBoundingClientRect = function (): DOMRect {
+    return new DOMRect(0, 0, 0, 0);
+  };
+}
