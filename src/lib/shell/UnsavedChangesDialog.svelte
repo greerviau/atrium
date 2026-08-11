@@ -5,14 +5,11 @@
   import { appConfirmClose, isAppError } from "../ipc/commands";
   import { confirmWorkspaceSwitch, workspace } from "../stores/workspace";
   import { flushEditorSession } from "../stores/editorSession";
+  import { basename } from "../util/path";
 
   let panelEl: HTMLDivElement | undefined = $state();
   let errorMessage = $state<string | null>(null);
   let saving = $state(false);
-
-  function basename(path: string): string {
-    return path.split("/").pop() ?? path;
-  }
 
   function describeError(err: unknown): string {
     if (isAppError(err)) return err.message;

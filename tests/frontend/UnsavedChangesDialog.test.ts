@@ -110,6 +110,18 @@ describe("UnsavedChangesDialog", () => {
       expect(await screen.findByText(/notes\.md/)).toBeTruthy();
     });
 
+    it("shows only the filename for a Windows backslash path", async () => {
+      const path = "C:\\ws\\src\\notes.md";
+      tabsState.set({ tabs: [dirtyTab(path)], activeTabPath: path });
+      closePrompt.set({ kind: "tab", path });
+      render(UnsavedChangesDialog);
+      await tick();
+
+      const message = document.querySelector(".close-prompt-message")!.textContent!;
+      expect(message).toContain("notes.md");
+      expect(message).not.toContain("C:\\ws");
+    });
+
     it("Save writes the file, then removes the tab and closes the prompt", async () => {
       render(UnsavedChangesDialog);
       await tick();
@@ -215,6 +227,20 @@ describe("UnsavedChangesDialog", () => {
       await tick();
 
       expect(await screen.findByText(/a\.md.*b\.md/)).toBeTruthy();
+    });
+
+    it("lists only filenames for Windows backslash paths", async () => {
+      tabsState.set({
+        tabs: [dirtyTab("C:\\ws\\a.md"), dirtyTab("C:\\ws\\src\\b.md")],
+        activeTabPath: "C:\\ws\\a.md",
+      });
+      closePrompt.set({ kind: "window", paths: ["C:\\ws\\a.md", "C:\\ws\\src\\b.md"] });
+      render(UnsavedChangesDialog);
+      await tick();
+
+      const message = document.querySelector(".close-prompt-message")!.textContent!;
+      expect(message).toContain("a.md, b.md");
+      expect(message).not.toContain("C:\\ws");
     });
 
     it("Save All writes every listed file before appConfirmClose is invoked", async () => {
