@@ -35,8 +35,11 @@
 
 {#snippet explorerIcon()}
   <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3">
-    <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-    <line x1="6" y1="2.5" x2="6" y2="13.5" />
+    <line x1="2.5" y1="2.5" x2="2.5" y2="13.5" stroke-linecap="round" />
+    <line x1="2.5" y1="4.5" x2="6.5" y2="4.5" />
+    <line x1="2.5" y1="11.5" x2="6.5" y2="11.5" />
+    <rect x="6.5" y="2.5" width="7" height="4" rx="1.2" />
+    <rect x="6.5" y="9.5" width="7" height="4" rx="1.2" />
   </svg>
 {/snippet}
 
