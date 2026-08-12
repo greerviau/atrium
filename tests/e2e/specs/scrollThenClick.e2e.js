@@ -181,7 +181,7 @@ async function scrollAndClickMidSettle() {
   return last;
 }
 
-describe("rendered markdown: scroll then click resolves against the rendered viewport (issues #183 and #367)", () => {
+describe("rendered markdown: scroll then click resolves against the rendered viewport (the condition issues #183 and #367 are about)", () => {
   it("resolves a click made while the pane is still settling, and holds the scroll position", async () => {
     const { scroller, point, initialReadout, atMousedown, settledState, midSettleReadout, landedMidSettle } =
       await scrollAndClickMidSettle();
@@ -214,6 +214,8 @@ describe("rendered markdown: scroll then click resolves against the rendered vie
     // Where a click on this same point lands once everything has settled.
     // Neither guard applies to it — focused pane, no recent scroll — so it is
     // the position the rendered viewport actually maps these coordinates to.
+    // 700ms comfortably clears baseExtensions.ts's own RECENT_SCROLL_WINDOW_MS
+    // (120ms), well past the pane settling itself.
     await browser.pause(700);
     await clickAt(point);
     await waitForPaneToSettle(scroller);
