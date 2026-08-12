@@ -117,7 +117,13 @@ function removeRangeAround(sel: EditorSelection, pos: number) {
  * how the resolved document position drifted underneath it.
  */
 export function movementAwareMouseSelectionStyle(view: EditorView, startEvent: MouseEvent): MouseSelectionStyle {
-  const start = view.posAndSideAtCoords({ x: startEvent.clientX, y: startEvent.clientY }, false);
+  const anchor = replayAnchors.get(startEvent);
+  // The gesture's press-time position: the latched anchor for a replayed
+  // click, a live resolution for an ordinary one. Mutable because `update()`
+  // maps it through document changes.
+  const start = anchor
+    ? { pos: anchor.pos, assoc: anchor.assoc }
+    : view.posAndSideAtCoords({ x: startEvent.clientX, y: startEvent.clientY }, false);
   const clickCount = startEvent.detail || 1;
   let startSel = view.state.selection;
   return {
@@ -129,9 +135,24 @@ export function movementAwareMouseSelectionStyle(view: EditorView, startEvent: M
     },
     get(curEvent, extend, multiple) {
       const cur = view.posAndSideAtCoords({ x: curEvent.clientX, y: curEvent.clientY }, false);
-      let range = rangeForClick(view, cur.pos, cur.assoc, clickCount);
-      if (start.pos !== cur.pos && hasPointerMoved(startEvent, curEvent) && !extend) {
-        const startRange = rangeForClick(view, start.pos, start.assoc, clickCount);
+      // Both operands of the drag test come from the layout as it is right
+      // now. For an anchored gesture `start` is a press-time resolution and
+      // `cur` a current one, so comparing those two would read the pane's own
+      // relayout as pointer movement and build the spurious range issue #161
+      // is about — see the plan's §5.6. Re-resolving the press coordinates
+      // against the current layout is what keeps the test honest.
+      const pressNow = anchor
+        ? view.posAndSideAtCoords({ x: startEvent.clientX, y: startEvent.clientY }, false)
+        : start;
+      const dragged = pressNow.pos !== cur.pos && hasPointerMoved(startEvent, curEvent) && !extend;
+      // A gesture that never became a drag names the position it was pressed
+      // on — the anchor, when there is one. A drag is a screen-space sweep, so
+      // both of its ends are resolved in the layout being swept across and the
+      // anchor plays no part.
+      const target = dragged || !anchor ? cur : start;
+      let range = rangeForClick(view, target.pos, target.assoc, clickCount);
+      if (dragged) {
+        const startRange = rangeForClick(view, pressNow.pos, pressNow.assoc, clickCount);
         const from = Math.min(startRange.from, range.from);
         const to = Math.max(startRange.to, range.to);
         range = from < range.from ? EditorSelection.range(from, to, range.assoc) : EditorSelection.range(to, from, range.assoc);
@@ -140,7 +161,7 @@ export function movementAwareMouseSelectionStyle(view: EditorView, startEvent: M
         return startSel.replaceRange(startSel.main.extend(range.from, range.to, range.assoc));
       }
       const removed =
-        multiple && clickCount === 1 && startSel.ranges.length > 1 ? removeRangeAround(startSel, cur.pos) : null;
+        multiple && clickCount === 1 && startSel.ranges.length > 1 ? removeRangeAround(startSel, target.pos) : null;
       if (removed) {
         return removed;
       } else if (multiple) {
@@ -211,6 +232,9 @@ export const paneActivityTracker = ViewPlugin.fromClass(PaneActivityTracker);
 
 /** Marks a `mousedown` this extension has already redispatched once (after the settle delay), so it isn't deferred a second time. */
 const deferredMouseEvents = new WeakSet<MouseEvent>();
+
+/** The document position a deferred click was pointing at when its button went down, keyed by the synthetic `mousedown` that replays it. Latched before any waiting, so no relayout during the deferral can move it. */
+export const replayAnchors = new WeakMap<MouseEvent, { pos: number; assoc: -1 | 1 }>();
 
 function cloneMouseEvent(type: string, source: MouseEvent): MouseEvent {
   return new MouseEvent(type, {

@@ -4,7 +4,9 @@ import { EditorView } from "@codemirror/view";
 import {
   handleScrollSettleMousedown,
   guardFirstFocusScrollPosition,
+  movementAwareMouseSelectionStyle,
   paneActivityTracker,
+  replayAnchors,
   RECENT_SCROLL_WINDOW_MS,
 } from "../../src/lib/editor/baseExtensions";
 
@@ -312,5 +314,87 @@ describe("guardFirstFocusScrollPosition composed with handleScrollSettleMousedow
 
     expect(scrollAtMousedown).toBe(4000);
     expect(v.scrollDOM.scrollTop).toBe(4000);
+  });
+});
+
+/** jsdom has no real layout, so `posAndSideAtCoords` can't resolve coordinates on its own; matches the stub in `mouseSelection.test.ts`. */
+function mouseEvent(type: string, opts: Partial<MouseEventInit> & { detail?: number } = {}): MouseEvent {
+  return new MouseEvent(type, { clientX: 0, clientY: 0, detail: 1, ...opts });
+}
+
+describe("movementAwareMouseSelectionStyle: the replay anchor (issue #454, plan §5.6)", () => {
+  it("[unit case 6] does not build a relayout-sized range from a one-pixel jiggle, even though the live layout has moved well away from the anchor", () => {
+    // The regression revision 2 would have shipped: comparing the anchor
+    // (press-time layout) against a live resolution reads the pane's own
+    // relayout as pointer movement. Both live calls below resolve to the
+    // same position, as they would in a real layout barely a pixel apart,
+    // so drag-ness is decided honestly even though that live position sits
+    // far from the anchor.
+    const v = makeView();
+    const mousedown = mouseEvent("mousedown", { clientX: 10, clientY: 10, detail: 1 });
+    replayAnchors.set(mousedown, { pos: 2, assoc: 1 });
+    vi.spyOn(v, "posAndSideAtCoords").mockReturnValue({ pos: 9, assoc: 1 });
+
+    const style = movementAwareMouseSelectionStyle(v, mousedown);
+    const moveEvent = mouseEvent("mousemove", { clientX: 11, clientY: 10, detail: 1 }); // 1px away
+    const sel = style.get(moveEvent, false, false);
+
+    expect(sel.ranges).toHaveLength(1);
+    expect(sel.main.from).toBe(sel.main.to); // a cursor, never a range spanning anchor (2) to the live position (9)
+    expect(sel.main.from).toBe(2);
+  });
+
+  it("[unit case 5] resolves a stationary click to the anchor, even though posAndSideAtCoords now resolves elsewhere", () => {
+    const v = makeView();
+    const mousedown = mouseEvent("mousedown", { clientX: 10, clientY: 10, detail: 1 });
+    replayAnchors.set(mousedown, { pos: 3, assoc: 1 });
+    vi.spyOn(v, "posAndSideAtCoords").mockReturnValue({ pos: 8, assoc: 1 });
+
+    const style = movementAwareMouseSelectionStyle(v, mousedown);
+    const sel = style.get(mousedown, false, false);
+
+    expect(sel.main.from).toBe(3);
+    expect(sel.main.to).toBe(3);
+  });
+
+  it("[unit case 7] does not regress issue #161 for an anchored gesture: identical coordinates never build a range, even if the live resolution drifts between calls", () => {
+    const v = makeView();
+    const mousedown = mouseEvent("mousedown", { clientX: 10, clientY: 10, detail: 1 });
+    replayAnchors.set(mousedown, { pos: 2, assoc: 1 });
+    let call = 0;
+    const drifting = [5, 9];
+    vi.spyOn(v, "posAndSideAtCoords").mockImplementation(() => {
+      const pos = drifting[Math.min(call, drifting.length - 1)];
+      call++;
+      return { pos, assoc: 1 };
+    });
+
+    const style = movementAwareMouseSelectionStyle(v, mousedown);
+    const sel = style.get(mousedown, false, false); // same event: identical coordinates, no real movement
+
+    expect(sel.ranges).toHaveLength(1);
+    expect(sel.main.from).toBe(sel.main.to);
+    expect(sel.main.from).toBe(2); // the anchor, not either drifted live resolution
+  });
+
+  it("[unit case 8] resolves both ends of a real drag live, without the anchor", () => {
+    const v = makeView();
+    const mousedown = mouseEvent("mousedown", { clientX: 10, clientY: 10, detail: 1 });
+    replayAnchors.set(mousedown, { pos: 1, assoc: 1 });
+    let call = 0;
+    // get() resolves `cur` first, then re-resolves the press coordinates as `pressNow`.
+    const live = [9, 5];
+    vi.spyOn(v, "posAndSideAtCoords").mockImplementation(() => {
+      const pos = live[Math.min(call, live.length - 1)];
+      call++;
+      return { pos, assoc: 1 };
+    });
+
+    const style = movementAwareMouseSelectionStyle(v, mousedown);
+    const moveEvent = mouseEvent("mousemove", { clientX: 50, clientY: 10, detail: 1 }); // 40px away
+    const sel = style.get(moveEvent, false, false);
+
+    expect(sel.main.from).toBe(5);
+    expect(sel.main.to).toBe(9);
   });
 });
