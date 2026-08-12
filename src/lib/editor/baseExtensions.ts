@@ -435,6 +435,10 @@ function replayMousedownAfterMeasure(view: EditorView, event: MouseEvent, target
   // so it shares Phase A's budget rather than extending it: a target whose
   // settle window outlasts the shared budget replays anyway, exactly as it
   // did before this phase existed.
+  //
+  // Only used on the already-focused branch of `replay()` below. The
+  // not-yet-focused branch skips it: see that branch's own comment for why
+  // running it there widened an unrelated, pre-existing race with DOM focus.
   const waitForGeometryThenDispatch = () => {
     whenSettled(
       view,
@@ -472,14 +476,29 @@ function replayMousedownAfterMeasure(view: EditorView, event: MouseEvent, target
         view.scrollDOM.scrollTop = beforeFocusScrollTop;
         view.scrollDOM.scrollLeft = beforeFocusScrollLeft;
         // The write above changes the DOM after CodeMirror's read phase. A
-        // second measure records the restored offset before Phase B starts.
+        // second measure records the restored offset before the mousedown
+        // replays.
+        //
+        // Phase B is deliberately skipped on this branch. `view.focus()`
+        // above already set `document.activeElement` to `contentDOM`
+        // synchronously, several frames before the mousedown this chain
+        // ends in actually dispatches and resolves the click into a
+        // selection - a gap that predates Phase B, since this branch always
+        // ran a focus/restore measure round trip before replaying. Phase B
+        // widens that gap by its own minimum two checks (`whenSettled`
+        // always spends at least that much even when nothing is unstable),
+        // which is enough to make `document.activeElement === contentDOM`
+        // read true before the click has actually resolved - exactly what
+        // `tests/e2e/helpers/editorFocus.js`'s `waitForEditorFocus` polls
+        // for as its own readiness signal, so a wider gap here surfaced as
+        // real flakiness in unrelated E2E specs that focus a pane and then
+        // immediately send keystrokes. Phase B is quality, not correctness,
+        // for this branch too - the anchor already guarantees the click
+        // lands right - so dispatching immediately keeps this branch's
+        // latency exactly what it was before Phase B existed.
         view.requestMeasure({
           read() {
-            // `whenSettled` must not start from inside this `read()` - a
-            // `requestMeasure` issued during a measure pass is picked up by
-            // that same pass rather than a fresh frame (Step 2's contract) -
-            // so it starts from the following frame callback instead.
-            requestAnimationFrame(waitForGeometryThenDispatch);
+            requestAnimationFrame(dispatchMousedown);
           },
         });
       },

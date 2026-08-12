@@ -453,9 +453,9 @@ describe("replayMousedownAfterMeasure: the anchor latch, Phase B, and target re-
     const v = makeView();
     const target = makeTarget();
     const frame = stubAnimationFrame();
-    vi.spyOn(v, "focus").mockImplementation(() => {
-      v.contentDOM.focus();
-    });
+    // Phase B only runs on the already-focused fast path (see `replay()`'s
+    // own comment on why the not-yet-focused branch skips it).
+    v.contentDOM.focus();
     v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
     const event = dispatchMousedownOn(target, 5, 5);
     handleScrollSettleMousedown(event, v);
