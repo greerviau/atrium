@@ -14,6 +14,7 @@
   import { getRecentFiles, pruneRecentFiles } from "../stores/recentFiles";
   import { showErrorToast, describeError } from "../stores/errorToast";
   import { tooltip } from "../ui/tooltip";
+  import { relativeToRoot } from "../util/path";
 
   const DEBOUNCE_MS = 150;
   // Below this, a content-search query is too low-selectivity to be worth a
@@ -117,9 +118,15 @@
     const recentPaths = getRecentFiles(root);
     if (recentPaths.length === 0) return matches;
     const byPath = new Map(matches.map((m) => [m.path, m]));
+    // `relativeToRoot`'s out-of-root fallback (returning `path` verbatim)
+    // can never fire here: every entry in `recentPaths` came from
+    // `recordFileOpened`, which `openFile` (tabs.ts) only calls once it has
+    // already confirmed the path is under this same `root` via
+    // `isPathUnderOrEqual`. A recorded-recent path outside the workspace
+    // can't exist.
     const recent = recentPaths.map(
       (path): FileMatch =>
-        byPath.get(path) ?? { path, displayPath: relativePath(path), score: 0, matchIndices: [] },
+        byPath.get(path) ?? { path, displayPath: relativeToRoot(path, root), score: 0, matchIndices: [] },
     );
     const recordedSet = new Set(recentPaths);
     const rest = matches.filter((m) => !recordedSet.has(m.path));
@@ -254,13 +261,6 @@
     });
     return out;
   });
-
-  function relativePath(path: string): string {
-    const root = $workspace.root;
-    if (!root) return path;
-    const prefix = root.endsWith("/") ? root : `${root}/`;
-    return path.startsWith(prefix) ? path.slice(prefix.length) : path;
-  }
 
   interface HighlightSegment {
     text: string;
@@ -460,7 +460,7 @@
             <div class="search-results" role="listbox">
               {#each groups as group (group.path)}
                 <div class="search-group">
-                  <div class="search-group-header">{relativePath(group.path)}</div>
+                  <div class="search-group-header">{relativeToRoot(group.path, $workspace.root)}</div>
                   {#each group.matches as match (match.index)}
                     <!-- svelte-ignore a11y_click_events_have_key_events -->
                     <div

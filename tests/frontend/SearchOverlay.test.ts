@@ -795,6 +795,57 @@ describe("SearchOverlay", () => {
     expect(names).toEqual(["a.txt", "old-missing.txt", "b.txt"]);
   });
 
+  it("splits a synthesized recent's Windows-shaped path into filename and directory, not one span holding the whole path", async () => {
+    // Same shape as the universe-mismatch case above (a recorded-recent
+    // missing from findFiles' own result set), but with a Windows-shaped
+    // root/path — this pins the downstream consequence of #450: the
+    // synthesized `FileMatch.displayPath` must come out `/`-separated so
+    // `splitHighlightedPath` can find a `/` to split on, same as every
+    // backend-supplied row already does.
+    workspace.set({ id: "local", root: "C:\\proj" });
+    recordFileOpened("C:\\proj", "C:\\proj\\src\\notes.md");
+    vi.mocked(commands.findFiles).mockResolvedValue(
+      fileResults([{ path: "C:\\proj\\other.txt", displayPath: "other.txt", score: 0, matchIndices: [] }]),
+    );
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "files" });
+    await tick();
+    await vi.advanceTimersByTimeAsync(150);
+    await screen.findByText("notes.md");
+
+    const row = container.querySelector(".search-result-row");
+    expect(row?.querySelector(".search-result-filename")?.textContent?.trim()).toBe("notes.md");
+    expect(row?.querySelector(".search-result-dir")?.textContent?.trim()).toBe("src");
+  });
+
+  it("renders the content-mode group header as a workspace-relative path on a Windows-shaped match", async () => {
+    workspace.set({ id: "local", root: "C:\\proj" });
+    vi.mocked(commands.searchWorkspace).mockResolvedValue(
+      results([
+        {
+          path: "C:\\proj\\src\\app.ts",
+          line: 1,
+          column: 1,
+          lineText: "needle",
+          matchStart: 0,
+          matchEnd: 6,
+        },
+      ]),
+    );
+    const { container } = render(SearchOverlay);
+    searchOverlay.set({ open: true, mode: "content" });
+    await tick();
+
+    const input = await screen.findByPlaceholderText(PLACEHOLDER);
+    await fireEvent.input(input, { target: { value: "needle" } });
+    await vi.advanceTimersByTimeAsync(150);
+    await tick();
+
+    const header = container.querySelector(".search-group-header");
+    expect(header?.textContent?.trim()).toBe("src/app.ts");
+    expect(container.textContent).not.toContain("C:\\proj\\src\\app.ts");
+  });
+
   it("shows an error toast, prunes a stale recorded-recent file when opening it fails, and drops its row", async () => {
     recordFileOpened("/proj", "/proj/deleted.txt");
     vi.mocked(commands.findFiles).mockResolvedValue(fileResults([]));

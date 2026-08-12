@@ -93,6 +93,18 @@ describe("StatusBar", () => {
     expect(screen.getByText("src/app.ts")).toBeTruthy();
   });
 
+  it("renders a Windows-shaped path as forward-slash-relative, not the full backslash path", async () => {
+    workspace.set({ id: "local", root: "C:\\proj" });
+    const windowsTab: Tab = { ...ACTIVE_TAB, path: "C:\\proj\\src\\app.ts" };
+    tabsState.set({ tabs: [windowsTab], activeTabPath: windowsTab.path });
+    cursorPosition.set({ line: 1, col: 1, selection: null });
+    render(StatusBar);
+    await tick();
+
+    expect(screen.getByText("src/app.ts")).toBeTruthy();
+    expect(screen.queryByText("C:\\proj\\src\\app.ts")).toBeNull();
+  });
+
   it("updates when tabsState/cursorPosition change", async () => {
     render(StatusBar);
     tabsState.set({ tabs: [ACTIVE_TAB], activeTabPath: ACTIVE_TAB.path });
