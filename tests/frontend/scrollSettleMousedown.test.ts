@@ -4,7 +4,7 @@ import { EditorView } from "@codemirror/view";
 import {
   handleScrollSettleMousedown,
   guardFirstFocusScrollPosition,
-  wheelTracker,
+  paneActivityTracker,
   RECENT_SCROLL_WINDOW_MS,
 } from "../../src/lib/editor/baseExtensions";
 
@@ -16,11 +16,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** Only used so `view.plugin(wheelTracker)` resolves; test mousedown/mouseup events are dispatched on a separate plain element (see `makeTarget`), never on this view's own `contentDOM` — real CodeMirror mouse handling would try to measure real layout, which jsdom can't provide. */
+/** Only used so `view.plugin(paneActivityTracker)` resolves; test mousedown/mouseup events are dispatched on a separate plain element (see `makeTarget`), never on this view's own `contentDOM` — real CodeMirror mouse handling would try to measure real layout, which jsdom can't provide. */
 function makeView(): EditorView {
   const container = document.createElement("div");
   document.body.appendChild(container);
-  view = new EditorView({ state: EditorState.create({ doc: "hello world", extensions: [wheelTracker] }), parent: container });
+  view = new EditorView({ state: EditorState.create({ doc: "hello world", extensions: [paneActivityTracker] }), parent: container });
   vi.spyOn(view, "requestMeasure").mockImplementation((request) => {
     request?.read(view!);
     request?.write?.(undefined, view!);
@@ -143,7 +143,7 @@ describe("handleScrollSettleMousedown: Part 2 (issue #161)", () => {
     const target = makeTarget();
     v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
 
-    const tracker = v.plugin(wheelTracker);
+    const tracker = v.plugin(paneActivityTracker);
     expect(tracker).toBeTruthy();
     // Simulate the settle window having fully elapsed since both scroll signals.
     tracker!.lastWheelTime -= RECENT_SCROLL_WINDOW_MS;

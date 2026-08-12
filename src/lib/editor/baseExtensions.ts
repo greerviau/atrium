@@ -1,5 +1,5 @@
 import { EditorSelection, EditorState, Prec, findClusterBreak, type Extension } from "@codemirror/state";
-import { EditorView, ViewPlugin, drawSelection, keymap, type MouseSelectionStyle } from "@codemirror/view";
+import { EditorView, ViewPlugin, drawSelection, keymap, type MouseSelectionStyle, type ViewUpdate } from "@codemirror/view";
 import { history, defaultKeymap, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { searchKeymap } from "@codemirror/search";
 import { acceptCompletion, autocompletion, completionKeymap } from "@codemirror/autocomplete";
@@ -169,9 +169,18 @@ export function movementAwareMouseSelectionStyle(view: EditorView, startEvent: M
 /** 3-4x the measured real scroll-settle window (~15-40ms): enough margin to never miss the race, without widening far enough to interfere with an intentional fast double-click. */
 export const RECENT_SCROLL_WINDOW_MS = 120;
 
-class WheelTracker {
+class PaneActivityTracker {
   lastWheelTime = -Infinity;
   lastScrollTime = -Infinity;
+  /**
+   * Counts CodeMirror's own block-height/viewport changes rather than
+   * timestamping them, so Phase B (§6 Step 4) can tell "no geometry change
+   * since I last looked" apart from "a change I haven't seen yet" without
+   * caring how many happened in one frame — two height-changing updates in
+   * one frame must be distinguishable from none, and the only thing a
+   * consumer ever does with this is compare it across frames.
+   */
+  geometryEpoch = 0;
   private view: EditorView;
   private onWheel = () => {
     this.lastWheelTime = Date.now();
@@ -186,13 +195,19 @@ class WheelTracker {
     view.scrollDOM.addEventListener("scroll", this.onScroll, { passive: true });
   }
 
+  update(update: ViewUpdate) {
+    if (update.heightChanged || update.viewportChanged) {
+      this.geometryEpoch++;
+    }
+  }
+
   destroy() {
     this.view.scrollDOM.removeEventListener("wheel", this.onWheel);
     this.view.scrollDOM.removeEventListener("scroll", this.onScroll);
   }
 }
 
-export const wheelTracker = ViewPlugin.fromClass(WheelTracker);
+export const paneActivityTracker = ViewPlugin.fromClass(PaneActivityTracker);
 
 /** Marks a `mousedown` this extension has already redispatched once (after the settle delay), so it isn't deferred a second time. */
 const deferredMouseEvents = new WeakSet<MouseEvent>();
@@ -338,7 +353,7 @@ export function handleScrollSettleMousedown(event: MouseEvent, view: EditorView)
   if (deferredMouseEvents.has(event)) {
     return false;
   }
-  const tracker = view.plugin(wheelTracker);
+  const tracker = view.plugin(paneActivityTracker);
   const sinceWheel = Date.now() - (tracker?.lastWheelTime ?? -Infinity);
   const sinceScroll = Date.now() - (tracker?.lastScrollTime ?? -Infinity);
   if (sinceWheel >= RECENT_SCROLL_WINDOW_MS && sinceScroll >= RECENT_SCROLL_WINDOW_MS) {
@@ -434,7 +449,7 @@ export function baseExtensions(): Extension[] {
     ]),
     EditorState.allowMultipleSelections.of(true),
     EditorView.mouseSelectionStyle.of(movementAwareMouseSelectionStyle),
-    wheelTracker,
+    paneActivityTracker,
     firstFocusScrollGuard,
     scrollSettleMouseHandler,
   ];
