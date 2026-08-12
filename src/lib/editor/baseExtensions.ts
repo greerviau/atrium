@@ -230,6 +230,66 @@ function cloneMouseEvent(type: string, source: MouseEvent): MouseEvent {
 }
 
 /**
+ * Bound on how many settle checks the whole deferral will spend before
+ * replaying anyway, shared across every phase that waits on one. Each check
+ * costs two animation frames — `requestMeasure` schedules its own frame
+ * before running the `read`, and the `read` schedules another — so eight
+ * checks is ~267ms at 60Hz.
+ */
+const MAX_SETTLE_CHECKS = 8;
+
+/**
+ * Steps once per animation frame, sampling from inside CodeMirror's measure
+ * cycle and again after the following frame, until `same` reports two
+ * consecutive quiet frames (comparing the previous frame's settled value,
+ * this frame's in-measure value, and this frame's post-frame value) or
+ * `budget` runs out, then calls `done`.
+ *
+ * Call this from a frame callback, never from inside a measure `read` or
+ * `write`: a `requestMeasure` issued during a measure pass is picked up by
+ * that same pass rather than a fresh frame, so the first two samples would
+ * come from one frame and could report "settled" without a frame having
+ * elapsed. `done` itself always runs on a frame callback, so it may safely
+ * call layout-reading APIs.
+ */
+function whenSettled<S>(
+  view: EditorView,
+  budget: { remaining: number },
+  sample: () => S,
+  same: (a: S, b: S) => boolean,
+  done: () => void,
+): void {
+  let stableFrames = 0;
+  let previous: S | undefined;
+
+  const check = () => {
+    budget.remaining--;
+    view.requestMeasure({
+      read() {
+        const measured = sample();
+        requestAnimationFrame(() => {
+          const current = sample();
+          if (previous !== undefined && same(previous, measured) && same(measured, current)) {
+            stableFrames++;
+          } else {
+            stableFrames = 0;
+          }
+          previous = current;
+
+          if (stableFrames >= 2 || budget.remaining <= 0) {
+            done();
+          } else {
+            check();
+          }
+        });
+      },
+    });
+  };
+
+  check();
+}
+
+/**
  * Waits for CodeMirror to measure the newly scrolled rendered layout and for
  * the scroll offset to remain stable across consecutive frames, then replays
  * `event` as a fresh `mousedown` on `target`.
@@ -254,13 +314,7 @@ function replayMousedownAfterMeasure(view: EditorView, event: MouseEvent, target
   };
   doc.addEventListener("mouseup", captureEarlyMouseup, { capture: true });
 
-  // `requestAnimationFrame` alone does not force CodeMirror to measure after
-  // a rendered-preview scroll changes the visible decoration set. The
-  // measure request runs after the viewport and its DOM have stabilized, and
-  // the following frame keeps the synthetic event outside that measure pass.
-  let stableFrames = 0;
-  let settleChecks = 0;
-  let previousScroll: { top: number; left: number } | undefined;
+  const budget = { remaining: MAX_SETTLE_CHECKS };
 
   const dispatchMousedown = () => {
     const replayedMousedown = cloneMouseEvent("mousedown", event);
@@ -310,37 +364,17 @@ function replayMousedownAfterMeasure(view: EditorView, event: MouseEvent, target
     });
   };
 
-  const settle = () => {
-    settleChecks++;
-    view.requestMeasure({
-      read() {
-        const measured = { top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft };
-        requestAnimationFrame(() => {
-          const current = { top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft };
-          if (
-            previousScroll &&
-            previousScroll.top === measured.top &&
-            previousScroll.left === measured.left &&
-            measured.top === current.top &&
-            measured.left === current.left
-          ) {
-            stableFrames++;
-          } else {
-            stableFrames = 0;
-          }
-          previousScroll = current;
-
-          if (stableFrames >= 2 || settleChecks >= 8) {
-            replay();
-          } else {
-            settle();
-          }
-        });
-      },
-    });
-  };
-
-  settle();
+  // `requestAnimationFrame` alone does not force CodeMirror to measure after
+  // a rendered-preview scroll changes the visible decoration set. The
+  // measure request runs after the viewport and its DOM have stabilized, and
+  // the following frame keeps the synthetic event outside that measure pass.
+  whenSettled(
+    view,
+    budget,
+    () => ({ top: view.scrollDOM.scrollTop, left: view.scrollDOM.scrollLeft }),
+    (a, b) => a.top === b.top && a.left === b.left,
+    replay,
+  );
 }
 
 /**
