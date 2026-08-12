@@ -13,15 +13,10 @@
   import { openSettings } from "../stores/settingsOverlay";
   import { tooltip } from "../ui/tooltip";
   import { SHORTCUT_LABELS } from "./shortcutLabels";
+  import { relativeToRoot } from "../util/path";
 
   const activeTab = $derived($tabsState.tabs.find((t) => t.path === $tabsState.activeTabPath));
-
-  function relativePath(path: string): string {
-    const root = $workspace.root;
-    if (!root) return path;
-    const prefix = root.endsWith("/") ? root : `${root}/`;
-    return path.startsWith(prefix) ? path.slice(prefix.length) : path;
-  }
+  const activePath = $derived(activeTab ? relativeToRoot(activeTab.path, $workspace.root) : "");
 
   const cursorText = $derived.by(() => {
     const pos = $cursorPosition;
@@ -115,7 +110,7 @@
       <span class="status-divider">│</span>
       <span class="status-item mono">{cursorText}</span>
       <span class="status-divider">│</span>
-      <span class="status-item mono path" title={relativePath(activeTab.path)}>{relativePath(activeTab.path)}</span>
+      <span class="status-item mono path" title={activePath}>{activePath}</span>
     </div>
   {/if}
 </div>
