@@ -38,7 +38,9 @@
   const isMacPlatform = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
 
   let isEditing = $derived($editingPath === node.entry.path);
-  let dropTargetActive = $derived($dragOverTargetDir === node.entry.path);
+  // `pathsEqual`, not `===`: `dragOverTargetDir` is `dirOf`-normalized for a file-row drop
+  // target, while `entry.path` stays native — a raw comparison drops the highlight on Windows (issue #449).
+  let dropTargetActive = $derived(pathsEqual($dragOverTargetDir ?? "", node.entry.path));
   let rowEl: HTMLDivElement;
   let justDragged = false;
 

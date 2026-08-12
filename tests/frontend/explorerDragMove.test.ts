@@ -4,7 +4,13 @@ import { get } from "svelte/store";
 import { render, fireEvent, cleanup } from "@testing-library/svelte";
 import FileTree from "../../src/lib/explorer/FileTree.svelte";
 import { loadRoot, loadChildren, fileTree, type TreeNode } from "../../src/lib/stores/fileTree";
-import { draggingPath, dragOverTargetDir, draggingEntry, dragPointerPosition } from "../../src/lib/explorer/explorerDrag";
+import {
+  draggingPath,
+  dragOverTargetDir,
+  draggingEntry,
+  dragPointerPosition,
+  isValidMoveTarget,
+} from "../../src/lib/explorer/explorerDrag";
 import { endDragLock } from "../../src/lib/ui/dragLock";
 import { editingPath } from "../../src/lib/explorer/inlineEdit";
 import * as commands from "../../src/lib/ipc/commands";
@@ -510,5 +516,35 @@ describe("explorer drag-move", () => {
     window.dispatchEvent(new Event("blur"));
 
     expectLockClear();
+  });
+});
+
+// `isValidMoveTarget` is covered by DOM gestures above, but only with POSIX paths (fixture root `/workspace`).
+// These Windows-shaped cases are the only way to catch a separator bug in a suite that never runs on Windows (issue #449).
+describe("isValidMoveTarget with Windows-shaped paths", () => {
+  const SOURCE = "C:\\ws\\src";
+
+  it("rejects a drop onto the source directory itself", () => {
+    expect(isValidMoveTarget(SOURCE, "C:\\ws\\src")).toBe(false);
+  });
+
+  it("rejects a drop onto a descendant of the source — the #449 case", () => {
+    expect(isValidMoveTarget(SOURCE, "C:\\ws\\src\\nested")).toBe(false);
+  });
+
+  it("rejects a drop resolved from a file row inside the source, which arrives `/`-normalized via dirOf", () => {
+    expect(isValidMoveTarget(SOURCE, "C:/ws/src")).toBe(false);
+  });
+
+  it("rejects a drop onto the directory the source already sits in", () => {
+    expect(isValidMoveTarget(SOURCE, "C:\\ws")).toBe(false);
+  });
+
+  it("accepts a drop onto an unrelated sibling directory", () => {
+    expect(isValidMoveTarget(SOURCE, "C:\\ws\\lib")).toBe(true);
+  });
+
+  it("accepts a drop onto a sibling whose name merely shares the source's prefix as a string", () => {
+    expect(isValidMoveTarget(SOURCE, "C:\\ws\\srcs")).toBe(true);
   });
 });
