@@ -1,5 +1,5 @@
 import { writable, get } from "svelte/store";
-import { dirOf } from "../util/path";
+import { dirOf, isPathUnderOrEqual, pathsEqual } from "../util/path";
 import { resolveExplorerDropTargetDir } from "./explorerDropTargets";
 import { movePath } from "./contextMenu";
 import { terminalPaneAtScreenPoint, insertPathsAtScreenPoint, dragOverTerminalPane, setDragOverTerminalPane } from "../terminal/terminalDropTargets";
@@ -188,10 +188,16 @@ export function beginExplorerDrag(rowEl: HTMLElement, event: PointerEvent, entry
  * move). Also correctly rejects moving the workspace root anywhere, without
  * special-casing it: every other directory in the tree is either the root
  * itself or one of its descendants, both already excluded.
+ *
+ * Compares through `isPathUnderOrEqual`/`pathsEqual` rather than `===`/`startsWith`: both
+ * arguments are native-separator filesystem paths on Windows, and `targetDir` is not even
+ * reliably in one form — `resolveExplorerDropTargetDir` returns a directory row's
+ * `entry.path` verbatim but passes a file row's through `dirOf`, which normalizes to `/`.
+ * A raw comparison therefore fails to reject a drop into the source's own subtree on
+ * Windows (issue #449).
  */
 export function isValidMoveTarget(sourcePath: string, targetDir: string): boolean {
-  if (targetDir === sourcePath) return false;
-  if (targetDir.startsWith(`${sourcePath}/`)) return false;
-  if (targetDir === dirOf(sourcePath)) return false;
+  if (isPathUnderOrEqual(targetDir, sourcePath)) return false;
+  if (pathsEqual(targetDir, dirOf(sourcePath))) return false;
   return true;
 }
