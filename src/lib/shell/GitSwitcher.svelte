@@ -153,6 +153,9 @@
                       <span class="row-detail">in {basename(branch.worktreePath)}</span>
                     {/if}
                   </button>
+                  {#if branch.isCurrent && context.branches.length > 1}
+                    <div class="menu-separator" role="separator"></div>
+                  {/if}
                 {/each}
               {/if}
             </div>
