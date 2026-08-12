@@ -260,7 +260,7 @@ function cloneMouseEvent(type: string, source: MouseEvent): MouseEvent {
  * before running the `read`, and the `read` schedules another — so eight
  * checks is ~267ms at 60Hz.
  */
-const MAX_SETTLE_CHECKS = 8;
+export const MAX_SETTLE_CHECKS = 8;
 
 /**
  * Steps once per animation frame, sampling from inside CodeMirror's measure
@@ -283,6 +283,16 @@ function whenSettled<S>(
   same: (a: S, b: S) => boolean,
   done: () => void,
 ): void {
+  if (budget.remaining <= 0) {
+    // A prior phase already spent the whole shared budget - this phase gets
+    // no checks of its own, not one "free" check before noticing that. The
+    // caller is already inside a frame callback whenever this can happen
+    // (Phase A's own `done`, or the `requestAnimationFrame` hop a caller
+    // takes before starting a later phase), so `done`'s contract still holds.
+    done();
+    return;
+  }
+
   let stableFrames = 0;
   let previous: S | undefined;
 
@@ -314,9 +324,57 @@ function whenSettled<S>(
 }
 
 /**
+ * The DOM element a replayed `mousedown`/`mouseup` should dispatch on.
+ * `original` (the element the real event targeted at press time) survives
+ * most deferrals unchanged, but CodeMirror recycles and replaces `.cm-line`
+ * DOM across a viewport or decoration change, so after settling through two
+ * phases it can be detached from the document entirely. Dispatching on a
+ * detached node fires the event there and stops: it never reaches
+ * `contentDOM`, so CodeMirror never sees it and the click is silently lost.
+ * Falling back straight to `contentDOM` is not safe either, because
+ * downstream handlers read `event.target` - `livePreviewPlugin.ts`'s
+ * link-click handler does `target.closest(".cm-link")` - so a Cmd/Ctrl-click
+ * on a markdown link made during the settle window would silently degrade to
+ * plain cursor placement. Re-deriving the live element for the anchor's
+ * position is the fallback that keeps both working.
+ *
+ * The check is `isConnected` rather than `contentDOM.contains(original)`:
+ * what actually breaks dispatch is the node leaving the document, not merely
+ * sitting outside `contentDOM` (which a live, still-connected element never
+ * legitimately does in production, since a real click can only ever target
+ * something the user is actually looking at inside the pane).
+ */
+function replayTarget(view: EditorView, original: EventTarget, anchor: { pos: number }): EventTarget {
+  if ((original as Node).isConnected) {
+    return original;
+  }
+  // `domAtPos` reads `docView` directly and never flushes a measure, so it's
+  // safe to call here regardless of what phase the caller is in - but it's
+  // only meaningful for a position CodeMirror has actually rendered.
+  if (anchor.pos >= view.viewport.from && anchor.pos <= view.viewport.to) {
+    const { node } = view.domAtPos(anchor.pos);
+    const element = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
+    if (element && view.contentDOM.contains(element)) {
+      return element;
+    }
+  }
+  return view.contentDOM;
+}
+
+/**
  * Waits for CodeMirror to measure the newly scrolled rendered layout and for
- * the scroll offset to remain stable across consecutive frames, then replays
- * `event` as a fresh `mousedown` on `target`.
+ * the scroll offset and geometry to remain stable across consecutive frames,
+ * then replays `event` as a fresh `mousedown`.
+ *
+ * The click's target is latched as a document position at the very top, from
+ * the layout the user was looking at when the button went down - before any
+ * waiting. Nothing that happens afterwards (the scroll landing, CodeMirror
+ * re-measuring, decorations rendering, the scroll-anchoring correction, the
+ * focus-induced relayout) can move it, because a document position is not
+ * expressed in any frame those movements act on. `movementAwareMouseSelectionStyle`
+ * (Part 1) is what actually consumes the anchor; this function only latches
+ * and carries it.
+ *
  * A click that lands inside the *existing* selection isn't resolved into a
  * selection at `mousedown` at all (only on the following `mouseup`, per
  * upstream's own ambiguous click-vs-drag handling) - so a real mouseup
@@ -326,6 +384,8 @@ function whenSettled<S>(
  * replays it so it is never lost or resolved against the transient scroll.
  */
 function replayMousedownAfterMeasure(view: EditorView, event: MouseEvent, target: EventTarget): void {
+  const anchor = view.posAndSideAtCoords({ x: event.clientX, y: event.clientY }, false);
+
   const doc = view.contentDOM.ownerDocument;
   let earlyMouseup: MouseEvent | null = null;
   const captureEarlyMouseup = (e: MouseEvent) => {
@@ -341,23 +401,46 @@ function replayMousedownAfterMeasure(view: EditorView, event: MouseEvent, target
   const budget = { remaining: MAX_SETTLE_CHECKS };
 
   const dispatchMousedown = () => {
+    const dispatchTarget = replayTarget(view, target, anchor);
     const replayedMousedown = cloneMouseEvent("mousedown", event);
     deferredMouseEvents.add(replayedMousedown);
-    target.dispatchEvent(replayedMousedown);
+    replayAnchors.set(replayedMousedown, anchor);
+    dispatchTarget.dispatchEvent(replayedMousedown);
 
     // The first-focus path has already run before this event. Dispatching the
     // held mouseup in the next frame keeps it after the restored layout.
     requestAnimationFrame(() => {
       doc.removeEventListener("mouseup", captureEarlyMouseup, { capture: true });
       if (earlyMouseup) {
-        target.dispatchEvent(cloneMouseEvent("mouseup", earlyMouseup));
+        dispatchTarget.dispatchEvent(cloneMouseEvent("mouseup", earlyMouseup));
       }
     });
   };
 
+  // Phase B: CodeMirror has finished measuring the layout Phase A's scroll
+  // settled into (no further block-height or viewport change pending), not
+  // just holding the same scroll offset. This is quality rather than
+  // correctness - the anchor above already protects the landing position -
+  // so it shares Phase A's budget rather than extending it: a target whose
+  // settle window outlasts the shared budget replays anyway, exactly as it
+  // did before this phase existed.
+  const waitForGeometryThenDispatch = () => {
+    whenSettled(
+      view,
+      budget,
+      () => ({
+        top: view.scrollDOM.scrollTop,
+        left: view.scrollDOM.scrollLeft,
+        geometryEpoch: view.plugin(paneActivityTracker)?.geometryEpoch ?? 0,
+      }),
+      (a, b) => a.top === b.top && a.left === b.left && a.geometryEpoch === b.geometryEpoch,
+      dispatchMousedown,
+    );
+  };
+
   const replay = () => {
-    if (view.hasFocus) {
-      dispatchMousedown();
+    if (view.root.activeElement === view.contentDOM) {
+      waitForGeometryThenDispatch();
       return;
     }
 
@@ -378,10 +461,14 @@ function replayMousedownAfterMeasure(view: EditorView, event: MouseEvent, target
         view.scrollDOM.scrollTop = beforeFocusScrollTop;
         view.scrollDOM.scrollLeft = beforeFocusScrollLeft;
         // The write above changes the DOM after CodeMirror's read phase. A
-        // second measure records the restored offset before posAtCoords runs.
+        // second measure records the restored offset before Phase B starts.
         view.requestMeasure({
           read() {
-            requestAnimationFrame(dispatchMousedown);
+            // `whenSettled` must not start from inside this `read()` - a
+            // `requestMeasure` issued during a measure pass is picked up by
+            // that same pass rather than a fresh frame (Step 2's contract) -
+            // so it starts from the following frame callback instead.
+            requestAnimationFrame(waitForGeometryThenDispatch);
           },
         });
       },

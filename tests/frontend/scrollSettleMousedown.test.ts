@@ -7,6 +7,7 @@ import {
   movementAwareMouseSelectionStyle,
   paneActivityTracker,
   replayAnchors,
+  MAX_SETTLE_CHECKS,
   RECENT_SCROLL_WINDOW_MS,
 } from "../../src/lib/editor/baseExtensions";
 
@@ -385,6 +386,180 @@ describe("guardFirstFocusScrollPosition composed with handleScrollSettleMousedow
 
     expect(scrollAtMousedown).toBe(4000);
     expect(v.scrollDOM.scrollTop).toBe(4000);
+  });
+});
+
+describe("replayMousedownAfterMeasure: the anchor latch, Phase B, and target re-derivation (issue #454)", () => {
+  it("[unit case 4] latches the anchor at the press, before the settle loop runs", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const frame = stubAnimationFrame();
+    let call = 0;
+    // Resolves to 3 on the very first (press-time) call; every later call
+    // returns 8, simulating the layout having moved by the time anything
+    // else asks `posAndSideAtCoords` a question.
+    const positions = [3, 8];
+    vi.spyOn(v, "posAndSideAtCoords").mockImplementation(() => {
+      const pos = positions[Math.min(call, positions.length - 1)];
+      call++;
+      return { pos, assoc: 1 };
+    });
+    v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+
+    const event = dispatchMousedownOn(target, 5, 5);
+    handleScrollSettleMousedown(event, v);
+
+    let replayed: MouseEvent | undefined;
+    target.addEventListener("mousedown", (e) => {
+      replayed = e as MouseEvent;
+    });
+    frame.flushAll();
+
+    expect(replayed).toBeDefined();
+    expect(replayAnchors.get(replayed!)).toEqual({ pos: 3, assoc: 1 });
+
+    // Resolving the replayed click's own selection - by which point every
+    // further posAndSideAtCoords call returns 8 - still lands on the
+    // position latched at the press, not on 8.
+    const style = movementAwareMouseSelectionStyle(v, replayed!);
+    const sel = style.get(replayed!, false, false);
+    expect(sel.main.from).toBe(3);
+    expect(sel.main.to).toBe(3);
+  });
+
+  it("[unit case 9] Phase B waits for CodeMirror's own geometry to hold still, not just the scroll offset", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const frame = stubAnimationFrame();
+    vi.spyOn(v, "focus").mockImplementation(() => {
+      v.contentDOM.focus();
+    });
+    v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+    const event = dispatchMousedownOn(target, 5, 5);
+    handleScrollSettleMousedown(event, v);
+
+    let dispatched = false;
+    target.addEventListener("mousedown", () => {
+      dispatched = true;
+    });
+
+    const tracker = v.plugin(paneActivityTracker)!;
+    // Keep reporting a geometry change on every frame for a while - Phase A's
+    // own condition (scroll offset) is already quiet throughout, so only a
+    // guard that also watches geometry would still be waiting.
+    for (let i = 0; i < 4; i++) {
+      tracker.geometryEpoch++;
+      frame.flush();
+    }
+    expect(dispatched).toBe(false);
+
+    // Geometry holds still from here; Phase B needs two consecutive quiet
+    // frames, well inside what's left of the shared budget.
+    const { reachedLimit } = frame.flushAll(MAX_SETTLE_CHECKS * 2);
+    expect(reachedLimit).toBe(false);
+    expect(dispatched).toBe(true);
+  });
+
+  it("[unit case 10] the settle budget is shared and bounded: a Phase A that never quiets down still replays, spending at most MAX_SETTLE_CHECKS checks total", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const frame = stubAnimationFrame();
+    vi.spyOn(v, "focus").mockImplementation(() => {
+      v.contentDOM.focus();
+    });
+    let requestMeasureCalls = 0;
+    const originalRequestMeasure = v.requestMeasure.bind(v);
+    vi.spyOn(v, "requestMeasure").mockImplementation((request) => {
+      requestMeasureCalls++;
+      return originalRequestMeasure(request as never);
+    });
+    v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+    const event = dispatchMousedownOn(target, 5, 5);
+    handleScrollSettleMousedown(event, v);
+
+    let dispatched = false;
+    target.addEventListener("mousedown", () => {
+      dispatched = true;
+    });
+
+    // Phase A's own condition never quiets down: keep nudging the scroll
+    // offset every frame so it can never see two consecutive stable checks.
+    let top = 0;
+    for (let i = 0; i < MAX_SETTLE_CHECKS + 4 && !dispatched; i++) {
+      v.scrollDOM.scrollTop = top++;
+      frame.flush();
+    }
+
+    expect(dispatched).toBe(true);
+    // Every settle check - Phase A's and Phase B's - calls requestMeasure
+    // exactly once; a Phase A that never stabilizes should exhaust the whole
+    // shared budget rather than run Phase B's checks on top of it.
+    expect(requestMeasureCalls).toBeLessThanOrEqual(MAX_SETTLE_CHECKS + 2); // +2: replay()'s own focus-restore measure/write/measure, outside the settle budget
+  });
+
+  it("[unit case 11] re-derives a detached dispatch target from the anchor instead of dropping the click", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const frame = stubAnimationFrame();
+    vi.spyOn(v, "focus").mockImplementation(() => {
+      v.contentDOM.focus();
+    });
+    // A valid in-document position: dispatching the replayed event runs
+    // through CodeMirror's own real (unconfigured, upstream) mousedown
+    // handling once it lands inside `contentDOM`, which would throw on an
+    // out-of-bounds selection.
+    vi.spyOn(v, "posAndSideAtCoords").mockReturnValue({ pos: 3, assoc: 1 });
+    const liveElement = document.createElement("span");
+    v.contentDOM.appendChild(liveElement);
+    vi.spyOn(v, "domAtPos").mockReturnValue({ node: liveElement, offset: 0 });
+
+    v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+    const event = dispatchMousedownOn(target, 5, 5);
+    handleScrollSettleMousedown(event, v);
+
+    // The press-time element is gone by the time the deferral resolves.
+    target.remove();
+
+    let dispatchedOnLiveElement = false;
+    let dispatchedOnTarget = false;
+    liveElement.addEventListener("mousedown", () => {
+      dispatchedOnLiveElement = true;
+    });
+    target.addEventListener("mousedown", () => {
+      dispatchedOnTarget = true;
+    });
+
+    frame.flushAll();
+
+    expect(dispatchedOnTarget).toBe(false);
+    expect(dispatchedOnLiveElement).toBe(true);
+  });
+
+  it("[unit case 11] falls back to contentDOM when the anchor has no live element to redirect to", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const frame = stubAnimationFrame();
+    vi.spyOn(v, "focus").mockImplementation(() => {
+      v.contentDOM.focus();
+    });
+    vi.spyOn(v, "posAndSideAtCoords").mockReturnValue({ pos: 3, assoc: 1 });
+    // Outside the rendered viewport, so `replayTarget` never calls `domAtPos`.
+    vi.spyOn(v, "viewport", "get").mockReturnValue({ from: 5, to: 6 });
+
+    v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+    const event = dispatchMousedownOn(target, 5, 5);
+    handleScrollSettleMousedown(event, v);
+
+    target.remove();
+
+    let dispatchedOnContentDOM = false;
+    v.contentDOM.addEventListener("mousedown", () => {
+      dispatchedOnContentDOM = true;
+    });
+
+    frame.flushAll();
+
+    expect(dispatchedOnContentDOM).toBe(true);
   });
 });
 
