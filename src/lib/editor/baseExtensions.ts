@@ -179,13 +179,24 @@ export function movementAwareMouseSelectionStyle(view: EditorView, startEvent: M
 // event by tens of milliseconds — generic browser (compositor) behavior, not
 // something application code can speed up. The scroll event also marks the
 // point at which the pane's viewport has just moved. A `mousedown` landing
-// inside either window can get its position resolved against stale layout. Part
-// 1 above stops that from producing a spurious *range*, but the resolved
-// cursor position itself is still wrong. This tracks both signals on the
-// pane's scroller and, on a `mousedown` that follows one too closely, defers
-// this click until CodeMirror measures the newly scrolled rendered layout,
-// then replays it as a fresh `mousedown` so it runs back through the exact
-// same (movement-aware) selection logic as any other click.
+// inside either window arrives while CodeMirror is still measuring the newly
+// scrolled rendered layout — decorations not yet applied, block heights not
+// yet corrected from estimates to measurements. This tracks both signals on
+// the pane's scroller and, on a `mousedown` that follows one too closely,
+// defers the click.
+//
+// The click's target is latched as a document position (issue #454) at the
+// very top of the deferral, before any waiting — against the layout the user
+// was looking at when the button went down. Nothing that happens afterwards
+// (the scroll landing, CodeMirror re-measuring, the scroll-anchoring
+// correction) can move it, because a document position isn't expressed in
+// any frame those movements act on; `movementAwareMouseSelectionStyle` (Part
+// 1) is what actually consumes that anchor. The deferral then waits for the
+// scroll offset (Phase A) and CodeMirror's own reported geometry (Phase B) to
+// hold still before replaying the click as a fresh `mousedown`, so it runs
+// back through the exact same (movement-aware, anchor-aware) selection logic
+// as any other click - on a settled layout, even though the position it
+// names was fixed on an earlier one.
 
 /** 3-4x the measured real scroll-settle window (~15-40ms): enough margin to never miss the race, without widening far enough to interfere with an intentional fast double-click. */
 export const RECENT_SCROLL_WINDOW_MS = 120;
@@ -519,9 +530,10 @@ export const scrollSettleMouseHandler = EditorView.domEventHandlers({
 // scroll the caret into view before CodeMirror resolves the click position.
 // Restoring `scrollTop` afterward is too late: the selection has already been
 // calculated against the wrong viewport. `Prec.highest` pre-empts that first
-// mousedown and sends it through the same focus, measure, restore, and replay
-// path as a scroll-settle click. The replay runs with the pane focused, so
-// CodeMirror resolves the click against the restored layout.
+// mousedown and sends it through the same anchor-latch, focus, measure,
+// restore, and replay path as a scroll-settle click (Part 2). The replay
+// dispatches once the focus-induced layout has settled, resolving the click
+// against the anchor named at the original press.
 //
 // The predicate is DOM focus rather than `view.hasFocus`: the relayout this
 // guard protects against is driven by `livePreviewPlugin`'s `editorFocusField`,

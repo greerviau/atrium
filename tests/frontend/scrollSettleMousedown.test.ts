@@ -427,6 +427,28 @@ describe("replayMousedownAfterMeasure: the anchor latch, Phase B, and target re-
     expect(sel.main.to).toBe(3);
   });
 
+  it("on an already-focused pane, skips the focus-restore dance and goes straight to Phase B", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const frame = stubAnimationFrame();
+    v.contentDOM.focus();
+    expect(v.root.activeElement).toBe(v.contentDOM);
+    const focusSpy = vi.spyOn(v, "focus");
+
+    v.scrollDOM.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+    const event = dispatchMousedownOn(target, 5, 5);
+    handleScrollSettleMousedown(event, v);
+
+    let dispatched = false;
+    target.addEventListener("mousedown", () => {
+      dispatched = true;
+    });
+    frame.flushAll();
+
+    expect(focusSpy).not.toHaveBeenCalled();
+    expect(dispatched).toBe(true);
+  });
+
   it("[unit case 9] Phase B waits for CodeMirror's own geometry to hold still, not just the scroll offset", () => {
     const v = makeView();
     const target = makeTarget();
