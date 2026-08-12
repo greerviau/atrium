@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { basename, dirOf, isPathUnderOrEqual, pathsEqual } from "../../src/lib/util/path";
+import { basename, dirOf, isPathUnderOrEqual, pathsEqual, relativeToRoot } from "../../src/lib/util/path";
 
 describe("basename", () => {
   it("returns the last segment of a plain path", () => {
@@ -98,5 +98,55 @@ describe("pathsEqual", () => {
 
   it("does not match an unrelated path", () => {
     expect(pathsEqual("/a/b/file.ts", "/a/c/file.ts")).toBe(false);
+  });
+});
+
+describe("relativeToRoot", () => {
+  it("strips a Unix root without a trailing slash", () => {
+    expect(relativeToRoot("/proj/src/app.ts", "/proj")).toBe("src/app.ts");
+  });
+
+  it("strips a Unix root with a trailing slash", () => {
+    expect(relativeToRoot("/proj/src/app.ts", "/proj/")).toBe("src/app.ts");
+  });
+
+  it("strips a Windows root and returns a forward-slash result", () => {
+    expect(relativeToRoot("C:\\ws\\src\\notes.md", "C:\\ws")).toBe("src/notes.md");
+  });
+
+  it("strips a Windows root with a trailing backslash", () => {
+    expect(relativeToRoot("C:\\ws\\src\\notes.md", "C:\\ws\\")).toBe("src/notes.md");
+  });
+
+  it("matches a forward-slash path against a backslash root", () => {
+    expect(relativeToRoot("C:/ws/src/notes.md", "C:\\ws")).toBe("src/notes.md");
+  });
+
+  it("returns an out-of-root path verbatim, in its native form", () => {
+    expect(relativeToRoot("/other/f.ts", "/proj")).toBe("/other/f.ts");
+  });
+
+  it("returns a native-separator out-of-root path unchanged, not forward-slashed", () => {
+    expect(relativeToRoot("D:\\other\\f.ts", "C:\\ws")).toBe("D:\\other\\f.ts");
+  });
+
+  it("does not match a sibling directory whose name merely shares the root as a string prefix", () => {
+    expect(relativeToRoot("/a/b/searching/f.ts", "/a/b/search")).toBe("/a/b/searching/f.ts");
+  });
+
+  it("returns the root itself unchanged when path equals root", () => {
+    expect(relativeToRoot("/proj", "/proj")).toBe("/proj");
+  });
+
+  it("strips a root of just a slash", () => {
+    expect(relativeToRoot("/a/b.md", "/")).toBe("a/b.md");
+  });
+
+  it("returns the path unchanged when root is null", () => {
+    expect(relativeToRoot("/proj/src/app.ts", null)).toBe("/proj/src/app.ts");
+  });
+
+  it("returns the path unchanged when root is undefined", () => {
+    expect(relativeToRoot("/proj/src/app.ts", undefined)).toBe("/proj/src/app.ts");
   });
 });

@@ -47,6 +47,25 @@ export function isPathUnderOrEqual(path: string, prefix: string): boolean {
 }
 
 /**
+ * `path` expressed relative to `root`, always `/`-separated, or `path`
+ * verbatim when it is not under `root` (or there is no root — a standalone
+ * tab, issue #325). Normalizes backslashes on both sides first, so a native
+ * Windows root and path still match; the `/`-separated result matches
+ * `find_files`' own `display_path` contract, which every consumer of a
+ * workspace-relative path in the frontend already assumes (notably
+ * `SearchOverlay`'s `splitHighlightedPath`, which splits filename from
+ * directory on a literal `/`). The out-of-root fallback deliberately returns
+ * the *original* string, not a normalized one: a path outside the workspace
+ * is displayed in full, and is most readable in its native form.
+ */
+export function relativeToRoot(path: string, root: string | null | undefined): string {
+  if (!root) return path;
+  const normalizedPath = path.replace(/\\/g, "/");
+  const prefix = `${root.replace(/\\/g, "/").replace(/\/+$/, "")}/`;
+  return normalizedPath.startsWith(prefix) ? normalizedPath.slice(prefix.length) : path;
+}
+
+/**
  * Whether `a` and `b` refer to the same path, ignoring separator style
  * (`/` vs `\`) and a trailing separator. Unlike `isPathUnderOrEqual`, which
  * also accepts `a` being a *descendant* of `b`, this is exact-match only —
