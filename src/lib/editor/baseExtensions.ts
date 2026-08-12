@@ -435,8 +435,23 @@ export const scrollSettleMouseHandler = EditorView.domEventHandlers({
 // mousedown and sends it through the same focus, measure, restore, and replay
 // path as a scroll-settle click. The replay runs with the pane focused, so
 // CodeMirror resolves the click against the restored layout.
+//
+// The predicate is DOM focus rather than `view.hasFocus`: the relayout this
+// guard protects against is driven by `livePreviewPlugin`'s `editorFocusField`,
+// which follows `contentDOM`'s own `focus`/`blur` events, whereas
+// `view.hasFocus` is additionally gated on `document.hasFocus()` — an
+// OS/window-manager property `view.focus()` cannot change. Keying the guard on
+// `view.hasFocus` made termination depend on the window holding OS focus
+// (issue #455); keying it on DOM focus makes termination a property of the code.
+//
+// The contract is "run the focus-and-restore path exactly once before this
+// click resolves", not "resolve this click only once the pane is focused". If
+// focus cannot be taken at all, the replayed click still resolves, with the
+// focus attempt and the scroll restore having run. A click is never swallowed
+// to protect a guard - hence the `deferredMouseEvents` check, which both entry
+// points now share.
 export function guardFirstFocusScrollPosition(event: MouseEvent, view: EditorView): boolean {
-  if (view.hasFocus) {
+  if (view.root.activeElement === view.contentDOM || deferredMouseEvents.has(event)) {
     return false;
   }
   replayMousedownAfterMeasure(view, event, event.target ?? view.contentDOM);

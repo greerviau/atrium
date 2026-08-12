@@ -43,8 +43,20 @@ function dispatchMousedownOn(target: HTMLElement, clientX = 5, clientY = 5): Mou
   return event;
 }
 
+/** Wires both handlers on `target` in the same precedence order `baseExtensions()` gives them in production (`firstFocusScrollGuard` is `Prec.highest`, so it always runs before `scrollSettleMouseHandler`), so a single `mousedown` dispatch — original or replayed — exercises the real composed behavior instead of either handler in isolation. */
+function installComposedMousedownHandler(target: HTMLElement, v: EditorView): void {
+  target.addEventListener("mousedown", (e) => {
+    const event = e as MouseEvent;
+    if (guardFirstFocusScrollPosition(event, v)) return;
+    handleScrollSettleMousedown(event, v);
+  });
+}
+
 /** Replaces `requestAnimationFrame` with a queue the test flushes by hand, so the deferred replay runs deterministically. */
-function stubAnimationFrame(): { flush: () => void; flushAll: () => void } {
+function stubAnimationFrame(): {
+  flush: () => void;
+  flushAll: (limit?: number) => { reachedLimit: boolean; iterations: number };
+} {
   const callbacks: FrameRequestCallback[] = [];
   const requestFrame = (cb: FrameRequestCallback) => {
     callbacks.push(cb);
@@ -54,8 +66,16 @@ function stubAnimationFrame(): { flush: () => void; flushAll: () => void } {
   const flush = () => callbacks.splice(0, callbacks.length).forEach((cb) => cb(0));
   return {
     flush,
-    flushAll: () => {
-      while (callbacks.length > 0) flush();
+    // `limit` bounds how many frame batches this drains, so a chain that
+    // never terminates (e.g. issue #455's non-terminating replay loop) fails
+    // the test as an assertion on `reachedLimit`, not as a suite hang.
+    flushAll: (limit = Infinity) => {
+      let iterations = 0;
+      while (callbacks.length > 0 && iterations < limit) {
+        flush();
+        iterations++;
+      }
+      return { reachedLimit: iterations >= limit, iterations };
     },
   };
 }
@@ -236,16 +256,67 @@ describe("guardFirstFocusScrollPosition (issue #183)", () => {
   });
 });
 
-describe("guardFirstFocusScrollPosition composed with handleScrollSettleMousedown (issue #183/#161 interaction)", () => {
-  /** Wires both handlers on `target` in the same precedence order `baseExtensions()` gives them in production (`firstFocusScrollGuard` is `Prec.highest`, so it always runs before `scrollSettleMouseHandler`), so a single `mousedown` dispatch — original or replayed — exercises the real composed behavior instead of either handler in isolation. */
-  function installComposedMousedownHandler(target: HTMLElement, v: EditorView): void {
+describe("guardFirstFocusScrollPosition (issue #455)", () => {
+  it("[unit case 1] resolves a click into an unfocused pane exactly once, even when document.hasFocus() stays false", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const frame = stubAnimationFrame();
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    vi.spyOn(v, "focus").mockImplementation(() => {
+      v.contentDOM.focus();
+    });
+    installComposedMousedownHandler(target, v);
+
+    dispatchMousedownOn(target, 5, 5);
+    const seen: string[] = [];
     target.addEventListener("mousedown", (e) => {
       const event = e as MouseEvent;
-      if (guardFirstFocusScrollPosition(event, v)) return;
-      handleScrollSettleMousedown(event, v);
+      seen.push(`mousedown:${event.clientX},${event.clientY}`);
     });
-  }
 
+    const { reachedLimit } = frame.flushAll(20);
+
+    expect(reachedLimit).toBe(false);
+    expect(seen).toEqual(["mousedown:5,5"]);
+  });
+
+  it("[unit case 2] does not defer a click when contentDOM already holds DOM focus, even though document.hasFocus() is false", () => {
+    const v = makeView();
+    v.contentDOM.focus();
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    expect(v.hasFocus).toBe(false); // the predicate this guard no longer uses
+
+    const event = dispatchMousedownOn(makeTarget());
+    expect(guardFirstFocusScrollPosition(event, v)).toBe(false);
+  });
+
+  it("[unit case 3] still runs the focus-and-restore path exactly once before resolving, when focus cannot be taken at all", () => {
+    const v = makeView();
+    const target = makeTarget();
+    const frame = stubAnimationFrame();
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    let focusCalls = 0;
+    vi.spyOn(v, "focus").mockImplementation(() => {
+      focusCalls++;
+      v.contentDOM.focus();
+    });
+    installComposedMousedownHandler(target, v);
+
+    v.scrollDOM.scrollTop = 668;
+    dispatchMousedownOn(target, 5, 5);
+    let scrollAtMousedown: number | undefined;
+    target.addEventListener("mousedown", () => {
+      scrollAtMousedown = v.scrollDOM.scrollTop;
+    });
+
+    frame.flushAll(20);
+
+    expect(focusCalls).toBe(1);
+    expect(scrollAtMousedown).toBe(668);
+  });
+});
+
+describe("guardFirstFocusScrollPosition composed with handleScrollSettleMousedown (issue #183/#161 interaction)", () => {
   it("lands on the settled scroll position, not the pre-settle stale one, for a click deferred into an unfocused pane", () => {
     const v = makeView();
     const target = makeTarget();
