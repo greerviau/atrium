@@ -377,4 +377,27 @@ describe("renamePathInTree", () => {
     expect(target.tabs).toEqual(["/b.md"]);
     expect(target.activeTabPath).toBe("/b.md");
   });
+
+  // Issue #459's actual reachable trigger: a trailing separator on oldPath.
+  // `isPathUnderOrEqual` tolerates it on its prefix argument, but the old
+  // hand-written `newPath + p.slice(oldPath.length)` did not compensate,
+  // corrupting the offset. `rekeyUnder` now pairs the guard with the slice
+  // so this can't happen.
+  it("does not corrupt the offset when oldPath carries a trailing separator, under a Windows root", () => {
+    const tree = leaf("L1", ["C:/ws/src/a.ts"]); // activeTabPath defaults to the tab itself
+
+    const result = renamePathInTree(tree, "C:/ws/src/", "C:/ws/dst");
+
+    const target = findLeaf(result, "L1")!;
+    expect(target.tabs).toEqual(["C:/ws/dst/a.ts"]);
+    expect(target.activeTabPath).toBe("C:/ws/dst/a.ts");
+  });
+
+  it("re-keys a leaf's tabs for a native-Windows-separator directory rename", () => {
+    const tree = leaf("L1", ["C:\\ws\\src\\a.ts"]);
+
+    const result = renamePathInTree(tree, "C:\\ws\\src", "C:\\ws\\dst");
+
+    expect(findLeaf(result, "L1")?.tabs).toEqual(["C:/ws/dst/a.ts"]);
+  });
 });

@@ -1,6 +1,6 @@
 import { writable, get } from "svelte/store";
 import { fsListDir, localWorkspaceId, type DirEntry } from "../ipc/commands";
-import { basename, isPathUnderOrEqual } from "../util/path";
+import { basename, dirOf, isPathUnderOrEqual } from "../util/path";
 
 export interface TreeNode {
   entry: DirEntry;
@@ -27,11 +27,6 @@ function mergeChildren(existing: TreeNode[] | undefined, entries: DirEntry[]): T
     const survivor = existingByPath.get(entry.path);
     return survivor ? { ...survivor, entry } : toNode(entry);
   });
-}
-
-/** Normalizes for path comparison: backslash-to-slash, trailing-slash stripping. No symlink canonicalization. */
-function normalizePath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/, "");
 }
 
 export async function loadRoot(rootPath: string): Promise<void> {
@@ -139,16 +134,10 @@ export async function refreshDirectoryContaining(changedPath: string): Promise<v
   if (!state.root) {
     return;
   }
-  const parent = parentPath(changedPath);
+  const parent = dirOf(changedPath);
   if (findNode(state.root, parent)?.expanded) {
     await loadChildren(parent);
   }
-}
-
-function parentPath(path: string): string {
-  const normalized = normalizePath(path);
-  const idx = normalized.lastIndexOf("/");
-  return idx <= 0 ? "/" : normalized.slice(0, idx);
 }
 
 function findNode(node: TreeNode, path: string): TreeNode | undefined {

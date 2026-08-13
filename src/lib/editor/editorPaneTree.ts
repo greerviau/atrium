@@ -9,7 +9,7 @@
 // flat `tabs: Tab[]` keyed by path, exactly as before split panes existed. A
 // leaf just orders and selects among that global set of open paths.
 import { mapLeaf, removePane, findLeaf, listLeaves, type PaneNode as GenericPaneNode, type SplitPane as GenericSplitPane } from "../panes/paneTree";
-import { isPathUnderOrEqual } from "../util/path";
+import { isPathUnderOrEqual, rekeyUnder } from "../util/path";
 
 export type { SplitAxis, SplitDirection } from "../panes/paneTree";
 export { splitPane, removePane, resizeSplit, listLeaves, findLeaf, nextActivePane, PANE_MIN_PX } from "../panes/paneTree";
@@ -159,14 +159,14 @@ export function renamePathInTree(tree: EditorPaneNode, oldPath: string, newPath:
 
     const renamed = leaf.tabs.map((p) => {
       const wasRenamed = isPathUnderOrEqual(p, oldPath);
-      return { path: wasRenamed ? newPath + p.slice(oldPath.length) : p, wasRenamed };
+      return { path: wasRenamed ? (rekeyUnder(p, oldPath, newPath) ?? p) : p, wasRenamed };
     });
     const renamedDestinations = new Set(renamed.filter((r) => r.wasRenamed).map((r) => r.path));
     const tabs = renamed.filter((r) => r.wasRenamed || !renamedDestinations.has(r.path)).map((r) => r.path);
 
     let activeTabPath = leaf.activeTabPath;
     if (activeTabPath && isPathUnderOrEqual(activeTabPath, oldPath)) {
-      activeTabPath = newPath + activeTabPath.slice(oldPath.length);
+      activeTabPath = rekeyUnder(activeTabPath, oldPath, newPath) ?? activeTabPath;
     } else if (activeTabPath && !tabs.includes(activeTabPath)) {
       activeTabPath = tabs[tabs.length - 1] ?? null;
     }

@@ -795,14 +795,21 @@ describe("renameOpenTabs", () => {
     expect(get(errorToast)).toBe("b.md was overwritten by an external rename — its unsaved edits were discarded.");
   });
 
-  it("names only the filename when toasting a displaced dirty tab on a Windows backslash path", () => {
+  it("names only the filename when toasting a displaced dirty tab on a Windows-shaped path", () => {
+    // Both tabs are already in the canonical (forward-slash) form here, as
+    // every real tab is by the time it reaches `tabsState` — every path
+    // enters through the IPC boundary (`commands.ts`/`events.ts`) or through
+    // `contextMenu.ts`'s own `joinPath`, both of which canonicalize. This
+    // pins that `basename`'s filename-only toast still reads correctly off
+    // a Windows-shaped path, without resurrecting a spelling divergence
+    // that can no longer occur for real.
     errorToast.set(null);
     tabsState.set({
-      tabs: [codeTab("C:\\ws\\a.md"), codeTab("C:\\ws\\b.md", { isDirty: true, savedDoc: "unsaved" })],
-      activeTabPath: "C:\\ws\\a.md",
+      tabs: [codeTab("C:/ws/a.md"), codeTab("C:/ws/b.md", { isDirty: true, savedDoc: "unsaved" })],
+      activeTabPath: "C:/ws/a.md",
     });
 
-    renameOpenTabs("C:\\ws\\a.md", "C:\\ws\\b.md");
+    renameOpenTabs("C:/ws/a.md", "C:/ws/b.md");
 
     expect(get(errorToast)).toBe(
       "b.md was overwritten by an external rename — its unsaved edits were discarded.",
