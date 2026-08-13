@@ -536,12 +536,15 @@ fn main() {
         // real "Open With Atrium") reaches an already-running app, and on a
         // cold launch before `.setup()` has run and before the frontend's
         // event listeners exist (issue #325's cold-launch plan, §5).
-        // `macos_dock::open_paths` routes both cases through `launch_open`,
-        // whose statics exist from the first instruction of `main` for
-        // exactly that reason. Every url in this event is batched into one
-        // `open_paths` call (rather than one call per url) so a multi-file
-        // "Open With Atrium" records all of them as a single provenance
-        // stamp.
+        // `launch_open::open_paths` routes both cases: its `record_os_open`
+        // call decides whether the frontend is already up (paths emitted
+        // live — an already-running app: a pick from the system-level "Open
+        // Recent" list rather than our own Dock menu, or a real "Open With
+        // Atrium") or still starting (paths queued for its own startup
+        // drain), and it also surfaces the main window (issue #461). Every
+        // url in this event is batched into one `open_paths` call (rather
+        // than one call per url) so a multi-file "Open With Atrium" records
+        // all of them as a single provenance stamp.
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Opened { ref urls } = event {
             let paths: Vec<String> = urls
@@ -549,9 +552,7 @@ fn main() {
                 .filter_map(|url| url.to_file_path().ok())
                 .map(|path| path.to_string_lossy().into_owned())
                 .collect();
-            if !paths.is_empty() {
-                macos_dock::open_paths(paths);
-            }
+            launch_open::open_paths(app_handle, paths);
         }
 
         // Mirrors the window-event handler above for the Quit-menu/Cmd+Q

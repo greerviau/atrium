@@ -93,10 +93,18 @@ define_class!(
     impl DockMenuItem {
         #[unsafe(method(openRecentProject:))]
         fn open_recent_project(&self, _sender: Option<&AnyObject>) {
-            // Our own Dock menu is only ever shown for an already-running
-            // app, so there is no cold-launch case to stash for here —
-            // emit live, unlike `open_path` below.
-            emit_open_path(self.ivars().clone());
+            // Our own Dock menu is only ever shown for an already-running app,
+            // so there is no cold-launch case to stash for here — emit live,
+            // unlike `launch_open::open_paths`. A recents entry is a folder, so
+            // it needs no `record_os_open` provenance stamp either; it does
+            // still need the window surfaced (issue #461), since picking a
+            // project from the Dock menu of a minimized Atrium otherwise opens
+            // it out of sight.
+            let Some(app) = APP_HANDLE.get() else {
+                return;
+            };
+            let _ = app.emit(OPEN_PATH_EVENT, self.ivars().clone());
+            crate::launch_open::surface_main_window(app);
         }
     }
 );
@@ -112,32 +120,6 @@ impl DockMenuItem {
                 action: Some(sel!(openRecentProject:)),
                 keyEquivalent: &*empty
             ]
-        }
-    }
-}
-
-/// Emits `OPEN_PATH_EVENT` for the frontend's live listener.
-fn emit_open_path(path: String) {
-    if let Some(app) = APP_HANDLE.get() {
-        let _ = app.emit(OPEN_PATH_EVENT, path);
-    }
-}
-
-/// Routes paths from `RunEvent::Opened` (`main.rs`) back to the frontend
-/// via `launch_open` — which, unlike the old managed-`AppState` home for
-/// this, can record a path regardless of whether `.setup()` has run yet
-/// (issue #325's cold-launch plan, §5). `record_os_open` always stamps the
-/// provenance record used by `fs_grant_external_file`
-/// (`commands/fs.rs::recently_opened_externally`); its return value tells
-/// this function whether the frontend is already up and should get each
-/// path emitted live (an already-running app: a pick from the system-level
-/// "Open Recent" list rather than our own Dock menu, or a real "Open With
-/// Atrium"), or whether it's queued for the frontend's own startup drain
-/// instead.
-pub fn open_paths(paths: Vec<String>) {
-    if crate::launch_open::record_os_open(&paths) {
-        for path in paths {
-            emit_open_path(path);
         }
     }
 }
