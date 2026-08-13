@@ -88,5 +88,30 @@
     "description": "an empty string is unchanged",
     "input": "",
     "expected": ""
+  },
+  {
+    "description": "a non-ASCII Windows path where the multibyte character straddles the verbatim-prefix check's byte-8 boundary (a raw byte-index slice here previously panicked; must fold cleanly instead)",
+    "input": "C:\\日本",
+    "expected": "C:/日本"
+  },
+  {
+    "description": "a non-ASCII path with no drive letter or UNC prefix is left untouched, including its separators",
+    "input": "/ws/日本語/a.txt",
+    "expected": "/ws/日本語/a.txt"
+  },
+  {
+    "description": "a verbatim disk prefix followed immediately by non-ASCII characters strips cleanly with no boundary panic",
+    "input": "\\\\?\\C:\\日本語\\ファイル.txt",
+    "expected": "C:/日本語/ファイル.txt"
+  },
+  {
+    "description": "an accented (non-ASCII, but single-byte-adjacent-safe) character folds cleanly on a Windows-shaped path",
+    "input": "C:\\Projets\\café\\notes.md",
+    "expected": "C:/Projets/café/notes.md"
+  },
+  {
+    "description": "an emoji (an astral character, encoded as a UTF-16 surrogate pair in JS and 4 UTF-8 bytes in Rust) folds cleanly on a Windows-shaped path",
+    "input": "C:\\ws\\📁project\\a.txt",
+    "expected": "C:/ws/📁project/a.txt"
   }
 ]

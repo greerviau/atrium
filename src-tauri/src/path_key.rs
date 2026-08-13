@@ -68,8 +68,18 @@ fn fold_separators(path: &str) -> String {
 fn strip_verbatim_prefix(path: &str) -> String {
     const VERBATIM_UNC: &str = r"\\?\UNC\";
     const VERBATIM_DISK: &str = r"\\?\";
-    if path.len() >= VERBATIM_UNC.len()
-        && path[..VERBATIM_UNC.len()].eq_ignore_ascii_case(VERBATIM_UNC)
+    // `str::get` (not `path[..N]`), because `path.len() >= N` only proves
+    // there are enough *bytes*, not that byte offset N falls on a UTF-8
+    // char boundary — a non-ASCII path (e.g. `C:\日本`) can have its
+    // multibyte character straddle that offset, and a raw byte-index slice
+    // panics on a non-boundary index. `get` returns `None` instead, exactly
+    // like an out-of-range index, so this reduces to "prefix doesn't match"
+    // rather than crashing. Once this branch is taken, `Some` proves those
+    // bytes are the ASCII literal, so the plain `&path[VERBATIM_UNC.len()..]`
+    // below it is safe: matched ASCII bytes are always a char boundary.
+    if path
+        .get(..VERBATIM_UNC.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(VERBATIM_UNC))
     {
         format!(r"\\{}", &path[VERBATIM_UNC.len()..])
     } else if let Some(stripped) = path.strip_prefix(VERBATIM_DISK) {
@@ -240,5 +250,24 @@ mod tests {
         let c = canonical_key(r"\\?\C:\ws\a.txt");
         assert_eq!(a, b);
         assert_eq!(b, c);
+    }
+
+    // `strip_verbatim_prefix`'s old `path[..VERBATIM_UNC.len()]` byte-index
+    // slice panicked whenever that offset fell inside a multibyte
+    // character — reachable on any platform, since this fold runs
+    // unconditionally, not only for Windows-shaped input. A Windows path
+    // under a CJK project directory hits this routinely; also covered by
+    // the shared fixture, but named directly here since a byte-boundary
+    // panic is exactly the kind of regression that should have its own
+    // unmistakable test, not only a table entry.
+    #[test]
+    fn folds_windows_paths_with_a_multibyte_character_straddling_the_prefix_check_without_panicking(
+    ) {
+        assert_eq!(canonical_key(r"C:\日本"), "C:/日本");
+        assert_eq!(
+            canonical_key(r"C:\プロジェクト\a.txt"),
+            "C:/プロジェクト/a.txt"
+        );
+        assert_eq!(canonical_key("/ws/日本語/a.txt"), "/ws/日本語/a.txt");
     }
 }
