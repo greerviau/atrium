@@ -1,0 +1,117 @@
+[
+  {
+    "description": "verbatim disk prefix is stripped, then folded",
+    "input": "\\\\?\\C:\\ws\\a.ts",
+    "expected": "C:/ws/a.ts"
+  },
+  {
+    "description": "verbatim UNC prefix is stripped to a plain UNC form, then folded",
+    "input": "\\\\?\\UNC\\srv\\share\\a.ts",
+    "expected": "//srv/share/a.ts"
+  },
+  {
+    "description": "the UNC literal in a verbatim prefix matches case-insensitively",
+    "input": "\\\\?\\unc\\srv\\share\\a.ts",
+    "expected": "//srv/share/a.ts"
+  },
+  {
+    "description": "a native Windows path with a trailing backslash on a subdirectory loses it",
+    "input": "C:\\ws\\",
+    "expected": "C:/ws"
+  },
+  {
+    "description": "a bare drive root keeps its trailing separator",
+    "input": "C:\\",
+    "expected": "C:/"
+  },
+  {
+    "description": "an already-canonical bare drive root is unchanged",
+    "input": "C:/",
+    "expected": "C:/"
+  },
+  {
+    "description": "repeated backslashes collapse to one forward slash",
+    "input": "C:\\ws\\\\src\\file.ts",
+    "expected": "C:/ws/src/file.ts"
+  },
+  {
+    "description": "repeated forward slashes collapse on an already-forward-slash Windows path",
+    "input": "C:///ws",
+    "expected": "C:/ws"
+  },
+  {
+    "description": "a native Windows path folds cleanly",
+    "input": "C:\\ws\\src\\a.ts",
+    "expected": "C:/ws/src/a.ts"
+  },
+  {
+    "description": "a lowercase drive letter is still Windows-shaped",
+    "input": "c:\\ws\\a.ts",
+    "expected": "c:/ws/a.ts"
+  },
+  {
+    "description": "a native UNC path folds to the canonical double-forward-slash form",
+    "input": "\\\\server\\share\\f.txt",
+    "expected": "//server/share/f.txt"
+  },
+  {
+    "description": "an already-canonical UNC path is unchanged",
+    "input": "//srv/share",
+    "expected": "//srv/share"
+  },
+  {
+    "description": "extra internal slashes in a UNC path collapse, and the leading double slash is preserved (not folded to one)",
+    "input": "//srv//share///a.ts",
+    "expected": "//srv/share/a.ts"
+  },
+  {
+    "description": "a UNC share root with a trailing slash strips down to the bare share root",
+    "input": "//srv/share/",
+    "expected": "//srv/share"
+  },
+  {
+    "description": "an already-canonical POSIX path is unchanged",
+    "input": "/home/me/a.ts",
+    "expected": "/home/me/a.ts"
+  },
+  {
+    "description": "a literal backslash in a POSIX filename is preserved, not folded, because the path is not Windows-shaped",
+    "input": "/home/me/we\\ird",
+    "expected": "/home/me/we\\ird"
+  },
+  {
+    "description": "the POSIX root is unchanged",
+    "input": "/",
+    "expected": "/"
+  },
+  {
+    "description": "an empty string is unchanged",
+    "input": "",
+    "expected": ""
+  },
+  {
+    "description": "a non-ASCII Windows path where the multibyte character straddles the verbatim-prefix check's byte-8 boundary (a raw byte-index slice here previously panicked; must fold cleanly instead)",
+    "input": "C:\\日本",
+    "expected": "C:/日本"
+  },
+  {
+    "description": "a non-ASCII path with no drive letter or UNC prefix is left untouched, including its separators",
+    "input": "/ws/日本語/a.txt",
+    "expected": "/ws/日本語/a.txt"
+  },
+  {
+    "description": "a verbatim disk prefix followed immediately by non-ASCII characters strips cleanly with no boundary panic",
+    "input": "\\\\?\\C:\\日本語\\ファイル.txt",
+    "expected": "C:/日本語/ファイル.txt"
+  },
+  {
+    "description": "an accented (non-ASCII, but single-byte-adjacent-safe) character folds cleanly on a Windows-shaped path",
+    "input": "C:\\Projets\\café\\notes.md",
+    "expected": "C:/Projets/café/notes.md"
+  },
+  {
+    "description": "an emoji (an astral character, encoded as a UTF-16 surrogate pair in JS and 4 UTF-8 bytes in Rust) folds cleanly on a Windows-shaped path",
+    "input": "C:\\ws\\📁project\\a.txt",
+    "expected": "C:/ws/📁project/a.txt"
+  }
+]

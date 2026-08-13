@@ -1,6 +1,6 @@
 import { writable, get } from "svelte/store";
 import { fsListDir, localWorkspaceId, type DirEntry } from "../ipc/commands";
-import { basename, isPathUnderOrEqual } from "../util/path";
+import { basename, dirOf, isPathUnderOrEqual } from "../util/path";
 
 export interface TreeNode {
   entry: DirEntry;
@@ -27,11 +27,6 @@ function mergeChildren(existing: TreeNode[] | undefined, entries: DirEntry[]): T
     const survivor = existingByPath.get(entry.path);
     return survivor ? { ...survivor, entry } : toNode(entry);
   });
-}
-
-/** Normalizes for path comparison: backslash-to-slash, trailing-slash stripping. No symlink canonicalization. */
-function normalizePath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/, "");
 }
 
 export async function loadRoot(rootPath: string): Promise<void> {
@@ -139,16 +134,18 @@ export async function refreshDirectoryContaining(changedPath: string): Promise<v
   if (!state.root) {
     return;
   }
-  const parent = parentPath(changedPath);
+  // `dirOf` falls back to its input unchanged when there's no separator to
+  // split on (e.g. a workspace rooted at the filesystem root "/", where a
+  // top-level entry's own path already *is* as short as `dirOf` can make
+  // it) — the old private `parentPath` this replaced special-cased that as
+  // "/" specifically. The general case is "the entry belongs to the root
+  // itself", so fall back to the tree's own root path rather than a
+  // hardcoded "/", which also covers a Windows drive root the same way.
+  const computed = dirOf(changedPath);
+  const parent = computed === changedPath ? state.root.entry.path : computed;
   if (findNode(state.root, parent)?.expanded) {
     await loadChildren(parent);
   }
-}
-
-function parentPath(path: string): string {
-  const normalized = normalizePath(path);
-  const idx = normalized.lastIndexOf("/");
-  return idx <= 0 ? "/" : normalized.slice(0, idx);
 }
 
 function findNode(node: TreeNode, path: string): TreeNode | undefined {

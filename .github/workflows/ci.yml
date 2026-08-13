@@ -58,12 +58,22 @@ jobs:
           workspaces: src-tauri
       - run: npm ci
       - run: npm run build
+      - run: npm test
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
       - name: Build native packages
         run: npm run tauri build -- --bundles ${{ matrix.bundles }}
       - name: Install launch-open E2E dependencies
+        # tauri-driver does not support macOS. Windows was attempted (the
+        # launch-open E2E is the only automated coverage of the "Open with
+        # Atrium" warm path) but reverted: msedgedriver's session creation
+        # fails on the runner with "DevToolsActivePort file doesn't exist",
+        # and neither a real fix (a genuine spawn EINVAL in wdio.conf.js,
+        # now fixed and left in place) nor the documented
+        # WebView2-software-renderer workaround resolved it. Tracked in
+        # issue #467; Linux-only until that's diagnosed on real Windows
+        # hardware.
         if: runner.os == 'Linux'
         run: |
           cargo install tauri-driver --locked

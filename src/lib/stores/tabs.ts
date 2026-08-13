@@ -6,7 +6,7 @@ import { workspace } from "./workspace";
 import { recordFileOpened } from "./recentFiles";
 import { showErrorToast, describeError } from "./errorToast";
 import { markdownDefaultView } from "./markdownDefaultView";
-import { basename, isPathUnderOrEqual } from "../util/path";
+import { basename, isPathUnderOrEqual, rekeyUnder } from "../util/path";
 
 export interface PendingSelection {
   line: number;
@@ -514,7 +514,7 @@ export function renameOpenTabs(oldPath: string, newPath: string): void {
     return;
   }
 
-  const rekey = (path: string): string => newPath + path.slice(oldPath.length);
+  const rekey = (path: string): string => rekeyUnder(path, oldPath, newPath) ?? path;
   let displacedDirtyNames: string[] = [];
 
   tabsState.update((s) => {

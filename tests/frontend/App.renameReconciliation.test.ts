@@ -157,6 +157,33 @@ describe("App rename reconciliation (issue #249)", () => {
     expect(view.state.doc.toString()).toBe("xchanged on disk\n");
   });
 
+  // Issue #459, under a Windows root: a directory rename must re-key every
+  // open descendant tab to the canonical destination, with no corruption
+  // from the rename-rekey slice offset — `renameOpenTabs`/`rekeyPath` both
+  // now go through `rekeyUnder`, which pairs the `isPathUnderOrEqual` guard
+  // with the offset it depends on so the two can never drift apart.
+  it("re-keys a descendant tab's path and activeTabPath when a directory under a Windows root is renamed", async () => {
+    workspace.set({ id: "local", root: "C:/ws" });
+    const { container } = render(App);
+    await tick();
+
+    await openFile("C:/ws/sub/notes.md");
+    await tick();
+    await tick();
+    expect(get(tabsState).activeTabPath).toBe("C:/ws/sub/notes.md");
+
+    await rename("C:/ws/sub", "renamed");
+    await tick();
+    await tick();
+
+    expect(get(tabsState).tabs.map((t) => t.path)).toEqual(["C:/ws/renamed/notes.md"]);
+    expect(get(tabsState).activeTabPath).toBe("C:/ws/renamed/notes.md");
+    expect(commands.fsRename).toHaveBeenCalledWith("local", "C:/ws/sub", "C:/ws/renamed");
+
+    const tabNames = [...container.querySelectorAll(".editor-panel .tab-name")].map((el) => el.textContent);
+    expect(tabNames.some((t) => t?.includes("notes.md"))).toBe(true);
+  });
+
   it("renaming a file twice in a row (e.g. two quick explorer renames) leaves exactly one tab at the final path with content intact", async () => {
     workspace.set({ id: "local", root: "/proj" });
     const { container } = render(App);

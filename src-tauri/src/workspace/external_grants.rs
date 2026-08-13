@@ -82,7 +82,7 @@ impl ExternalGrants {
         self.grants
             .lock()
             .unwrap()
-            .insert(path.to_string(), identity);
+            .insert(crate::path_key::canonical_key(path), identity);
         Ok(())
     }
 
@@ -95,7 +95,8 @@ impl ExternalGrants {
     /// is now missing — a read has nothing to recover; recreation is a
     /// write-only concept (`resolve_granted_for_write`, MF2).
     pub async fn resolve_granted(&self, path: &str) -> Result<Option<PathBuf>, AppError> {
-        let recorded = { self.grants.lock().unwrap().get(path).cloned() };
+        let key = crate::path_key::canonical_key(path);
+        let recorded = { self.grants.lock().unwrap().get(&key).cloned() };
         let Some(recorded) = recorded else {
             return Ok(None);
         };
@@ -130,7 +131,8 @@ impl ExternalGrants {
     /// closes this by re-confirming the parent's own identity, live,
     /// before authorizing the recreate.
     pub async fn resolve_granted_for_write(&self, path: &str) -> Result<Option<PathBuf>, AppError> {
-        let recorded = { self.grants.lock().unwrap().get(path).cloned() };
+        let key = crate::path_key::canonical_key(path);
+        let recorded = { self.grants.lock().unwrap().get(&key).cloned() };
         let Some(recorded) = recorded else {
             return Ok(None);
         };
@@ -188,24 +190,25 @@ impl ExternalGrants {
     /// `require_recent_external_open`'s 10-second real-drop-or-OS-open gate, so re-granting is
     /// no easier for an attacker than the original grant was.)
     pub async fn refresh_if_granted(&self, path: &str) {
+        let key = crate::path_key::canonical_key(path);
         // Cheap bail-out for the overwhelmingly common case (an ordinary
         // in-workspace write) BEFORE paying `capture_identity`'s
         // canonicalize + two `metadata` calls — this is a performance-only
         // addition; the actual security-relevant compare-and-insert below
         // is unchanged and must stay exactly as it is, in one lock scope,
         // or MF-A's fix regresses.
-        if !self.grants.lock().unwrap().contains_key(path) {
+        if !self.grants.lock().unwrap().contains_key(&key) {
             return;
         }
         let Ok(identity) = capture_identity(path).await else {
             return;
         };
         let mut grants = self.grants.lock().unwrap();
-        if let Some(recorded) = grants.get(path) {
+        if let Some(recorded) = grants.get(&key) {
             if identity.canonical_path != recorded.canonical_path {
                 return; // location moved since the write this call is refreshing after — fail closed, not re-point
             }
-            grants.insert(path.to_string(), identity);
+            grants.insert(key, identity);
         }
     }
 
@@ -408,6 +411,38 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(resolved, Some(std::fs::canonicalize(&file).unwrap()));
+    }
+
+    // R3 (Windows path-canonicalization plan) — grant under one spelling of
+    // a real file, resolve under a *different* spelling of the same real
+    // file, and confirm the grant still matches. A doubled separator
+    // immediately before the filename is a portable stand-in for the
+    // Windows drive-letter/backslash-vs-forward-slash divergence this test
+    // exists to cover: every mainstream platform's own path resolver
+    // (POSIX kernels and Win32 alike) collapses a doubled separator
+    // transparently, so `capture_identity`'s real `tokio::fs::canonicalize`
+    // call still resolves to the identical file regardless of which
+    // spelling reaches it — only the map *key* is what this fix changes,
+    // and this proves the lookup still finds it once the key differs
+    // textually but not in the file it names.
+    #[tokio::test]
+    async fn resolve_granted_matches_a_different_spelling_of_the_same_granted_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("notes.txt");
+        write(&file, "hello");
+        let grants = ExternalGrants::new();
+
+        let granted_spelling = file.to_str().unwrap();
+        grants.grant(granted_spelling).await.unwrap();
+
+        let doubled_spelling = granted_spelling.replacen("notes.txt", "/notes.txt", 1);
+        assert_ne!(
+            granted_spelling, doubled_spelling,
+            "the two spellings must actually differ"
+        );
+
+        let resolved = grants.resolve_granted(&doubled_spelling).await.unwrap();
         assert_eq!(resolved, Some(std::fs::canonicalize(&file).unwrap()));
     }
 

@@ -3211,6 +3211,11 @@ mod tests {
 
         let key = file.to_str().unwrap().to_string();
         ws.grant_external_file(&key).await.unwrap();
+        // The watcher's own events report `key_for_canonical_path`'s
+        // return value — now the *canonical* grant key (the Windows
+        // path-canonicalization plan's R3/R4), not necessarily the exact
+        // literal string this test granted under.
+        let event_key = crate::path_key::canonical_key(&key);
 
         // Let the watcher startup settle (mirrors fs_watch.rs's own tests'
         // STARTUP_SETTLE_MS convention).
@@ -3232,7 +3237,7 @@ mod tests {
             if let Ok(Some(event)) =
                 tokio::time::timeout(Duration::from_millis(100), rx.recv()).await
             {
-                if event.path == key && matches!(event.kind, FsChangeKind::Modify) {
+                if event.path == event_key && matches!(event.kind, FsChangeKind::Modify) {
                     saw_modify = true;
                     break;
                 }
@@ -3251,7 +3256,7 @@ mod tests {
             if let Ok(Some(event)) =
                 tokio::time::timeout(Duration::from_millis(100), rx.recv()).await
             {
-                if event.path == key && matches!(event.kind, FsChangeKind::Remove) {
+                if event.path == event_key && matches!(event.kind, FsChangeKind::Remove) {
                     saw_remove = true;
                     break;
                 }

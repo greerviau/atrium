@@ -34,15 +34,26 @@ fn folder_name(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// Moves `path` to the front (inserting it if new), dedupes by path, and
-/// caps the result at `MAX_RECENTS`.
+/// Moves `path` to the front (inserting it if new), dedupes by path — under
+/// `canonical_key`, so a different spelling of an already-recorded project
+/// is recognized as the same entry rather than added as a duplicate — and
+/// caps the result at `MAX_RECENTS`. The stored `path` itself is also the
+/// canonical key, not the raw input, so a later `remove_path` call (which
+/// only ever receives what the frontend sends, already canonicalized at its
+/// own IPC boundary) can find it.
 fn upsert(mut recents: Vec<RecentProject>, path: &str, opened_at: u64) -> Vec<RecentProject> {
-    recents.retain(|r| r.path != path);
+    let key = crate::path_key::canonical_key(path);
+    recents.retain(|r| crate::path_key::canonical_key(&r.path) != key);
     recents.insert(
         0,
         RecentProject {
-            path: path.to_string(),
-            name: folder_name(path),
+            // `name` derived from `key`, not the raw `path`, so the two
+            // stored fields never describe two different spellings of the
+            // same path — `folder_name` extracts the same segment from
+            // either given `Path`'s own separator handling, but there is
+            // no reason to leave that as an assumption rather than a fact.
+            name: folder_name(&key),
+            path: key,
             last_opened_at: opened_at,
         },
     );
@@ -64,17 +75,64 @@ fn prune_missing(recents: Vec<RecentProject>) -> Vec<RecentProject> {
 }
 
 fn remove_path(recents: Vec<RecentProject>, path: &str) -> Vec<RecentProject> {
-    recents.into_iter().filter(|r| r.path != path).collect()
+    let key = crate::path_key::canonical_key(path);
+    recents
+        .into_iter()
+        .filter(|r| crate::path_key::canonical_key(&r.path) != key)
+        .collect()
+}
+
+/// One-time on-disk migration for a list persisted before this fold
+/// existed: folds every loaded entry's `path` through `canonical_key` and
+/// dedupes by it, keeping the most recent `last_opened_at` of any
+/// collision (the two spellings' surviving entries are otherwise
+/// indistinguishable, so recency is the only meaningful tiebreak). Without
+/// this, a Windows user's existing list would carry both an old,
+/// pre-fix-spelling row and — the moment they next open that project — a
+/// second row under the canonical spelling, since `upsert`'s own dedupe
+/// only ever sees what's already in the in-memory list it's called with.
+fn migrate_to_canonical_keys(recents: Vec<RecentProject>) -> Vec<RecentProject> {
+    // `order` records each key's first-encountered position, separately
+    // from `by_key`: a `HashMap`'s own iteration order is unrelated to
+    // insertion order, so collecting straight out of it — followed by a
+    // stable sort keyed only on `last_opened_at` — would leave any tie in
+    // that timestamp resolved nondeterministically, changing on every call
+    // for the exact same input. Building the output from `order` instead
+    // makes that tiebreak deterministic (first-seen-first) rather than
+    // merely stable-over-an-arbitrary-order.
+    let mut order: Vec<String> = Vec::new();
+    let mut by_key: std::collections::HashMap<String, RecentProject> =
+        std::collections::HashMap::new();
+    for mut entry in recents {
+        let key = crate::path_key::canonical_key(&entry.path);
+        entry.path = key.clone();
+        match by_key.get(&key) {
+            Some(existing) if existing.last_opened_at >= entry.last_opened_at => {}
+            _ => {
+                if !by_key.contains_key(&key) {
+                    order.push(key.clone());
+                }
+                by_key.insert(key, entry);
+            }
+        }
+    }
+    let mut migrated: Vec<RecentProject> = order
+        .into_iter()
+        .map(|key| by_key.remove(&key).unwrap())
+        .collect();
+    migrated.sort_by_key(|r| std::cmp::Reverse(r.last_opened_at));
+    migrated
 }
 
 fn read_store<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<RecentProject>, AppError> {
     let store = app
         .store(STORE_FILE)
         .map_err(|e| AppError::Other(e.to_string()))?;
-    Ok(store
+    let loaded: Vec<RecentProject> = store
         .get(STORE_KEY)
         .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default())
+        .unwrap_or_default();
+    Ok(migrate_to_canonical_keys(loaded))
 }
 
 fn write_store<R: Runtime>(app: &AppHandle<R>, recents: &[RecentProject]) -> Result<(), AppError> {
@@ -210,6 +268,116 @@ mod tests {
         let pruned = prune_missing(recents);
 
         assert!(pruned.is_empty());
+    }
+
+    // R5 (Windows path-canonicalization plan) — opening a project already in
+    // the list, but under a different textual spelling of the same real
+    // path, must dedupe to one entry rather than adding a second row.
+    #[test]
+    fn upsert_dedupes_a_different_spelling_of_an_existing_windows_entry() {
+        let recents = upsert(vec![], r"C:\ws\project", 1);
+        assert_eq!(recents.len(), 1);
+
+        let recents = upsert(recents, "C:/ws/project", 2);
+
+        assert_eq!(recents.len(), 1);
+        assert_eq!(recents[0].last_opened_at, 2);
+    }
+
+    // R5 — removing a project by a different spelling than the one it was
+    // recorded under must still find and drop it; otherwise a Windows
+    // user's stale-spelling row is permanently unremovable.
+    #[test]
+    fn remove_path_removes_a_different_spelling_of_the_recorded_path() {
+        let recents = upsert(vec![], r"C:\ws\project", 1);
+
+        let recents = remove_path(recents, "C:/ws/project");
+
+        assert!(recents.is_empty());
+    }
+
+    // R5 — the on-disk migration `read_store` runs on every load: a store
+    // seeded with both spellings of one project (the shape a Windows user's
+    // pre-fix `recents.json` is actually in) collapses to one entry, keeping
+    // whichever had the newer `last_opened_at` — the two survivors are
+    // otherwise indistinguishable, so recency is the only meaningful
+    // tiebreak.
+    #[test]
+    fn migrate_to_canonical_keys_dedupes_two_spellings_and_keeps_the_newer_one() {
+        let seeded = vec![
+            RecentProject {
+                path: r"C:\ws\project".into(),
+                name: "project".into(),
+                last_opened_at: 1,
+            },
+            RecentProject {
+                path: "C:/ws/project".into(),
+                name: "project".into(),
+                last_opened_at: 5,
+            },
+        ];
+
+        let migrated = migrate_to_canonical_keys(seeded);
+
+        assert_eq!(migrated.len(), 1);
+        assert_eq!(migrated[0].path, "C:/ws/project");
+        assert_eq!(migrated[0].last_opened_at, 5);
+    }
+
+    #[test]
+    fn migrate_to_canonical_keys_leaves_distinct_projects_untouched() {
+        let seeded = vec![
+            RecentProject {
+                path: "/a".into(),
+                name: "a".into(),
+                last_opened_at: 1,
+            },
+            RecentProject {
+                path: "/b".into(),
+                name: "b".into(),
+                last_opened_at: 2,
+            },
+        ];
+
+        let migrated = migrate_to_canonical_keys(seeded);
+
+        assert_eq!(migrated.len(), 2);
+    }
+
+    // A `HashMap`'s own iteration order is unrelated to insertion order;
+    // collecting straight out of one before a stable sort keyed only on
+    // `last_opened_at` would leave a tie in that timestamp resolved
+    // nondeterministically, changing between calls for the exact same
+    // input. Runs this several times specifically because a
+    // hash-order-dependent bug would not necessarily fail on the first try.
+    #[test]
+    fn migrate_to_canonical_keys_breaks_a_last_opened_at_tie_by_first_encountered_order_deterministically(
+    ) {
+        let seeded = vec![
+            RecentProject {
+                path: "/a".into(),
+                name: "a".into(),
+                last_opened_at: 5,
+            },
+            RecentProject {
+                path: "/b".into(),
+                name: "b".into(),
+                last_opened_at: 5,
+            },
+            RecentProject {
+                path: "/c".into(),
+                name: "c".into(),
+                last_opened_at: 5,
+            },
+        ];
+
+        for _ in 0..20 {
+            let migrated = migrate_to_canonical_keys(seeded.clone());
+            assert_eq!(
+                migrated.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+                vec!["/a", "/b", "/c"]
+            );
+        }
     }
 
     #[test]

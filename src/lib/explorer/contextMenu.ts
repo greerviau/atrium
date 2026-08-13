@@ -10,7 +10,7 @@ import { loadChildren } from "../stores/fileTree";
 import { pruneRecentFiles } from "../stores/recentFiles";
 import { renameOpenTabs, markPathDeleted } from "../stores/tabs";
 import { workspace } from "../stores/workspace";
-import { basename, dirOf } from "../util/path";
+import { basename, dirOf, joinPath } from "../util/path";
 
 export interface ContextMenuState {
   x: number;
@@ -48,20 +48,20 @@ export function closeContextMenu(): void {
 
 export async function newFile(dirPath: string, name: string): Promise<void> {
   const workspaceId = localWorkspaceId();
-  await fsCreateFile(workspaceId, `${dirPath}/${name}`);
+  await fsCreateFile(workspaceId, joinPath(dirPath, name));
   await loadChildren(dirPath);
 }
 
 export async function newFolder(dirPath: string, name: string): Promise<void> {
   const workspaceId = localWorkspaceId();
-  await fsCreateDir(workspaceId, `${dirPath}/${name}`);
+  await fsCreateDir(workspaceId, joinPath(dirPath, name));
   await loadChildren(dirPath);
 }
 
 export async function rename(path: string, newName: string): Promise<void> {
   const workspaceId = localWorkspaceId();
   const dir = dirOf(path);
-  const newPath = `${dir}/${newName}`;
+  const newPath = joinPath(dir, newName);
   await fsRename(workspaceId, path, newPath);
   pruneRecents(path);
   renameOpenTabs(path, newPath);
@@ -72,7 +72,7 @@ export async function rename(path: string, newName: string): Promise<void> {
 export async function movePath(sourcePath: string, destDir: string): Promise<void> {
   const workspaceId = localWorkspaceId();
   const sourceDir = dirOf(sourcePath);
-  const newPath = `${destDir}/${basename(sourcePath)}`;
+  const newPath = joinPath(destDir, basename(sourcePath));
   await fsRename(workspaceId, sourcePath, newPath);
   pruneRecents(sourcePath);
   renameOpenTabs(sourcePath, newPath);

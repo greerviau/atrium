@@ -10,6 +10,7 @@ These tests drive the actual compiled app through its native WebView, so they ne
 - Rust toolchain, plus the Tauri v2 system dependencies for your platform ([webkit2gtk etc. on Linux](https://v2.tauri.app/start/prerequisites/), Microsoft C++ Build Tools and WebView2 on Windows).
 - `cargo install tauri-driver` (once).
 - On Linux, the package providing `WebKitWebDriver` — `webkitgtk-webdriver` on current Ubuntu releases (it was renamed from the older `webkit2gtk-driver`, which some CI images and older distributions still use) — and, for headless runs, the `xvfb` package.
+- On Windows, `msedgedriver.exe` on `PATH`, matching the installed Edge/WebView2 build — `tauri-driver` shells out to it the same way it shells out to `WebKitWebDriver` on Linux. [`msedgedriver-tool`](https://github.com/chippers/msedgedriver-tool) (`cargo install --git https://github.com/chippers/msedgedriver-tool`, then run `msedgedriver-tool`) detects the installed version and downloads the matching driver. Getting this suite running in Windows CI is tracked in issue #467 — `msedgedriver` fails to create a session there with `DevToolsActivePort file doesn't exist`, unresolved as of that issue; a local Windows run may or may not hit the same problem.
 
 ## Running
 
@@ -72,6 +73,7 @@ A second, currently `it.skip`-ped case attempts the same thing through `handleSc
 `specs/issue359.e2e.js` covers issue #359: place the caret at a rendered Markdown visual wrap boundary, click the terminal, wait through CodeMirror's next measure cycle, and confirm the terminal retains focus while the preview hides its raw marker.
 
 `specs/launchOpen.e2e.js` covers issue #362 by launching a second native application process with a file path argument, then verifying that the single-instance handoff opens the requested file in the existing editor and removes the welcome screen.
+Because the primary process is already running when the second one launches, this exercises the *warm* path of the OS-open provenance stamp (`record` alone, with `frontend_ready` already `true` and `take` never called) — a flow with its own Rust-side unit test coverage (`launch_open.rs`) but, short of a real Windows machine, no automated end-to-end coverage on that platform; see issue #467.
 This focused spec runs under Xvfb in Linux CI.
 
 `specs/keyboardShortcuts.e2e.js` covers issue #156's two kinds of shortcut:
@@ -85,7 +87,7 @@ This focused spec runs under Xvfb in Linux CI.
 
 ## Status
 
-The focused launch-open spec runs in Linux CI.
+The focused launch-open spec runs in Linux CI. Windows CI is tracked separately (issue #467).
 The broader smoke suite still requires a real Linux or Windows display (or Xvfb) and is not part of the default CI workflow.
 
 `smoke.e2e.js` (12 scenarios), `unsavedChanges.e2e.js` (4 scenarios) and `keyboardShortcuts.e2e.js` (4 scenarios) each pass in full, repeatably, whether run standalone or as part of the whole suite.

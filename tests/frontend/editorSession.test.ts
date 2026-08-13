@@ -122,6 +122,72 @@ describe("loadEditorSession / saveEditorSession", () => {
   });
 });
 
+// Windows path-canonicalization plan, §4.3 migration: a session persisted
+// under the pre-fix storage key (built from the raw, native-separator root)
+// must still be found, its paths folded to the canonical form before they
+// re-enter the identity space, and the next save must land under the new
+// canonical key rather than perpetuating the legacy one.
+describe("legacy storage key fallback and path canonicalization on restore", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("finds a session persisted under the pre-canonicalization (raw backslash) key", () => {
+    const legacySession = { paneTree: leaf("L1", ["C:\\ws\\a.md"]), focusedPaneId: "L1" };
+    localStorage.setItem("atrium.editorSession.C:\\ws", JSON.stringify(legacySession));
+
+    expect(loadEditorSession("C:\\ws")).not.toBeNull();
+  });
+
+  it("canonicalizes every persisted path on restore, even read through the legacy key", () => {
+    const legacySession = {
+      paneTree: leaf("L1", ["C:\\ws\\a.md", "C:\\ws\\b.md"], "C:\\ws\\b.md"),
+      focusedPaneId: "L1",
+    };
+    localStorage.setItem("atrium.editorSession.C:\\ws", JSON.stringify(legacySession));
+
+    const loaded = loadEditorSession("C:\\ws");
+
+    expect((loaded!.paneTree as EditorLeafPane).tabs).toEqual(["C:/ws/a.md", "C:/ws/b.md"]);
+    expect((loaded!.paneTree as EditorLeafPane).activeTabPath).toBe("C:/ws/b.md");
+  });
+
+  it("prefers the canonical key over the legacy key when both exist", () => {
+    localStorage.setItem(
+      "atrium.editorSession.C:\\ws",
+      JSON.stringify({ paneTree: leaf("L1", ["stale"]), focusedPaneId: "L1" }),
+    );
+    localStorage.setItem(
+      "atrium.editorSession.C:/ws",
+      JSON.stringify({ paneTree: leaf("L1", ["fresh"]), focusedPaneId: "L1" }),
+    );
+
+    const loaded = loadEditorSession("C:\\ws");
+
+    expect((loaded!.paneTree as EditorLeafPane).tabs).toEqual(["fresh"]);
+  });
+
+  it("the next save writes under the canonical key, leaving the legacy key as a dead, unread entry", () => {
+    localStorage.setItem(
+      "atrium.editorSession.C:\\ws",
+      JSON.stringify({ paneTree: leaf("L1", ["C:\\ws\\a.md"]), focusedPaneId: "L1" }),
+    );
+
+    saveEditorSession("C:\\ws", { paneTree: leaf("L1", ["C:/ws/a.md"]), focusedPaneId: "L1" });
+    vi.advanceTimersByTime(400);
+
+    expect(localStorage.getItem("atrium.editorSession.C:/ws")).not.toBeNull();
+    // The legacy key is never deleted, only shadowed — harmless, since the
+    // canonical key is always consulted first.
+    expect(loadEditorSession("C:\\ws")).toEqual({ paneTree: leaf("L1", ["C:/ws/a.md"]), focusedPaneId: "L1" });
+  });
+});
+
 describe("reconcileRestoredSession", () => {
   beforeEach(() => {
     markdownDefaultView.set(DEFAULT_MARKDOWN_VIEW);

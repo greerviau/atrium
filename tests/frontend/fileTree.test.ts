@@ -296,6 +296,26 @@ describe("fileTree: expandToPath (issue #400)", () => {
     const nodeA = get(fileTree).root?.children?.find((n) => n.entry.path === "/a");
     expect(nodeA?.expanded).toBe(true);
   });
+
+  it("refreshes the workspace root itself, not a dead end, when a top-level entry changes and the root is \"/\"", async () => {
+    // `dirOf("/a.txt")` falls back to its input unchanged (no separator
+    // left to split on past the leading one) — `refreshDirectoryContaining`
+    // has to recognize that as "belongs to the root" and refresh the root
+    // itself, not treat the unchanged string as a (nonexistent) parent path.
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([
+      { name: "a.txt", path: "/a.txt", isDir: false, isSymlink: false },
+    ]);
+    await loadRoot("/");
+    expect(get(fileTree).root?.expanded).toBe(true);
+
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([
+      { name: "a.txt", path: "/a.txt", isDir: false, isSymlink: false },
+      { name: "b.txt", path: "/b.txt", isDir: false, isSymlink: false },
+    ]);
+    await refreshDirectoryContaining("/b.txt");
+
+    expect(get(fileTree).root?.children?.map((n) => n.entry.name)).toEqual(["a.txt", "b.txt"]);
+  });
 });
 
 describe("FileTree: scrollbar auto-hide", () => {

@@ -5,7 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const appBinary = path.join(__dirname, "../../src-tauri/target/debug/atrium");
+const appBinary = path.join(
+  __dirname,
+  `../../src-tauri/target/debug/atrium${process.platform === "win32" ? ".exe" : ""}`,
+);
 
 let frontendServer;
 let tauriDriver;
@@ -75,11 +78,20 @@ export const config = {
     dataHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), `atrium-e2e-${process.pid}-`));
     process.env.XDG_DATA_HOME = dataHomeDir;
 
-    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-    frontendServer = spawn(npm, ["run", "dev", "--", "--host", "127.0.0.1"], {
+    const isWindows = process.platform === "win32";
+    // `shell: true` on Windows, not a bare `npm.cmd` spawn: Node's own
+    // spawn() has repeated Windows-only EINVAL regressions for a `.cmd`
+    // target combined with `stdio: "inherit"` (nodejs/node#52681 is one of
+    // several) — routing through the shell is the documented workaround.
+    // `detached` is dropped there too: `stopProcessTree` already branches
+    // to `taskkill /t /f` on Windows rather than the POSIX negative-PID
+    // process-group kill `detached` exists to support, so it buys nothing
+    // there and is the other half of the same EINVAL combination.
+    frontendServer = spawn(isWindows ? "npm.cmd" : "npm", ["run", "dev", "--", "--host", "127.0.0.1"], {
       cwd: path.join(__dirname, "../.."),
-      detached: true,
+      detached: !isWindows,
       stdio: "inherit",
+      shell: isWindows,
     });
 
     try {
@@ -98,9 +110,13 @@ export const config = {
   },
 
   // `tauri-driver` bridges WebDriver to the app's native WebView. Install it
-  // once with `cargo install tauri-driver`.
+  // once with `cargo install tauri-driver`. `cargo install`'s target
+  // directory is `$HOME` on Linux/macOS but `%USERPROFILE%` on Windows —
+  // Node's `process.env.HOME` isn't reliably set there.
   beforeSession: () => {
-    tauriDriver = spawn(path.join(process.env.HOME ?? "", ".cargo/bin/tauri-driver"), [], {
+    const cargoHome = process.env.CARGO_HOME ?? path.join(process.env.USERPROFILE ?? process.env.HOME ?? "", ".cargo");
+    const driverName = process.platform === "win32" ? "tauri-driver.exe" : "tauri-driver";
+    tauriDriver = spawn(path.join(cargoHome, "bin", driverName), [], {
       stdio: [null, process.stdout, process.stderr],
     });
   },

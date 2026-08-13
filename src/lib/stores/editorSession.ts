@@ -3,6 +3,7 @@ import { fsCheckFileAccess, fsReadFile, isAppError, localWorkspaceId } from "../
 import { isTextPaneMode, modeForPath } from "../editor/codeExtensions";
 import { findLeaf, listLeaves, pruneMissingTabs, type EditorLeafPane, type EditorPaneNode } from "../editor/editorPaneTree";
 import { markdownDefaultView } from "./markdownDefaultView";
+import { canonicalizePath } from "../util/path";
 import type { Tab } from "./tabs";
 
 const STORAGE_PREFIX = "atrium.editorSession.";
@@ -23,7 +24,39 @@ export interface PersistedEditorSession {
 }
 
 function storageKey(root: string): string {
+  return `${STORAGE_PREFIX}${canonicalizePath(root)}`;
+}
+
+/**
+ * The pre-canonicalization storage key, still built from the raw root —
+ * every session persisted before this fold existed sits under this key on a
+ * Windows user's machine. `loadEditorSession` falls back to it on a
+ * canonical-key miss so an upgrade doesn't silently wipe an existing
+ * session; the very next save rewrites it under `storageKey`'s canonical
+ * form, so this is a one-time read fallback, not a permanent second key.
+ */
+function legacyStorageKey(root: string): string {
   return `${STORAGE_PREFIX}${root}`;
+}
+
+function canonicalizeLeaf(leaf: EditorLeafPane): EditorLeafPane {
+  return {
+    ...leaf,
+    tabs: leaf.tabs.map(canonicalizePath),
+    activeTabPath: leaf.activeTabPath === null ? null : canonicalizePath(leaf.activeTabPath),
+  };
+}
+
+function canonicalizePaneNode(node: EditorPaneNode): EditorPaneNode {
+  return node.type === "leaf" ? canonicalizeLeaf(node) : { ...node, children: node.children.map(canonicalizePaneNode) };
+}
+
+/** Folds every persisted path in `session` through `canonicalizePath` before it re-enters the frontend's identity space — needed even for a session saved after this fix landed, since `canonicalizePath` only became idempotent going forward, not retroactively for what was already on disk. */
+function canonicalizeSession(session: PersistedEditorSession): PersistedEditorSession {
+  return {
+    ...session,
+    paneTree: session.paneTree === null ? null : canonicalizePaneNode(session.paneTree),
+  };
 }
 
 function isValidLeaf(value: unknown): value is EditorLeafPane {
@@ -67,10 +100,10 @@ function isValidSession(value: unknown): value is PersistedEditorSession {
 /** Reads the persisted editor session for `root`. Returns `null` on anything missing, malformed, or absent — the caller treats that the same as a brand-new project. */
 export function loadEditorSession(root: string): PersistedEditorSession | null {
   try {
-    const raw = localStorage.getItem(storageKey(root));
+    const raw = localStorage.getItem(storageKey(root)) ?? localStorage.getItem(legacyStorageKey(root));
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
-    return isValidSession(parsed) ? parsed : null;
+    return isValidSession(parsed) ? canonicalizeSession(parsed) : null;
   } catch {
     return null;
   }
