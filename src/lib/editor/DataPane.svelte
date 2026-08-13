@@ -124,7 +124,7 @@
     ></textarea>
     <button type="submit" disabled={running}>{running ? "Running…" : "Run"}</button>
   </form>
-  <div class="query-hint">Query <code>data</code> with SELECT, DISTINCT, WHERE, ORDER BY, and LIMIT. Press {navigator.platform.includes("Mac") ? "⌘" : "Ctrl"}+Enter to run.</div>
+  <div class="query-hint">Query <code>data</code> with SELECT, DISTINCT, WHERE, ORDER BY, LIMIT, and OFFSET. Press {navigator.platform.includes("Mac") ? "⌘" : "Ctrl"}+Enter to run.</div>
 
   {#if error}
     <div class="data-error" role="alert">{error}</div>
