@@ -10,6 +10,7 @@ These tests drive the actual compiled app through its native WebView, so they ne
 - Rust toolchain, plus the Tauri v2 system dependencies for your platform ([webkit2gtk etc. on Linux](https://v2.tauri.app/start/prerequisites/), Microsoft C++ Build Tools and WebView2 on Windows).
 - `cargo install tauri-driver` (once).
 - On Linux, the package providing `WebKitWebDriver` — `webkitgtk-webdriver` on current Ubuntu releases (it was renamed from the older `webkit2gtk-driver`, which some CI images and older distributions still use) — and, for headless runs, the `xvfb` package.
+- On Windows, `msedgedriver.exe` on `PATH`, matching the installed Edge/WebView2 build — `tauri-driver` shells out to it the same way it shells out to `WebKitWebDriver` on Linux. [`msedgedriver-tool`](https://github.com/chippers/msedgedriver-tool) (`cargo install --git https://github.com/chippers/msedgedriver-tool`, then run `msedgedriver-tool`) detects the installed version and downloads the matching driver — the same tool `.github/workflows/ci.yml` uses.
 
 ## Running
 

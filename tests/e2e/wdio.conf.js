@@ -5,7 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const appBinary = path.join(__dirname, "../../src-tauri/target/debug/atrium");
+const appBinary = path.join(
+  __dirname,
+  `../../src-tauri/target/debug/atrium${process.platform === "win32" ? ".exe" : ""}`,
+);
 
 let frontendServer;
 let tauriDriver;
@@ -98,9 +101,13 @@ export const config = {
   },
 
   // `tauri-driver` bridges WebDriver to the app's native WebView. Install it
-  // once with `cargo install tauri-driver`.
+  // once with `cargo install tauri-driver`. `cargo install`'s target
+  // directory is `$HOME` on Linux/macOS but `%USERPROFILE%` on Windows —
+  // Node's `process.env.HOME` isn't reliably set there.
   beforeSession: () => {
-    tauriDriver = spawn(path.join(process.env.HOME ?? "", ".cargo/bin/tauri-driver"), [], {
+    const cargoHome = process.env.CARGO_HOME ?? path.join(process.env.USERPROFILE ?? process.env.HOME ?? "", ".cargo");
+    const driverName = process.platform === "win32" ? "tauri-driver.exe" : "tauri-driver";
+    tauriDriver = spawn(path.join(cargoHome, "bin", driverName), [], {
       stdio: [null, process.stdout, process.stderr],
     });
   },

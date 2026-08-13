@@ -74,6 +74,19 @@ jobs:
         run: |
           cargo install tauri-driver --locked
           npm ci --prefix tests/e2e
+      - name: Install msedgedriver (Windows)
+        # tauri-driver shells out to msedgedriver.exe via $PATH on Windows,
+        # the same way it relies on the apt-installed WebKitWebDriver being
+        # on $PATH on Linux — neither ships with tauri-driver itself.
+        # msedgedriver-tool is Tauri's own documented CI tool for this: it
+        # detects the runner's installed Edge/WebView2 build and downloads
+        # the matching driver, avoiding a hardcoded version that would drift
+        # out of sync with the runner image over time.
+        if: runner.os == 'Windows'
+        run: |
+          cargo install --git https://github.com/chippers/msedgedriver-tool
+          & "$HOME/.cargo/bin/msedgedriver-tool.exe"
+          $PWD.Path >> $env:GITHUB_PATH
       - name: Test launch-time file open through the native process entry point (Linux)
         if: runner.os == 'Linux'
         run: dbus-run-session -- xvfb-run --auto-servernum npm run test:launch-open --prefix tests/e2e
