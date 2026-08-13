@@ -184,21 +184,28 @@ mod tests {
     // of this module's own string fold, and the assertion is meaningless on
     // a non-Windows host (`Prefix::UNC` only exists in `std::path::Prefix`'s
     // Windows-only variants).
+    // A plain `fn` item, not a closure: a closure's return type here would
+    // need `for<'a> Fn(&'a Path) -> Prefix<'a>`, which closure lifetime
+    // elision doesn't infer, unlike a `fn` item's implicit elision rule.
+    #[cfg(windows)]
+    fn prefix_kind(p: &std::path::Path) -> std::path::Prefix<'_> {
+        match p.components().next() {
+            Some(std::path::Component::Prefix(prefix)) => prefix.kind(),
+            _ => panic!("expected a Prefix component"),
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_parses_a_forward_slash_unc_path_the_same_as_a_backslash_one() {
-        use std::path::{Component, Path, Prefix};
+        use std::path::{Path, Prefix};
 
         let backslash = Path::new(r"\\server\share\f.txt");
         let forward = Path::new("//server/share/f.txt");
         assert_eq!(backslash, forward);
 
-        let prefix_of = |p: &Path| match p.components().next() {
-            Some(Component::Prefix(prefix)) => prefix.kind(),
-            _ => panic!("expected a Prefix component"),
-        };
-        assert!(matches!(prefix_of(backslash), Prefix::UNC(_, _)));
-        assert!(matches!(prefix_of(forward), Prefix::UNC(_, _)));
+        assert!(matches!(prefix_kind(backslash), Prefix::UNC(_, _)));
+        assert!(matches!(prefix_kind(forward), Prefix::UNC(_, _)));
 
         assert_eq!(
             canonical_key(r"\\server\share\f.txt"),
