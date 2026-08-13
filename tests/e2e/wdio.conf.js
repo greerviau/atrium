@@ -78,11 +78,20 @@ export const config = {
     dataHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), `atrium-e2e-${process.pid}-`));
     process.env.XDG_DATA_HOME = dataHomeDir;
 
-    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-    frontendServer = spawn(npm, ["run", "dev", "--", "--host", "127.0.0.1"], {
+    const isWindows = process.platform === "win32";
+    // `shell: true` on Windows, not a bare `npm.cmd` spawn: Node's own
+    // spawn() has repeated Windows-only EINVAL regressions for a `.cmd`
+    // target combined with `stdio: "inherit"` (nodejs/node#52681 is one of
+    // several) — routing through the shell is the documented workaround.
+    // `detached` is dropped there too: `stopProcessTree` already branches
+    // to `taskkill /t /f` on Windows rather than the POSIX negative-PID
+    // process-group kill `detached` exists to support, so it buys nothing
+    // there and is the other half of the same EINVAL combination.
+    frontendServer = spawn(isWindows ? "npm.cmd" : "npm", ["run", "dev", "--", "--host", "127.0.0.1"], {
       cwd: path.join(__dirname, "../.."),
-      detached: true,
+      detached: !isWindows,
       stdio: "inherit",
+      shell: isWindows,
     });
 
     try {
