@@ -1,6 +1,15 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { DragDropEvent } from "@tauri-apps/api/webview";
+import { canonicalizePath } from "../util/path";
+
+/**
+ * The matching normalization boundary for `commands.ts`'s IPC calls: every
+ * path-typed field on a subscribed event is folded through
+ * `canonicalizePath` here before it reaches any handler, so downstream code
+ * can rely on the canonical form (see `src/lib/util/path.ts`'s module
+ * header).
+ */
 
 export type FsChangeKind = "create" | "modify" | "remove" | "rename";
 
@@ -15,7 +24,14 @@ export interface FsChangeEvent {
 export function onFsChanged(
   handler: (event: FsChangeEvent) => void,
 ): Promise<UnlistenFn> {
-  return listen<FsChangeEvent>("fs:changed", (event) => handler(event.payload));
+  return listen<FsChangeEvent>("fs:changed", (event) =>
+    handler({
+      ...event.payload,
+      path: canonicalizePath(event.payload.path),
+      fromPath:
+        event.payload.fromPath === undefined ? undefined : canonicalizePath(event.payload.fromPath),
+    }),
+  );
 }
 
 /** Native menu bar items that need frontend behavior. */
@@ -56,7 +72,7 @@ export function onMenuEvent(
  * before deciding what to do with it (`App.svelte`'s `doHandleOsOpenPath`).
  */
 export function onDockOpenPath(handler: (path: string) => void): Promise<UnlistenFn> {
-  return listen<string>("dock:open-path", (event) => handler(event.payload));
+  return listen<string>("dock:open-path", (event) => handler(canonicalizePath(event.payload)));
 }
 
 /**
@@ -75,5 +91,11 @@ export function onCloseRequested(handler: () => void): Promise<UnlistenFn> {
  * (see terminalDropTargets.ts).
  */
 export function onDragDropEvent(handler: (event: DragDropEvent) => void): Promise<UnlistenFn> {
-  return getCurrentWebview().onDragDropEvent((event) => handler(event.payload));
+  return getCurrentWebview().onDragDropEvent((event) =>
+    handler(
+      event.payload.type === "drop"
+        ? { ...event.payload, paths: event.payload.paths.map(canonicalizePath) }
+        : event.payload,
+    ),
+  );
 }

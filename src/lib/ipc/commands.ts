@@ -1,10 +1,20 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { canonicalizePath } from "../util/path";
 
 /**
  * The only place in the frontend that knows Tauri's `invoke()` API exists.
  * Every other module imports typed functions from here, so the IPC contract
  * is enforced by TypeScript types in one file rather than scattered
  * `invoke('some_string', ...)` calls with ad-hoc payload shapes.
+ *
+ * This is also the frontend's normalization boundary: every path-typed
+ * field returned from Rust is folded through `canonicalizePath` here before
+ * it reaches any store, so downstream code can rely on the canonical form
+ * (see `src/lib/util/path.ts`'s module header). `findFiles`' `displayPath`
+ * is the one deliberate exception — a display contract, never an identity
+ * key. Paths sent *to* Rust are never normalized outbound: Rust already
+ * accepts `/`-separated paths on Windows, and adding a second conversion
+ * would only be a fresh chance to get it wrong.
  */
 
 export interface AppError {
@@ -50,8 +60,9 @@ export function standaloneWorkspaceId(): string {
   return STANDALONE_WORKSPACE_ID;
 }
 
-export function workspaceOpenFolderDialog(): Promise<string | null> {
-  return invoke("workspace_open_folder_dialog");
+export async function workspaceOpenFolderDialog(): Promise<string | null> {
+  const path = await invoke<string | null>("workspace_open_folder_dialog");
+  return path === null ? null : canonicalizePath(path);
 }
 
 export function workspaceSetRoot(workspaceId: string, path: string): Promise<void> {
@@ -64,8 +75,9 @@ export interface RecentProject {
   lastOpenedAt: number;
 }
 
-export function workspaceGetRecents(): Promise<RecentProject[]> {
-  return invoke("workspace_get_recents");
+export async function workspaceGetRecents(): Promise<RecentProject[]> {
+  const recents = await invoke<RecentProject[]>("workspace_get_recents");
+  return recents.map((r) => ({ ...r, path: canonicalizePath(r.path) }));
 }
 
 export function workspaceRemoveRecent(path: string): Promise<void> {
@@ -73,8 +85,9 @@ export function workspaceRemoveRecent(path: string): Promise<void> {
 }
 
 /** Drains every pending path supplied by an OS open event or process launch argument. */
-export function workspaceTakePendingOpen(): Promise<string[]> {
-  return invoke("workspace_take_pending_open");
+export async function workspaceTakePendingOpen(): Promise<string[]> {
+  const paths = await invoke<string[]>("workspace_take_pending_open");
+  return paths.map(canonicalizePath);
 }
 
 export interface GitWorktree {
@@ -99,16 +112,28 @@ export interface GitContext {
   branches: GitBranch[];
 }
 
-export function gitGetContext(path: string): Promise<GitContext | null> {
-  return invoke("git_get_context", { path });
+export async function gitGetContext(path: string): Promise<GitContext | null> {
+  const context = await invoke<GitContext | null>("git_get_context", { path });
+  if (!context) return null;
+  return {
+    ...context,
+    repositoryRoot: canonicalizePath(context.repositoryRoot),
+    worktreePath: canonicalizePath(context.worktreePath),
+    worktrees: context.worktrees.map((w) => ({ ...w, path: canonicalizePath(w.path) })),
+    branches: context.branches.map((b) => ({
+      ...b,
+      worktreePath: b.worktreePath === null ? null : canonicalizePath(b.worktreePath),
+    })),
+  };
 }
 
 export function gitSwitchBranch(path: string, branch: string): Promise<void> {
   return invoke("git_switch_branch", { path, branch });
 }
 
-export function fsListDir(workspaceId: string, path: string): Promise<DirEntry[]> {
-  return invoke("fs_list_dir", { workspaceId, path });
+export async function fsListDir(workspaceId: string, path: string): Promise<DirEntry[]> {
+  const entries = await invoke<DirEntry[]>("fs_list_dir", { workspaceId, path });
+  return entries.map((e) => ({ ...e, path: canonicalizePath(e.path) }));
 }
 
 export function fsReadFile(workspaceId: string, path: string): Promise<string> {
@@ -179,11 +204,15 @@ export interface ResolvedPath {
   external: boolean;
 }
 
-export function fsResolveCandidates(
+export async function fsResolveCandidates(
   workspaceId: string,
   candidates: PathCandidate[],
 ): Promise<(ResolvedPath | null)[]> {
-  return invoke("fs_resolve_candidates", { workspaceId, candidates });
+  const resolved = await invoke<(ResolvedPath | null)[]>("fs_resolve_candidates", {
+    workspaceId,
+    candidates,
+  });
+  return resolved.map((r) => (r === null ? null : { ...r, path: canonicalizePath(r.path) }));
 }
 
 /** One authorized terminal link: the path to open, and the workspace whose grant authorizes it — which is the workspace the file must be read through. */
@@ -193,11 +222,12 @@ export interface AuthorizedLink {
 }
 
 /** Resolves one terminal link at activation time, creating the external-file grant that makes it readable. Called only for a link resolution reported as `external`; it is the only path by which a terminal link produces a grant. */
-export function fsAuthorizeTerminalLink(
+export async function fsAuthorizeTerminalLink(
   workspaceId: string,
   candidate: PathCandidate,
 ): Promise<AuthorizedLink> {
-  return invoke("fs_authorize_terminal_link", { workspaceId, candidate });
+  const link = await invoke<AuthorizedLink>("fs_authorize_terminal_link", { workspaceId, candidate });
+  return { ...link, path: canonicalizePath(link.path) };
 }
 
 /** Classifies each of `paths` as a directory (`true`) or not (`false`), following symlinks. */
@@ -234,12 +264,13 @@ export interface SearchResults {
   truncated: boolean;
 }
 
-export function searchWorkspace(
+export async function searchWorkspace(
   workspaceId: string,
   query: string,
   options: SearchOptions,
 ): Promise<SearchResults> {
-  return invoke("search_workspace", { workspaceId, query, options });
+  const results = await invoke<SearchResults>("search_workspace", { workspaceId, query, options });
+  return { ...results, matches: results.matches.map((m) => ({ ...m, path: canonicalizePath(m.path) })) };
 }
 
 export interface FileMatch {
@@ -254,8 +285,10 @@ export interface FileSearchResults {
   truncated: boolean;
 }
 
-export function findFiles(workspaceId: string, query: string): Promise<FileSearchResults> {
-  return invoke("find_files", { workspaceId, query });
+/** `displayPath` is deliberately left un-normalized: it's a display contract (`find_files`' `display_path`), never an identity key — see `src/lib/util/path.ts`'s module header. */
+export async function findFiles(workspaceId: string, query: string): Promise<FileSearchResults> {
+  const results = await invoke<FileSearchResults>("find_files", { workspaceId, query });
+  return { ...results, matches: results.matches.map((m) => ({ ...m, path: canonicalizePath(m.path) })) };
 }
 
 export function ptySpawn(cwd: string, cols: number, rows: number): Promise<string> {
@@ -267,7 +300,9 @@ export function ptySubscribe(
   onEvent: (event: PtyEvent) => void,
 ): Promise<void> {
   const channel = new Channel<PtyEvent>();
-  channel.onmessage = onEvent;
+  channel.onmessage = (event) => {
+    onEvent(event.type === "title" ? { ...event, cwd: canonicalizePath(event.cwd) } : event);
+  };
   return invoke("pty_subscribe", { terminalId, channel });
 }
 
