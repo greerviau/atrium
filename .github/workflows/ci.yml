@@ -65,40 +65,19 @@ jobs:
       - name: Build native packages
         run: npm run tauri build -- --bundles ${{ matrix.bundles }}
       - name: Install launch-open E2E dependencies
-        # tauri-driver doesn't support macOS at all (drives WebKitWebDriver on
-        # Linux and WebView2's msedgedriver on Windows); this is the only
-        # automated coverage of the "Open with Atrium" warm path (R2 in the
-        # Windows path-canonicalization plan), so running it on Windows too
-        # — not only Linux — is what actually catches a regression there.
-        if: runner.os == 'Linux' || runner.os == 'Windows'
+        # tauri-driver does not support macOS. Windows was attempted (the
+        # launch-open E2E is the only automated coverage of the "Open with
+        # Atrium" warm path) but reverted: msedgedriver's session creation
+        # fails on the runner with "DevToolsActivePort file doesn't exist",
+        # and neither a real fix (a genuine spawn EINVAL in wdio.conf.js,
+        # now fixed and left in place) nor the documented
+        # WebView2-software-renderer workaround resolved it. Tracked in
+        # issue #467; Linux-only until that's diagnosed on real Windows
+        # hardware.
+        if: runner.os == 'Linux'
         run: |
           cargo install tauri-driver --locked
           npm ci --prefix tests/e2e
-      - name: Install msedgedriver (Windows)
-        # tauri-driver shells out to msedgedriver.exe via $PATH on Windows,
-        # the same way it relies on the apt-installed WebKitWebDriver being
-        # on $PATH on Linux — neither ships with tauri-driver itself.
-        # msedgedriver-tool is Tauri's own documented CI tool for this: it
-        # detects the runner's installed Edge/WebView2 build and downloads
-        # the matching driver, avoiding a hardcoded version that would drift
-        # out of sync with the runner image over time.
-        if: runner.os == 'Windows'
-        run: |
-          cargo install --git https://github.com/chippers/msedgedriver-tool
-          & "$HOME/.cargo/bin/msedgedriver-tool.exe"
-          $PWD.Path >> $env:GITHUB_PATH
-      - name: Test launch-time file open through the native process entry point (Linux)
+      - name: Test launch-time file open through the native process entry point
         if: runner.os == 'Linux'
         run: dbus-run-session -- xvfb-run --auto-servernum npm run test:launch-open --prefix tests/e2e
-      - name: Test launch-time file open through the native process entry point (Windows)
-        # No Xvfb equivalent needed or available on the Windows runner image;
-        # `tauri-driver`/WebView2 run directly against its own real session.
-        # WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS forces WebView2's software
-        # (ANGLE/WARP) renderer: the runner has no real GPU, and WebView2's
-        # own GPU process crashing on launch in that situation is a
-        # documented cause of msedgedriver's "DevToolsActivePort file
-        # doesn't exist" session-creation failure.
-        if: runner.os == 'Windows'
-        env:
-          WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: --disable-gpu --use-angle=warp
-        run: npm run test:launch-open --prefix tests/e2e
