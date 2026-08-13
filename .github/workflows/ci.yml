@@ -58,16 +58,27 @@ jobs:
           workspaces: src-tauri
       - run: npm ci
       - run: npm run build
+      - run: npm test
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
       - name: Build native packages
         run: npm run tauri build -- --bundles ${{ matrix.bundles }}
       - name: Install launch-open E2E dependencies
-        if: runner.os == 'Linux'
+        # tauri-driver doesn't support macOS at all (drives WebKitWebDriver on
+        # Linux and WebView2's msedgedriver on Windows); this is the only
+        # automated coverage of the "Open with Atrium" warm path (R2 in the
+        # Windows path-canonicalization plan), so running it on Windows too
+        # — not only Linux — is what actually catches a regression there.
+        if: runner.os == 'Linux' || runner.os == 'Windows'
         run: |
           cargo install tauri-driver --locked
           npm ci --prefix tests/e2e
-      - name: Test launch-time file open through the native process entry point
+      - name: Test launch-time file open through the native process entry point (Linux)
         if: runner.os == 'Linux'
         run: dbus-run-session -- xvfb-run --auto-servernum npm run test:launch-open --prefix tests/e2e
+      - name: Test launch-time file open through the native process entry point (Windows)
+        # No Xvfb equivalent needed or available on the Windows runner image;
+        # `tauri-driver`/WebView2 run directly against its own real session.
+        if: runner.os == 'Windows'
+        run: npm run test:launch-open --prefix tests/e2e

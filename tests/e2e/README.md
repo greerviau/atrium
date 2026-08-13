@@ -72,7 +72,8 @@ A second, currently `it.skip`-ped case attempts the same thing through `handleSc
 `specs/issue359.e2e.js` covers issue #359: place the caret at a rendered Markdown visual wrap boundary, click the terminal, wait through CodeMirror's next measure cycle, and confirm the terminal retains focus while the preview hides its raw marker.
 
 `specs/launchOpen.e2e.js` covers issue #362 by launching a second native application process with a file path argument, then verifying that the single-instance handoff opens the requested file in the existing editor and removes the welcome screen.
-This focused spec runs under Xvfb in Linux CI.
+Because the primary process is already running when the second one launches, this exercises the *warm* path of the OS-open provenance stamp (`record` alone, with `frontend_ready` already `true` and `take` never called) — the flow the Windows path-canonicalization plan's R2 finding was about, and the reason this spec runs on Windows CI as well as Linux, not only Linux.
+This focused spec runs under Xvfb in Linux CI and directly (no Xvfb equivalent needed) in Windows CI.
 
 `specs/keyboardShortcuts.e2e.js` covers issue #156's two kinds of shortcut:
 
@@ -85,7 +86,7 @@ This focused spec runs under Xvfb in Linux CI.
 
 ## Status
 
-The focused launch-open spec runs in Linux CI.
+The focused launch-open spec runs in both Linux and Windows CI.
 The broader smoke suite still requires a real Linux or Windows display (or Xvfb) and is not part of the default CI workflow.
 
 `smoke.e2e.js` (12 scenarios), `unsavedChanges.e2e.js` (4 scenarios) and `keyboardShortcuts.e2e.js` (4 scenarios) each pass in full, repeatably, whether run standalone or as part of the whole suite.
