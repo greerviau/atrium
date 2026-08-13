@@ -93,5 +93,12 @@ jobs:
       - name: Test launch-time file open through the native process entry point (Windows)
         # No Xvfb equivalent needed or available on the Windows runner image;
         # `tauri-driver`/WebView2 run directly against its own real session.
+        # WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS forces WebView2's software
+        # (ANGLE/WARP) renderer: the runner has no real GPU, and WebView2's
+        # own GPU process crashing on launch in that situation is a
+        # documented cause of msedgedriver's "DevToolsActivePort file
+        # doesn't exist" session-creation failure.
         if: runner.os == 'Windows'
+        env:
+          WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: --disable-gpu --use-angle=warp
         run: npm run test:launch-open --prefix tests/e2e
