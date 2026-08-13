@@ -12,8 +12,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-#[cfg(not(target_os = "macos"))]
-use tauri::{AppHandle, Emitter, Manager, Wry};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow, Wry};
 
 /// Emitted whenever an OS-open request arrives after the frontend has
 /// drained the startup queue and installed its live listener.
@@ -74,13 +73,16 @@ pub fn paths_from_args(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> 
 }
 
 /// Routes paths received by an already-running instance into the same queue
-/// and provenance record used during cold launch. Once the frontend is ready,
-/// each path is emitted live. The existing main window is then restored and
-/// focused so opening a file also surfaces Atrium. Only called from the
-/// `tauri_plugin_single_instance` callback (`main.rs`), which is why this is
-/// unused — and `#[cfg]`-gated the same way — on macOS, where a second open
-/// arrives through `RunEvent::Opened` and `macos_dock::open_paths` instead.
-#[cfg(not(target_os = "macos"))]
+/// and provenance record used during cold launch, then surfaces the window.
+/// Once the frontend is ready, each path is emitted live.
+///
+/// Both platform entry points converge here: the
+/// `tauri_plugin_single_instance` callback on Linux and Windows, and
+/// `RunEvent::Opened` on macOS (both in `main.rs`). Surfacing the window is
+/// unconditional and deliberately outside the emit branch — a second launch
+/// carrying no paths at all still has to bring the running window forward,
+/// and a path that arrives before the frontend is ready is queued rather
+/// than emitted but still has to surface the window.
 pub fn open_paths(app: &AppHandle<Wry>, paths: Vec<String>) {
     if !paths.is_empty() && record_os_open(&paths) {
         for path in paths {
@@ -88,10 +90,74 @@ pub fn open_paths(app: &AppHandle<Wry>, paths: Vec<String>) {
         }
     }
 
+    surface_main_window(app);
+}
+
+/// Brings the existing main window to the user's attention after the OS hands
+/// Atrium something to open — without this, a minimized Atrium opens the file
+/// silently in the background and the user has no indication anything
+/// happened (issue #461).
+///
+/// The `if let` is defensive, not a real branch: Tauri creates every
+/// configured window before it runs the app's own `.setup()` closure, which
+/// itself completes inside `build()` — so by the time any caller here can
+/// run, `"main"` exists. It is not the cold-launch path; a cold launch
+/// reaches this with a freshly created window and simply re-asserts a state
+/// that already holds.
+///
+/// Deliberately `pub(crate)` and deliberately narrow: this is the OS-open
+/// surfacing step, not a general-purpose "bring Atrium forward" utility.
+pub(crate) fn surface_main_window(app: &AppHandle<Wry>) {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
+        surface(&window);
+    }
+}
+
+/// The order here is load-bearing. `tao`'s `Window::set_focus` is guarded on
+/// every platform — macOS checks `isMiniaturized`/`isVisible`, Windows checks
+/// its `MINIMIZED`/`VISIBLE` flags, Linux checks its own `minimized` flag and
+/// `get_visible()` — and does nothing at all, silently, when the window is
+/// still minimized or not visible. `unminimize` clears the first condition and
+/// `show` the second; reordering these, or dropping `unminimize` as apparently
+/// redundant with `show`, turns `set_focus` back into a no-op. The test in
+/// this module's `tests` asserts the order for that reason.
+///
+/// An app hidden with Cmd+H is *not* covered: hiding is application state
+/// (`NSApplication.hide:`), so `makeKeyAndOrderFront:` cannot undo it and all
+/// three calls no-op. Restoring from hidden needs `unhide:`, which this
+/// deliberately does not do.
+fn surface(window: &impl MainWindow) {
+    window.unminimize();
+    window.show();
+    window.set_focus();
+}
+
+/// The three window operations `surface` drives, behind a trait purely so
+/// that order can be asserted: a real `WebviewWindow` cannot be constructed
+/// without a running Tauri app and a live event loop, so there is no way to
+/// unit-test `surface` against the real type.
+trait MainWindow {
+    fn unminimize(&self);
+    fn show(&self);
+    fn set_focus(&self);
+}
+
+impl MainWindow for WebviewWindow<Wry> {
+    // Fully qualified on purpose: these three trait methods share their names
+    // with `WebviewWindow`'s own inherent methods. `self.unminimize()` here
+    // would resolve to the inherent one (inherent methods win over trait
+    // methods) and so would happen to work, but a reader cannot tell that
+    // from the call site.
+    fn unminimize(&self) {
+        let _ = WebviewWindow::unminimize(self);
+    }
+
+    fn show(&self) {
+        let _ = WebviewWindow::show(self);
+    }
+
+    fn set_focus(&self) {
+        let _ = WebviewWindow::set_focus(self);
     }
 }
 
@@ -189,6 +255,41 @@ pub fn recently_os_opened(path: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[derive(Default)]
+    struct FakeWindow {
+        calls: std::cell::RefCell<Vec<&'static str>>,
+    }
+
+    impl MainWindow for FakeWindow {
+        fn unminimize(&self) {
+            self.calls.borrow_mut().push("unminimize");
+        }
+
+        fn show(&self) {
+            self.calls.borrow_mut().push("show");
+        }
+
+        fn set_focus(&self) {
+            self.calls.borrow_mut().push("set_focus");
+        }
+    }
+
+    // `tao`'s `Window::set_focus` is a silent no-op on every platform while
+    // the window is still minimized or not visible (see `surface`), so the
+    // window must be unminimized and shown *before* focus is taken. This
+    // asserts that order, which is otherwise only a comment.
+    #[test]
+    fn surface_unminimizes_and_shows_before_taking_focus() {
+        let window = FakeWindow::default();
+
+        surface(&window);
+
+        assert_eq!(
+            window.calls.into_inner(),
+            vec!["unminimize", "show", "set_focus"]
+        );
+    }
+
     #[test]
     fn launch_argument_is_resolved_and_queued_before_the_frontend_is_ready() {
         let dir = tempfile::tempdir().unwrap();
@@ -222,7 +323,7 @@ mod tests {
     // Test 1 (§9.2) — the regression test for issue #325 itself: a path
     // recorded with no `AppHandle`/`AppState` in existence at all (nothing
     // these functions ever touch) still comes back from the drain. Before
-    // this fix, the equivalent Rust-side call (`macos_dock::open_paths`
+    // this fix, the equivalent Rust-side call (macOS's dock-open handler,
     // reaching into managed `AppState`) was a silent no-op in exactly this
     // situation.
     #[test]
