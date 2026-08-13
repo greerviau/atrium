@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { basename, dirOf, isPathUnderOrEqual, pathsEqual, relativeToRoot } from "../../src/lib/util/path";
+import {
+  basename,
+  canonicalizePath,
+  dirOf,
+  isPathUnderOrEqual,
+  joinPath,
+  pathsEqual,
+  rekeyUnder,
+  relativeToRoot,
+} from "../../src/lib/util/path";
+import canonicalPathVectors from "../fixtures/canonical-path-vectors.json";
 
 describe("basename", () => {
   it("returns the last segment of a plain path", () => {
@@ -148,5 +158,110 @@ describe("relativeToRoot", () => {
 
   it("returns the path unchanged when root is undefined", () => {
     expect(relativeToRoot("/proj/src/app.ts", undefined)).toBe("/proj/src/app.ts");
+  });
+});
+
+describe("canonicalizePath", () => {
+  it("strips a verbatim disk prefix and folds separators", () => {
+    expect(canonicalizePath("\\\\?\\C:\\ws\\a.ts")).toBe("C:/ws/a.ts");
+  });
+
+  it("strips a verbatim UNC prefix to the canonical double-forward-slash form", () => {
+    expect(canonicalizePath("\\\\?\\UNC\\srv\\share\\a.ts")).toBe("//srv/share/a.ts");
+  });
+
+  it("strips a trailing backslash on a subdirectory", () => {
+    expect(canonicalizePath("C:\\ws\\")).toBe("C:/ws");
+  });
+
+  it("keeps the trailing separator on a bare drive root", () => {
+    expect(canonicalizePath("C:\\")).toBe("C:/");
+  });
+
+  it("collapses repeated backslashes to a single forward slash", () => {
+    expect(canonicalizePath("C:\\ws\\\\src")).toBe("C:/ws/src");
+  });
+
+  it("leaves an already-canonical UNC path unchanged", () => {
+    expect(canonicalizePath("//srv/share")).toBe("//srv/share");
+  });
+
+  it("leaves an already-canonical POSIX path unchanged", () => {
+    expect(canonicalizePath("/home/me/a.ts")).toBe("/home/me/a.ts");
+  });
+
+  it("preserves a literal backslash in a POSIX filename instead of folding it", () => {
+    expect(canonicalizePath("/home/me/we\\ird")).toBe("/home/me/we\\ird");
+  });
+
+  it("is idempotent", () => {
+    const inputs = [
+      "\\\\?\\C:\\ws\\a.ts",
+      "\\\\?\\UNC\\srv\\share\\a.ts",
+      "C:\\ws\\",
+      "C:\\",
+      "//srv/share",
+      "/home/me/a.ts",
+      "/home/me/we\\ird",
+    ];
+    for (const input of inputs) {
+      const once = canonicalizePath(input);
+      expect(canonicalizePath(once)).toBe(once);
+    }
+  });
+
+  describe("against the shared frontend/backend vector fixture", () => {
+    // A count floor so a truncated or unparsed fixture can't pass vacuously
+    // — mirrors the same floor `path_key.rs`'s own test applies to the same
+    // file.
+    it("has at least 15 vectors", () => {
+      expect(canonicalPathVectors.length).toBeGreaterThanOrEqual(15);
+    });
+
+    for (const vector of canonicalPathVectors) {
+      it(`${vector.description} (${JSON.stringify(vector.input)} -> ${JSON.stringify(vector.expected)})`, () => {
+        expect(canonicalizePath(vector.input)).toBe(vector.expected);
+      });
+    }
+  });
+});
+
+describe("joinPath", () => {
+  it("joins a canonical directory and a name", () => {
+    expect(joinPath("C:/ws/src", "a.ts")).toBe("C:/ws/src/a.ts");
+  });
+
+  it("tolerates a trailing backslash on a native Windows directory", () => {
+    expect(joinPath("C:\\ws\\src\\", "a.ts")).toBe("C:/ws/src/a.ts");
+  });
+
+  it("tolerates a trailing slash on a POSIX directory", () => {
+    expect(joinPath("/a/b/", "c")).toBe("/a/b/c");
+  });
+});
+
+describe("rekeyUnder", () => {
+  it("re-addresses a path from under oldPath to under newPath", () => {
+    expect(rekeyUnder("/a/b/notes.txt", "/a/b", "/a/c")).toBe("/a/c/notes.txt");
+  });
+
+  it("does not corrupt the offset when oldPath has a trailing separator (issue #459)", () => {
+    expect(rekeyUnder("C:/ws/src/a.ts", "C:/ws/src/", "C:/ws/dst")).toBe("C:/ws/dst/a.ts");
+  });
+
+  it("returns null when path is not under oldPath", () => {
+    expect(rekeyUnder("/a/c/file.ts", "/a/b", "/a/z")).toBeNull();
+  });
+
+  it("returns null for a sibling whose name merely shares oldPath as a string prefix", () => {
+    expect(rekeyUnder("/a/b/searching/f.ts", "/a/b/search", "/a/b/dst")).toBeNull();
+  });
+
+  it("re-addresses the exact oldPath itself (rename target equals source)", () => {
+    expect(rekeyUnder("/a/b", "/a/b", "/a/c")).toBe("/a/c");
+  });
+
+  it("handles a native Windows path, folding the result to the canonical form", () => {
+    expect(rekeyUnder("C:\\ws\\src\\a.ts", "C:\\ws\\src", "C:\\ws\\dst")).toBe("C:/ws/dst/a.ts");
   });
 });
