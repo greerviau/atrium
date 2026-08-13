@@ -90,3 +90,35 @@ describe("pruneRecentFiles", () => {
     expect(getRecentFiles("/proj")).toEqual(["/proj/a.txt"]);
   });
 });
+
+// Windows path-canonicalization plan, §4.3 migration: a list persisted
+// under the pre-fix storage key (built from the raw, native-separator root)
+// must still be found on read, with every persisted path folded to the
+// canonical form, and the next save must land under the new canonical key.
+describe("legacy storage key fallback and path canonicalization on restore", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("finds a list persisted under the pre-canonicalization (raw backslash) key", () => {
+    localStorage.setItem("atrium.recentFiles.C:\\ws", JSON.stringify(["C:\\ws\\a.txt"]));
+
+    expect(getRecentFiles("C:\\ws")).toEqual(["C:/ws/a.txt"]);
+  });
+
+  it("prefers the canonical key over the legacy key when both exist", () => {
+    localStorage.setItem("atrium.recentFiles.C:\\ws", JSON.stringify(["C:\\ws\\stale.txt"]));
+    localStorage.setItem("atrium.recentFiles.C:/ws", JSON.stringify(["C:/ws/fresh.txt"]));
+
+    expect(getRecentFiles("C:\\ws")).toEqual(["C:/ws/fresh.txt"]);
+  });
+
+  it("the next recorded open writes under the canonical key", () => {
+    localStorage.setItem("atrium.recentFiles.C:\\ws", JSON.stringify(["C:\\ws\\a.txt"]));
+
+    recordFileOpened("C:\\ws", "C:/ws/b.txt");
+
+    expect(localStorage.getItem("atrium.recentFiles.C:/ws")).not.toBeNull();
+    expect(getRecentFiles("C:\\ws")).toEqual(["C:/ws/b.txt", "C:/ws/a.txt"]);
+  });
+});

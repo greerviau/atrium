@@ -1,4 +1,4 @@
-import { isPathUnderOrEqual } from "../util/path";
+import { canonicalizePath, isPathUnderOrEqual } from "../util/path";
 
 const STORAGE_PREFIX = "atrium.recentFiles.";
 const MAX_RECENT_FILES = 20;
@@ -14,15 +14,22 @@ const MAX_RECENT_FILES = 20;
  */
 
 function storageKey(root: string): string {
+  return `${STORAGE_PREFIX}${canonicalizePath(root)}`;
+}
+
+/** See `editorSession.ts`'s identical fallback for why this exists: a one-time read of a pre-canonicalization key, rewritten under the canonical key on the next save. */
+function legacyStorageKey(root: string): string {
   return `${STORAGE_PREFIX}${root}`;
 }
 
 function load(root: string): string[] {
   try {
-    const raw = localStorage.getItem(storageKey(root));
+    const raw = localStorage.getItem(storageKey(root)) ?? localStorage.getItem(legacyStorageKey(root));
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === "string") : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((p): p is string => typeof p === "string").map(canonicalizePath)
+      : [];
   } catch {
     return [];
   }
