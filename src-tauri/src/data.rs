@@ -4,6 +4,7 @@ use serde::Serialize;
 use sqlparser::ast::Statement;
 use sqlparser::dialect::DuckDbDialect;
 use sqlparser::parser::Parser;
+use std::collections::HashSet;
 use std::fs::File;
 use std::path::Path;
 
@@ -26,6 +27,7 @@ struct Table {
 
 struct Query {
     projection: Vec<Projection>,
+    distinct: bool,
     filter: Vec<Filter>,
     order: Option<(usize, bool)>,
     limit: Option<usize>,
@@ -44,7 +46,7 @@ struct Filter {
 }
 
 /// Reads a CSV, TSV, or Parquet file and applies the small, predictable SQL
-/// subset used by the data pane: SELECT, WHERE, ORDER BY, and LIMIT.
+/// subset used by the data pane: SELECT, DISTINCT, WHERE, ORDER BY, and LIMIT.
 /// Queries remain SQL-shaped so the pane is useful without making a full
 /// database engine part of the desktop binary.
 pub fn query_file(
@@ -84,15 +86,15 @@ pub fn query_file(
     }
 
     let source_truncated = table.truncated;
-    if let Some(limit) = parsed.limit {
-        rows.truncate(limit);
-    }
-
-    let total_rows = rows.len();
+    let filtered_rows = rows;
     if parsed.projection.len() == 1 && matches!(parsed.projection[0], Projection::Count) {
+        let mut count_rows = filtered_rows;
+        if let Some(limit) = parsed.limit {
+            count_rows.truncate(limit);
+        }
         return Ok(DataQueryResult {
             columns: vec!["count".to_string()],
-            rows: vec![vec![Some(total_rows.to_string())]],
+            rows: vec![vec![Some(count_rows.len().to_string())]],
             total_rows: 1,
             truncated: source_truncated,
         });
@@ -107,14 +109,7 @@ pub fn query_file(
             Projection::Count => Vec::new(),
         })
         .collect();
-    let start = page_size
-        .map(|size| page.saturating_mul(size).min(total_rows))
-        .unwrap_or(0);
-    let rows_to_return = match page_size {
-        Some(size) => rows.into_iter().skip(start).take(size).collect::<Vec<_>>(),
-        None => rows,
-    };
-    let projected_rows = rows_to_return
+    let mut projected_rows = filtered_rows
         .into_iter()
         .map(|row| {
             parsed
@@ -128,9 +123,29 @@ pub fn query_file(
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
+    if parsed.distinct {
+        let mut seen = HashSet::with_capacity(projected_rows.len());
+        projected_rows.retain(|row| seen.insert(row.clone()));
+    }
+    if let Some(limit) = parsed.limit {
+        projected_rows.truncate(limit);
+    }
+
+    let total_rows = projected_rows.len();
+    let start = page_size
+        .map(|size| page.saturating_mul(size).min(total_rows))
+        .unwrap_or(0);
+    let rows_to_return = match page_size {
+        Some(size) => projected_rows
+            .into_iter()
+            .skip(start)
+            .take(size)
+            .collect::<Vec<_>>(),
+        None => projected_rows,
+    };
     Ok(DataQueryResult {
         columns,
-        rows: projected_rows,
+        rows: rows_to_return,
         total_rows,
         truncated: source_truncated,
     })
@@ -259,6 +274,17 @@ fn parse_query(query: &str, columns: &[String]) -> Result<Query, String> {
         .find(" from ")
         .ok_or("Query must select from data")?;
     let projection_text = select_start[..from].trim();
+    let distinct = projection_text
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("distinct"))
+        && projection_text
+            .get(8..)
+            .is_some_and(|remainder| remainder.chars().next().is_some_and(|c| c.is_whitespace()));
+    let projection_text = if distinct {
+        projection_text[8..].trim_start()
+    } else {
+        projection_text
+    };
     let after_from = &select_start[from + 6..];
     if !after_from
         .get(..4)
@@ -349,6 +375,7 @@ fn parse_query(query: &str, columns: &[String]) -> Result<Query, String> {
         .transpose()?;
     Ok(Query {
         projection,
+        distinct,
         filter: filters,
         order,
         limit,
@@ -451,7 +478,7 @@ mod tests {
     fn queries_csv_with_filter_and_order() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("people.csv");
-        fs::write(&path, "name,age\nAda,36\nGrace,28\n").unwrap();
+        fs::write(&path, "name,age\nAda,36\nGrace,28\nGrace,28\n").unwrap();
         let result = query_file(
             &path,
             "/workspace/people.csv",
@@ -463,6 +490,21 @@ mod tests {
         assert_eq!(result.columns, ["name", "age"]);
         assert_eq!(result.rows, [[Some("Ada".into()), Some("36".into())]]);
         assert_eq!(result.total_rows, 1);
+
+        let distinct = query_file(
+            &path,
+            "/workspace/people.csv",
+            "SELECT DISTINCT name FROM data ORDER BY age DESC",
+            0,
+            Some(25),
+        )
+        .unwrap();
+        assert_eq!(distinct.columns, ["name"]);
+        assert_eq!(
+            distinct.rows,
+            [[Some("Ada".into()),], [Some("Grace".into())]]
+        );
+        assert_eq!(distinct.total_rows, 2);
 
         let count = query_file(
             &path,
@@ -483,7 +525,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(page.rows, [[Some("Grace".into())]]);
-        assert_eq!(page.total_rows, 2);
+        assert_eq!(page.total_rows, 3);
     }
 
     #[test]
