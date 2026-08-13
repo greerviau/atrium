@@ -12,6 +12,7 @@ mod link_resolve;
 mod macos_dock;
 #[cfg(target_os = "macos")]
 mod macos_traffic_lights;
+mod path_key;
 mod pty_manager;
 mod recents;
 mod state;
@@ -478,7 +479,7 @@ fn main() {
                             if let Some(state) = close_handle.try_state::<AppState>() {
                                 let path_strings = paths
                                     .iter()
-                                    .map(|p| p.to_string_lossy().to_string())
+                                    .map(|p| crate::path_key::canonical_key(&p.to_string_lossy()))
                                     .collect();
                                 *state.recent_drop.lock().unwrap() =
                                     Some((path_strings, std::time::Instant::now()));

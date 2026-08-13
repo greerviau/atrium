@@ -97,10 +97,11 @@ fn require_recent_external_open(state: &AppState, path: &str) -> Result<(), AppE
 /// already uses for command-layer code that would otherwise need a live app
 /// to test).
 fn recently_dropped(recent_drop: &Mutex<Option<(HashSet<String>, Instant)>>, path: &str) -> bool {
+    let key = crate::path_key::canonical_key(path);
     let guard = recent_drop.lock().unwrap();
     matches!(
         &*guard,
-        Some((paths, at)) if paths.contains(path) && at.elapsed() < RECENT_DROP_WINDOW
+        Some((paths, at)) if paths.contains(&key) && at.elapsed() < RECENT_DROP_WINDOW
     )
 }
 
@@ -522,6 +523,22 @@ mod tests {
             Instant::now(),
         )));
         assert!(recently_dropped(&recent_drop, "/a/b.txt"));
+    }
+
+    // R1 (Windows path-canonicalization plan) — `main.rs`'s `DragDrop`
+    // handler records the drop under `canonical_key`; simulate that here by
+    // seeding the set the same way, then confirm a lookup under a different
+    // spelling of the same file still matches, and an unrelated path still
+    // does not — so the fix is a genuine unification, not a blanket
+    // loosening of the check.
+    #[test]
+    fn recently_dropped_matches_a_different_spelling_of_the_same_windows_path() {
+        let recent_drop = Mutex::new(Some((
+            HashSet::from([crate::path_key::canonical_key(r"C:\ws\a.txt")]),
+            Instant::now(),
+        )));
+        assert!(recently_dropped(&recent_drop, "C:/ws/a.txt"));
+        assert!(!recently_dropped(&recent_drop, "C:/ws/other.txt"));
     }
 
     // `recently_opened_externally` — accepted from the `recent_drop` origin

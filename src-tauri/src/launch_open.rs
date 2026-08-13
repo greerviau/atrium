@@ -95,12 +95,34 @@ pub fn open_paths(app: &AppHandle<Wry>, paths: Vec<String>) {
     }
 }
 
+/// The single writer of `state.recent` — both `record` and `take` route
+/// through this, so the canonical-key fold can never be applied to one
+/// writer and not the other. This is not ceremony: `record` is the *only*
+/// writer on the warm path (single-instance handoff, macOS dock), where
+/// `frontend_ready` is already `true` and `take` is never called at all —
+/// see the Windows path-canonicalization plan's own account of shipping
+/// this exact gap the first time (`take` alone was fixed, `record` was
+/// not) for why this is a single private helper rather than two folds
+/// written apart from each other. A test asserting `stamp_recent` is the
+/// only assignment to `state.recent` is not expressible in Rust, so the
+/// guard here is structural (a private field written by one private
+/// helper) rather than asserted.
+fn stamp_recent(state: &mut LaunchOpenState, paths: &[String]) {
+    state.recent = Some((
+        paths
+            .iter()
+            .map(|p| crate::path_key::canonical_key(p))
+            .collect(),
+        Instant::now(),
+    ));
+}
+
 /// Always stamps `recent` fresh for `paths`. If the frontend is already
 /// ready, returns `true` (the caller should emit each path live — it will
 /// never be drained) and leaves `pending` untouched; otherwise queues
 /// `paths` onto `pending` and returns `false`.
 fn record(state: &mut LaunchOpenState, paths: &[String]) -> bool {
-    state.recent = Some((paths.iter().cloned().collect(), Instant::now()));
+    stamp_recent(state, paths);
     if state.frontend_ready {
         true
     } else {
@@ -120,7 +142,7 @@ fn record(state: &mut LaunchOpenState, paths: &[String]) -> bool {
 fn take(state: &mut LaunchOpenState) -> Vec<String> {
     state.frontend_ready = true;
     let taken = std::mem::take(&mut state.pending);
-    state.recent = Some((taken.iter().cloned().collect(), Instant::now()));
+    stamp_recent(state, &taken);
     taken
 }
 
@@ -129,9 +151,10 @@ fn take(state: &mut LaunchOpenState) -> Vec<String> {
 /// can assert expiry without a real sleep, by constructing an already-stale
 /// `recent` directly.
 fn recently_opened(state: &LaunchOpenState, path: &str, window: Duration) -> bool {
+    let key = crate::path_key::canonical_key(path);
     matches!(
         &state.recent,
-        Some((paths, at)) if paths.contains(path) && at.elapsed() < window
+        Some((paths, at)) if paths.contains(&key) && at.elapsed() < window
     )
 }
 
@@ -331,5 +354,59 @@ mod tests {
         // sleep) has exceeded the window; only the re-stamp keeps this true.
         assert_eq!(take(&mut state), vec!["/tmp/a.md".to_string()]);
         assert!(recently_opened(&state, "/tmp/a.md", RECENT_OS_OPEN_WINDOW));
+    }
+
+    // R2 (Windows path-canonicalization plan) — the cold-launch path:
+    // `record` queues (frontend not yet ready), `take` drains and re-stamps,
+    // and a lookup under a *different* spelling of the same file — exactly
+    // what the frontend sends once it canonicalizes at its own IPC boundary
+    // — still matches.
+    #[test]
+    fn cold_path_recently_opened_matches_a_different_spelling_after_record_then_take() {
+        let mut state = LaunchOpenState::new();
+        let delivered_live = record(&mut state, &[r"C:\ws\a.txt".to_string()]);
+        assert!(!delivered_live);
+        assert_eq!(take(&mut state), vec![r"C:\ws\a.txt".to_string()]);
+        assert!(recently_opened(
+            &state,
+            "C:/ws/a.txt",
+            RECENT_OS_OPEN_WINDOW
+        ));
+        assert!(!recently_opened(
+            &state,
+            "C:/ws/other.txt",
+            RECENT_OS_OPEN_WINDOW
+        ));
+    }
+
+    // R2, warm path — the single-instance handoff and macOS Dock both call
+    // `record` with `frontend_ready` already `true` and never call `take`
+    // at all, so `record`'s own stamp is the *only* one that path ever
+    // gets. This is the exact shape that stayed broken through the first
+    // revision of the Windows path-canonicalization plan: a fix applied
+    // only to `take` still passes every test that calls `take`, and this
+    // one deliberately never does.
+    #[test]
+    fn warm_path_recently_opened_matches_a_different_spelling_after_record_alone_with_no_take() {
+        let mut state = LaunchOpenState::new();
+        // Flip ready the same way `take` would, without ever calling `take`
+        // itself — mirroring the warm path's `frontend_ready == true`
+        // precondition exactly.
+        state.frontend_ready = true;
+
+        let delivered_live = record(&mut state, &[r"C:\ws\a.txt".to_string()]);
+        assert!(delivered_live);
+        assert!(state.pending.is_empty());
+
+        assert!(recently_opened(
+            &state,
+            "C:/ws/a.txt",
+            RECENT_OS_OPEN_WINDOW
+        ));
+        assert!(!recently_opened(
+            &state,
+            "C:/ws/other.txt",
+            RECENT_OS_OPEN_WINDOW
+        ));
     }
 }
