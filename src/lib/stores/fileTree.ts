@@ -134,7 +134,15 @@ export async function refreshDirectoryContaining(changedPath: string): Promise<v
   if (!state.root) {
     return;
   }
-  const parent = dirOf(changedPath);
+  // `dirOf` falls back to its input unchanged when there's no separator to
+  // split on (e.g. a workspace rooted at the filesystem root "/", where a
+  // top-level entry's own path already *is* as short as `dirOf` can make
+  // it) — the old private `parentPath` this replaced special-cased that as
+  // "/" specifically. The general case is "the entry belongs to the root
+  // itself", so fall back to the tree's own root path rather than a
+  // hardcoded "/", which also covers a Windows drive root the same way.
+  const computed = dirOf(changedPath);
+  const parent = computed === changedPath ? state.root.entry.path : computed;
   if (findNode(state.root, parent)?.expanded) {
     await loadChildren(parent);
   }

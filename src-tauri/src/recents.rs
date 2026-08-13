@@ -47,8 +47,13 @@ fn upsert(mut recents: Vec<RecentProject>, path: &str, opened_at: u64) -> Vec<Re
     recents.insert(
         0,
         RecentProject {
+            // `name` derived from `key`, not the raw `path`, so the two
+            // stored fields never describe two different spellings of the
+            // same path — `folder_name` extracts the same segment from
+            // either given `Path`'s own separator handling, but there is
+            // no reason to leave that as an assumption rather than a fact.
+            name: folder_name(&key),
             path: key,
-            name: folder_name(path),
             last_opened_at: opened_at,
         },
     );
@@ -87,6 +92,15 @@ fn remove_path(recents: Vec<RecentProject>, path: &str) -> Vec<RecentProject> {
 /// second row under the canonical spelling, since `upsert`'s own dedupe
 /// only ever sees what's already in the in-memory list it's called with.
 fn migrate_to_canonical_keys(recents: Vec<RecentProject>) -> Vec<RecentProject> {
+    // `order` records each key's first-encountered position, separately
+    // from `by_key`: a `HashMap`'s own iteration order is unrelated to
+    // insertion order, so collecting straight out of it — followed by a
+    // stable sort keyed only on `last_opened_at` — would leave any tie in
+    // that timestamp resolved nondeterministically, changing on every call
+    // for the exact same input. Building the output from `order` instead
+    // makes that tiebreak deterministic (first-seen-first) rather than
+    // merely stable-over-an-arbitrary-order.
+    let mut order: Vec<String> = Vec::new();
     let mut by_key: std::collections::HashMap<String, RecentProject> =
         std::collections::HashMap::new();
     for mut entry in recents {
@@ -95,11 +109,17 @@ fn migrate_to_canonical_keys(recents: Vec<RecentProject>) -> Vec<RecentProject> 
         match by_key.get(&key) {
             Some(existing) if existing.last_opened_at >= entry.last_opened_at => {}
             _ => {
+                if !by_key.contains_key(&key) {
+                    order.push(key.clone());
+                }
                 by_key.insert(key, entry);
             }
         }
     }
-    let mut migrated: Vec<RecentProject> = by_key.into_values().collect();
+    let mut migrated: Vec<RecentProject> = order
+        .into_iter()
+        .map(|key| by_key.remove(&key).unwrap())
+        .collect();
     migrated.sort_by_key(|r| std::cmp::Reverse(r.last_opened_at));
     migrated
 }
@@ -322,6 +342,42 @@ mod tests {
         let migrated = migrate_to_canonical_keys(seeded);
 
         assert_eq!(migrated.len(), 2);
+    }
+
+    // A `HashMap`'s own iteration order is unrelated to insertion order;
+    // collecting straight out of one before a stable sort keyed only on
+    // `last_opened_at` would leave a tie in that timestamp resolved
+    // nondeterministically, changing between calls for the exact same
+    // input. Runs this several times specifically because a
+    // hash-order-dependent bug would not necessarily fail on the first try.
+    #[test]
+    fn migrate_to_canonical_keys_breaks_a_last_opened_at_tie_by_first_encountered_order_deterministically(
+    ) {
+        let seeded = vec![
+            RecentProject {
+                path: "/a".into(),
+                name: "a".into(),
+                last_opened_at: 5,
+            },
+            RecentProject {
+                path: "/b".into(),
+                name: "b".into(),
+                last_opened_at: 5,
+            },
+            RecentProject {
+                path: "/c".into(),
+                name: "c".into(),
+                last_opened_at: 5,
+            },
+        ];
+
+        for _ in 0..20 {
+            let migrated = migrate_to_canonical_keys(seeded.clone());
+            assert_eq!(
+                migrated.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+                vec!["/a", "/b", "/c"]
+            );
+        }
     }
 
     #[test]
