@@ -91,7 +91,7 @@
     <div
       class="pane-leaf"
       class:active={leaf.id === activePaneId}
-      class:tab-drop-target-center={$activeTabDrag?.surface === "editor" && $activeTabDrag.target?.paneId === leaf.id && $activeTabDrag.target.zone === "center"}
+      class:tab-drop-target-center={$activeTabDrag?.surface === "editor" && $activeTabDrag.target?.paneId === leaf.id && $activeTabDrag.target.zone === "center" && $activeTabDrag.sourcePaneId !== leaf.id}
       class:tab-drop-target-up={$activeTabDrag?.surface === "editor" && $activeTabDrag.target?.paneId === leaf.id && $activeTabDrag.target.zone === "up"}
       class:tab-drop-target-down={$activeTabDrag?.surface === "editor" && $activeTabDrag.target?.paneId === leaf.id && $activeTabDrag.target.zone === "down"}
       class:tab-drop-target-left={$activeTabDrag?.surface === "editor" && $activeTabDrag.target?.paneId === leaf.id && $activeTabDrag.target.zone === "left"}

@@ -35,11 +35,12 @@ function sameTarget(a: TabDropTarget | null, b: TabDropTarget | null): boolean {
 /**
  * Starts a pointer-driven tab gesture.
  *
- * The original tab stays in place while the pointer moves. Releasing over
- * its own center drop zone reorders it once; moving over another pane's center
- * moves it there; moving over an edge creates a new split on that edge. The
- * pointer is intentionally not captured because the source pane can be
- * removed by a drop, which ends pointer capture in WebKit.
+ * Reordering within the source pane commits as the pointer crosses tab
+ * midpoints, so the other tabs animate into their new positions. Moving over
+ * another pane's center moves the tab there on release; moving over an edge
+ * creates a new split on that edge. The pointer is intentionally not captured
+ * because the source pane can be removed by a drop, which ends pointer capture
+ * in WebKit.
  */
 export function beginTabDrag(
   tabEl: HTMLElement,
@@ -92,6 +93,14 @@ export function beginTabDrag(
         clientY: e.clientY,
         target: currentTarget,
       });
+
+      if (currentTarget?.paneId === options.paneId && currentTarget.zone === "center") {
+        const idx = targetIndex(e.clientX);
+        if (idx !== lastCommittedIndex) {
+          lastCommittedIndex = idx;
+          onReorder(path, idx);
+        }
+      }
     }
 
     e.preventDefault();
@@ -117,7 +126,8 @@ export function beginTabDrag(
 
     if (commit && dragging && options && currentTarget) {
       if (currentTarget.paneId === options.paneId && currentTarget.zone === "center") {
-        onReorder(path, targetIndex(lastPointerX));
+        const idx = targetIndex(lastPointerX);
+        if (idx !== lastCommittedIndex) onReorder(path, idx);
       } else {
         options.onDrop(currentTarget);
       }

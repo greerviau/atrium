@@ -78,7 +78,7 @@ describe("TerminalPanel", () => {
     expect(tabList.scrollLeft).toBe(70);
   });
 
-  it("dragging a tab reorders it after the pointer is released", () => {
+  it("reorders a tab while the pointer crosses another tab, then leaves the order settled on release", () => {
     const onReorderTab = vi.fn();
     const { container } = render(TerminalPanel, { tree: TWO_TABS, ...baseProps, onReorderTab });
     container.classList.add("terminal-area", "pane-leaf");
@@ -94,9 +94,12 @@ describe("TerminalPanel", () => {
 
     tabs[0].dispatchEvent(pointerEvent("pointerdown", 10));
     window.dispatchEvent(pointerEvent("pointermove", 80));
-    window.dispatchEvent(pointerEvent("pointerup", 80));
 
+    expect(onReorderTab).toHaveBeenCalledTimes(1);
     expect(onReorderTab).toHaveBeenCalledWith("s1", 1);
+
+    window.dispatchEvent(pointerEvent("pointerup", 80));
+    expect(onReorderTab).toHaveBeenCalledTimes(1);
   });
 
   it("clicking a tab switches which TerminalPane is visible", async () => {
