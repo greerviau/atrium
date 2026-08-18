@@ -16,6 +16,19 @@ export interface FileTreeState {
 
 export const fileTree = writable<FileTreeState>({ root: null });
 
+/** Keeps an older directory listing from overwriting a newer overlapping refresh. */
+const latestLoadByPath = new Map<string, number>();
+
+function nextLoadGeneration(path: string): number {
+  const generation = (latestLoadByPath.get(path) ?? 0) + 1;
+  latestLoadByPath.set(path, generation);
+  return generation;
+}
+
+function isLatestLoad(path: string, generation: number): boolean {
+  return latestLoadByPath.get(path) === generation;
+}
+
 function toNode(entry: DirEntry): TreeNode {
   return { entry, expanded: false, children: undefined };
 }
@@ -30,7 +43,9 @@ function mergeChildren(existing: TreeNode[] | undefined, entries: DirEntry[]): T
 }
 
 export async function loadRoot(rootPath: string): Promise<void> {
+  const generation = nextLoadGeneration(rootPath);
   const entries = await fsListDir(localWorkspaceId(), rootPath);
+  if (!isLatestLoad(rootPath, generation)) return;
   fileTree.set({
     root: {
       entry: { name: basename(rootPath), path: rootPath, isDir: true, isSymlink: false },
@@ -42,7 +57,9 @@ export async function loadRoot(rootPath: string): Promise<void> {
 
 /** Loads (or reloads) the children of the node at `path`, patching it in place. */
 export async function loadChildren(path: string): Promise<void> {
+  const generation = nextLoadGeneration(path);
   const entries = await fsListDir(localWorkspaceId(), path);
+  if (!isLatestLoad(path, generation)) return;
   fileTree.update((state) => {
     if (!state.root) {
       return state;
