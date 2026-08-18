@@ -128,6 +128,18 @@ describe("openFile", () => {
     expect(tab?.viewMode).toBe("rendered");
   });
 
+  it("expands the explorer to a normal open file by default", async () => {
+    await openFile("/notes.md");
+
+    expect(get(tabsState).tabs[0].expandExplorerToFile).toBe(true);
+  });
+
+  it("can keep the explorer tree collapsed for an open file", async () => {
+    await openFile("/notes.md", undefined, "local", { expandExplorerToFile: false });
+
+    expect(get(tabsState).tabs[0].expandExplorerToFile).toBe(false);
+  });
+
   it("opens a fresh markdown tab honoring the current markdownDefaultView setting, not a hardcoded default", async () => {
     markdownDefaultView.set("source");
 

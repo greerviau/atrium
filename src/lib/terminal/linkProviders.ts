@@ -273,6 +273,9 @@ class FilePathLinkProvider implements ILinkProvider {
    * has to infer it -- which is also what keeps it free of any store import
    * (§4.2b).
    *
+   * Terminal links leave collapsed explorer directories closed. The editor
+   * still opens and highlights the target when its row is already visible.
+   *
    * The in-workspace branch relies on the invariant that `external: false` is
    * only ever produced when a usable workspace root exists (§4.2a), so
    * `openFileReportingErrors`'s default `localWorkspaceId()` is always right
@@ -280,7 +283,7 @@ class FilePathLinkProvider implements ILinkProvider {
    */
   private async openLink(resolved: ResolvedPath, candidate: PathCandidate, selection?: PendingSelection): Promise<void> {
     if (!resolved.external) {
-      openFileReportingErrors(resolved.path, selection);
+      openFileReportingErrors(resolved.path, selection, undefined, { expandExplorerToFile: false });
       return;
     }
     let authorized: AuthorizedLink;
@@ -294,7 +297,7 @@ class FilePathLinkProvider implements ILinkProvider {
       showErrorToast(`Couldn't open file: ${describeError(err)}`);
       return;
     }
-    openFileReportingErrors(authorized.path, selection, authorized.workspaceId);
+    openFileReportingErrors(authorized.path, selection, authorized.workspaceId, { expandExplorerToFile: false });
   }
 }
 

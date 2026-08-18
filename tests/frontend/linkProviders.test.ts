@@ -192,7 +192,12 @@ describe("FilePathLinkProvider.activate", () => {
     link.activate(modifierClick(), link.text);
 
     await new Promise((r) => setTimeout(r, 0));
-    expect(openFileReportingErrors).toHaveBeenCalledWith("/repo/src/lib/foo.ts", { line: 42, col: 7 });
+    expect(openFileReportingErrors).toHaveBeenCalledWith(
+      "/repo/src/lib/foo.ts",
+      { line: 42, col: 7 },
+      undefined,
+      { expandExplorerToFile: false },
+    );
   });
 
   it("does not call openFileReportingErrors on a plain click without a modifier", async () => {
@@ -217,7 +222,12 @@ describe("FilePathLinkProvider.activate", () => {
 
     await new Promise((r) => setTimeout(r, 0));
     expect(fsAuthorizeTerminalLink).not.toHaveBeenCalled();
-    expect(openFileReportingErrors).toHaveBeenCalledWith("/repo/src/lib/foo.ts", { line: 42, col: 7 });
+    expect(openFileReportingErrors).toHaveBeenCalledWith(
+      "/repo/src/lib/foo.ts",
+      { line: 42, col: 7 },
+      undefined,
+      { expandExplorerToFile: false },
+    );
   });
 
   it("authorizes an external link before opening it, and opens the path/workspaceId the authorize call returned, not the ones resolution returned", async () => {
@@ -237,7 +247,12 @@ describe("FilePathLinkProvider.activate", () => {
       "local",
       expect.objectContaining({ raw: "/etc/resolution-time-path.txt" }),
     );
-    expect(openFileReportingErrors).toHaveBeenCalledWith("/etc/authorized-path.txt", undefined, "standalone");
+    expect(openFileReportingErrors).toHaveBeenCalledWith(
+      "/etc/authorized-path.txt",
+      undefined,
+      "standalone",
+      { expandExplorerToFile: false },
+    );
   });
 
   it("toasts and does not open the file when fsAuthorizeTerminalLink rejects", async () => {

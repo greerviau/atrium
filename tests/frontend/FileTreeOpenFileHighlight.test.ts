@@ -9,8 +9,9 @@ import * as commands from "../../src/lib/ipc/commands";
 // Issue #400: the file open in the editor should be the one highlighted in
 // the explorer, and only that one — no fill anywhere when no file is open,
 // and the fill must follow `tabsState.activeTabPath` regardless of how it
-// changed (a tab-strip switch, a restored session, a markdown/terminal
-// link), not just an explorer click.
+// changed (a tab-strip switch, a restored session, or a markdown link), not
+// just an explorer click. Terminal links still highlight the active file but
+// do not expand collapsed directories (#469).
 vi.mock("../../src/lib/ipc/commands", () => ({
   fsListDir: vi.fn(),
   fsReadFile: vi.fn(),
@@ -160,6 +161,19 @@ describe("FileTree: highlights the currently open file (issue #400)", () => {
 
     expect(rowFor(container, SRC).getAttribute("aria-expanded")).toBe("true");
     expect(rowFor(container, INDEX_TS).getAttribute("aria-current")).toBe("true");
+  });
+
+  it("does not expand a collapsed directory for a terminal-opened file", async () => {
+    tabsState.set({
+      tabs: [{ ...localTab(INDEX_TS), expandExplorerToFile: false }],
+      activeTabPath: INDEX_TS,
+    });
+    const { container } = await renderTree();
+    await flushAsync();
+
+    expect(rowFor(container, SRC).getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(`.row[data-path="${INDEX_TS}"]`)).toBeNull();
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
   });
 
   it("does not re-expand a directory the user just collapsed while its file stays open", async () => {

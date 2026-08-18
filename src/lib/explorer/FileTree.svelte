@@ -136,32 +136,34 @@
   // row a11y semantics `FileTreeKeyboardNav.test.ts` already covers.
   let rangeSelectedPaths = $derived(selectedPaths.size > 1 ? selectedPaths : new Set<string>());
 
-  // The currently open file (issue #400) and the workspace root's own path,
-  // both as memoized values rather than raw store reads: `openPath`/
-  // `rootPath` only change (by `Object.is`) when the active tab or the
-  // root's own identity actually changes, not on every unrelated write to
-  // `tabsState`/`fileTree` (a keystroke's `markDirty`, a `collapse()`, an
-  // `fs:changed` refresh) — load-bearing for the expand effect below, which
-  // must not re-fire on those.
+  // The active file, the workspace root's own path, and the path eligible for
+  // explorer expansion are memoized rather than read from raw stores. These
+  // values change only when their relevant identity changes, not on unrelated
+  // writes such as a keystroke, a collapse, or an fs:changed refresh.
   let openPath = $derived($tabsState.activeTabPath);
+  let activeTab = $derived($tabsState.tabs.find((tab) => tab.path === openPath));
+  // Terminal links keep the explorer's open-file highlight but do not expand
+  // collapsed directories to reveal the target. This preserves a user's
+  // closed tree state while still showing which file is active when the row
+  // is already visible.
+  let expandPath = $derived(activeTab?.expandExplorerToFile === false ? null : openPath);
   let rootPath = $derived($fileTree.root?.entry.path ?? null);
 
   // Expands every collapsed ancestor of the open file and scrolls its row
   // into view (issue #400): without this, a file inside a collapsed
-  // directory — the common case on a restored session, or any open
-  // triggered from outside the explorer (a markdown/terminal link, an OS
-  // file-manager open, #398) — has no DOM row to highlight at all.
+  // directory has no DOM row to highlight when a normal open action targets
+  // it. Open actions that preserve the explorer tree leave `expandPath` null.
   // `rootPath` going from `null` to the real path (once, when `loadRoot`
   // finishes) is what makes a cold-start session restore work, since the
   // active tab is typically set before that resolves. `isStale` is
   // re-checked before each awaited step and before scrolling, so a rapid tab
   // switch aborts an in-flight expansion instead of racing it to a wrong
-  // final scroll target.
+  // final scroll target, or when an open action changes its expansion policy.
   $effect(() => {
-    const path = openPath;
+    const path = expandPath;
     const root = rootPath;
     if (!path || !root) return;
-    const isStale = () => openPath !== path;
+    const isStale = () => expandPath !== path;
     void expandToPath(path, isStale)
       .then(async () => {
         if (isStale()) return;
