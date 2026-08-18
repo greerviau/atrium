@@ -56,10 +56,14 @@ function dirname(filePath: string): string {
   return idx <= 0 ? "" : normalized.slice(0, idx);
 }
 
-/** Parent directory of `path`; falls back to `path` itself when there's no `/` to split on (unlike `dirname`, which falls back to `""`). Shared by the explorer's mutation flows (`contextMenu.ts`, `FileTree.svelte`, `explorerDropTargets.ts`), which all need "the directory a bare/root-level path still belongs to" rather than an empty string. */
+/** Parent directory of `path`; bare or POSIX root-level paths fall back to `path`, while a Windows drive root keeps its trailing separator. Shared by the explorer's mutation flows (`contextMenu.ts`, `FileTree.svelte`, `explorerDropTargets.ts`), which need the directory a root-level path belongs to rather than an empty string. */
 export function dirOf(path: string): string {
   const normalized = foldSeparators(path);
+  if (/^[A-Za-z]:\/$/.test(normalized)) return normalized;
   const idx = normalized.lastIndexOf("/");
+  if (/^[A-Za-z]:\//.test(normalized) && idx === 2) {
+    return normalized.slice(0, 3);
+  }
   return idx <= 0 ? path : normalized.slice(0, idx);
 }
 

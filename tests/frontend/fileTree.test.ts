@@ -103,6 +103,30 @@ describe("fileTree: root-level refresh", () => {
     expect(childPaths()).toEqual([`${ROOT}/a.txt`]);
   });
 
+  it("keeps the newest external refresh when filesystem events overlap", async () => {
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("a.txt")]);
+    await loadRoot(ROOT);
+
+    let resolveStale!: (entries: DirEntry[]) => void;
+    let resolveFresh!: (entries: DirEntry[]) => void;
+    const stale = new Promise<DirEntry[]>((resolve) => (resolveStale = resolve));
+    const fresh = new Promise<DirEntry[]>((resolve) => (resolveFresh = resolve));
+    let refreshCount = 0;
+    vi.mocked(commands.fsListDir).mockImplementation(async () => {
+      refreshCount += 1;
+      return refreshCount === 1 ? stale : fresh;
+    });
+
+    const firstRefresh = refreshDirectoryContaining(`${ROOT}/external.txt`);
+    const secondRefresh = refreshDirectoryContaining(`${ROOT}/external.txt`);
+    resolveFresh([file("a.txt"), file("new.txt")]);
+    await fresh;
+    resolveStale([file("a.txt")]);
+    await Promise.all([firstRefresh, secondRefresh]);
+
+    expect(childPaths()).toEqual([`${ROOT}/a.txt`, `${ROOT}/new.txt`]);
+  });
+
   it("reflects an externally-renamed top-level file once refreshDirectoryContaining fires from fs:changed", async () => {
     vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("old.txt")]);
     await loadRoot(ROOT);
@@ -314,6 +338,20 @@ describe("fileTree: expandToPath (issue #400)", () => {
     ]);
     await refreshDirectoryContaining("/b.txt");
 
+    expect(get(fileTree).root?.children?.map((n) => n.entry.name)).toEqual(["a.txt", "b.txt"]);
+  });
+
+  it("refreshes a Windows drive root when a top-level entry changes externally", async () => {
+    const windowsRoot = "C:/";
+    const existing = { name: "a.txt", path: "C:/a.txt", isDir: false, isSymlink: false };
+    const added = { name: "b.txt", path: "C:/b.txt", isDir: false, isSymlink: false };
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([existing]);
+    await loadRoot(windowsRoot);
+
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([existing, added]);
+    await refreshDirectoryContaining(added.path);
+
+    expect(commands.fsListDir).toHaveBeenLastCalledWith("local", windowsRoot);
     expect(get(fileTree).root?.children?.map((n) => n.entry.name)).toEqual(["a.txt", "b.txt"]);
   });
 });

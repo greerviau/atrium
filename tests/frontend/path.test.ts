@@ -58,6 +58,10 @@ describe("dirOf", () => {
     expect(dirOf("/notes.txt")).toBe("/notes.txt");
   });
 
+  it("returns the drive root for a Windows drive-root path", () => {
+    expect(dirOf("C:/notes.txt")).toBe("C:/");
+  });
+
   it("falls back to the input for a single-segment path", () => {
     expect(dirOf("notes.txt")).toBe("notes.txt");
   });
