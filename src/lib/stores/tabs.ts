@@ -15,6 +15,8 @@ export interface PendingSelection {
 
 export interface Tab {
   path: string;
+  /** False when the open action must not expand collapsed explorer directories to this file. */
+  expandExplorerToFile?: boolean;
   /** Which workspace this tab's reads/writes route through — `localWorkspaceId()` for an ordinary project tab, `standaloneWorkspaceId()` for a file opened with no project open (issue #325). */
   workspaceId: string;
   mode: PaneMode;
@@ -139,16 +141,25 @@ export function requestSaveReportingErrors(path: string): void {
  * Opens `path` in the editor pane, focusing an existing tab if already open.
  * Shared by the file explorer, markdown-link clicks, and the terminal's
  * file-path link provider so "open a file" behaves identically everywhere.
+ * `options.expandExplorerToFile` controls whether the explorer expands
+ * collapsed directories to the opened file; it defaults to `true`.
  * `workspaceId` defaults to the local project workspace for every existing
  * call site; the standalone-open path (`App.svelte`'s `doHandleOsOpenPath`)
  * is the only caller that passes something else.
  */
+export interface OpenFileOptions {
+  /** Expands collapsed explorer directories to the opened file when true. */
+  expandExplorerToFile?: boolean;
+}
+
 export async function openFile(
   path: string,
   selection?: PendingSelection,
   workspaceId: string = localWorkspaceId(),
+  options: OpenFileOptions = {},
 ): Promise<void> {
   const root = get(workspace).root;
+  const expandExplorerToFile = options.expandExplorerToFile ?? true;
   // A path opened through a non-local workspace (standalone) is always
   // external, regardless of what it looks like relative to the current
   // project root — without this, `isPathUnderOrEqual(anyAbsolutePath, "")`
@@ -166,7 +177,9 @@ export async function openFile(
     tabsState.update((s) => ({
       ...s,
       activeTabPath: path,
-      tabs: s.tabs.map((t) => (t.path === path ? { ...t, pendingSelection: selection } : t)),
+      tabs: s.tabs.map((t) =>
+        t.path === path ? { ...t, pendingSelection: selection, expandExplorerToFile } : t,
+      ),
     }));
     return;
   }
@@ -184,6 +197,7 @@ export async function openFile(
   const tab: Tab = {
     path,
     workspaceId,
+    expandExplorerToFile,
     mode,
     savedDoc: contents,
     isDirty: false,
@@ -210,8 +224,9 @@ export function openFileReportingErrors(
   path: string,
   selection?: PendingSelection,
   workspaceId: string = localWorkspaceId(),
+  options: OpenFileOptions = {},
 ): void {
-  openFile(path, selection, workspaceId).catch((err: unknown) => {
+  openFile(path, selection, workspaceId, options).catch((err: unknown) => {
     showErrorToast(`Couldn't open file: ${describeError(err)}`);
   });
 }
