@@ -664,17 +664,13 @@
 
   // Forces a fresh CodeMirror measurement and pushes this pane's cursor
   // position into `editorStatus.ts` when this tab's pane actually becomes
-  // visible. Every open tab's `EditorPane` is mounted immediately
-  // (`App.svelte` keeps inactive tabs' panes in the DOM, hidden via
-  // `display: none`), so a background tab's `EditorView` can take its first
-  // layout measurement against a zero-size container and lock in a wrong
-  // content width that CodeMirror won't shrink back down on its own — only a
-  // later, differently-sized measurement (reliably, the first scroll) forces
-  // the correction. The cursor-position push here covers switching tabs
-  // without touching the keyboard, which the `updateListener` set up in
-  // `onMount` never fires for on its own. Guarded like the view-mode effect
-  // above so it only fires on an actual activation, not on every unrelated
-  // tab-store update.
+  // visible. Every open tab's `EditorPane` is mounted immediately and remains
+  // in layout while inactive, so its `EditorView` keeps its scroll position
+  // and content width across tab switches. The cursor-position push here
+  // covers switching tabs without touching the keyboard, which the
+  // `updateListener` set up in `onMount` never fires for on its own. Guarded
+  // like the view-mode effect above so it only fires on an actual activation,
+  // not on every unrelated tab-store update.
   $effect(() => {
     const isActive = active;
     if (!view || isActive === lastAppliedActive) {

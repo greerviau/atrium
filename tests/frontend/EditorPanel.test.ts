@@ -67,6 +67,16 @@ describe("EditorPanel", () => {
     expect(slots[1].classList.contains("hidden")).toBe(true);
   });
 
+  it("keeps an inactive pane in layout so its editor scroll position survives tab switches", () => {
+    tabsState.set({ tabs: [tab("/a.ts"), tab("/b.ts")], activeTabPath: "/a.ts" });
+    const { container } = render(EditorPanel, { tree: TWO_TABS, ...baseProps });
+
+    const inactiveSlot = container.querySelectorAll(".editor-pane-slot")[1] as HTMLElement;
+    expect(getComputedStyle(inactiveSlot).display).not.toBe("none");
+    expect(getComputedStyle(inactiveSlot).visibility).toBe("hidden");
+    expect(getComputedStyle(inactiveSlot).pointerEvents).toBe("none");
+  });
+
   it("clicking a tab calls onSetActiveTab with that path", async () => {
     tabsState.set({ tabs: [tab("/a.ts"), tab("/b.ts")], activeTabPath: "/a.ts" });
     const onSetActiveTab = vi.fn();

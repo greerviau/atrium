@@ -23,9 +23,8 @@ export async function openWorkspace(root) {
   // `restoreTabsOnStartup` defaults to true and the editor's split-pane tree
   // is persisted per workspace root, so without this a spec inherits whatever
   // tabs and pane splits an *earlier spec file* left in the shared webview
-  // profile. A restored split renders every leaf fully visible side by side
-  // (there is no hidden-pane mechanism on the editor side, unlike the
-  // terminal's `.terminal-pane-slot.hidden`) — so an unscoped `$(".cm-content")`
+  // profile. A restored split renders every leaf fully visible side by side,
+  // so an unscoped `$(".cm-content")`
   // or `$(".cm-heading-1")` resolves to the first leaf in DOM order, which can
   // be a stale pane left over from a previous spec rather than the one holding
   // the file the current spec just opened, producing a wrong-pane content
