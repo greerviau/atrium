@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { EditorState } from "@codemirror/state";
-import { EditorView, lineNumbers } from "@codemirror/view";
+import { EditorState, EditorSelection } from "@codemirror/state";
+import { EditorView, drawSelection, lineNumbers } from "@codemirror/view";
 import { syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 import { render, cleanup } from "@testing-library/svelte";
@@ -41,6 +41,28 @@ describe("buildCmTheme", () => {
       expect(css, `${theme.id}: expected generated CSS to contain ${value}`).toContain(value);
     }
     container.remove();
+  });
+
+  it("keeps the app-drawn selection visible over the editor background", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    view = new EditorView({
+      state: EditorState.create({
+        doc: "one\ntwo\nthree",
+        extensions: [drawSelection(), buildCmTheme(atriumDark)],
+      }),
+      parent: container,
+    });
+
+    view.dispatch({ selection: EditorSelection.range(0, view.state.doc.length) });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const content = container.querySelector(".cm-content");
+    const selection = container.querySelector(".cm-selectionBackground");
+    expect(content).not.toBeNull();
+    expect(selection).not.toBeNull();
+    expect(getComputedStyle(content!).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    expect(getComputedStyle(selection!).backgroundColor).toBe("rgba(91, 157, 255, 0.25)");
   });
 
   it("produces different generated CSS for two different themes", () => {

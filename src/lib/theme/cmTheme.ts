@@ -19,9 +19,8 @@ export function buildCmTheme(theme: Theme): Extension {
       "&": {
         backgroundColor: t.bgBase,
       },
-      ".cm-content": {
-        backgroundColor: t.bgBase,
-      },
+      // CodeMirror's selection layer sits behind `.cm-content`; its
+      // transparency keeps app-drawn selection backgrounds visible.
       // `drawSelection()` in `src/lib/editor/baseExtensions.ts` is what makes
       // CodeMirror draw its own cursor as a bordered div instead of relying
       // on the webview's native text caret, so the cursor color takes effect
