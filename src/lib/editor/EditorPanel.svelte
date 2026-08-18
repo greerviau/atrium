@@ -327,7 +327,8 @@
   }
 
   .editor-pane-slot.hidden {
-    display: none;
+    visibility: hidden;
+    pointer-events: none;
   }
 
   .conflict-banner {
