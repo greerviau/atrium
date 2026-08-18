@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { tick } from "svelte";
 import { render, cleanup } from "@testing-library/svelte";
 import PaneSplit from "../../src/lib/terminal/PaneSplit.svelte";
 import { resizeSplit, PANE_MIN_PX, type PaneNode, type SplitPane } from "../../src/lib/terminal/paneTree";
 import { mountLog } from "./mountLog";
 import { endDragLock } from "../../src/lib/ui/dragLock";
+import { activeTabDrag } from "../../src/lib/panes/tabDrag";
 
 vi.mock("../../src/lib/terminal/TerminalPanel.svelte", async () => {
   const mod = await import("./TerminalPanelStub.svelte");
@@ -13,6 +15,7 @@ vi.mock("../../src/lib/terminal/TerminalPanel.svelte", async () => {
 afterEach(() => {
   cleanup();
   mountLog.length = 0;
+  activeTabDrag.set(null);
   endDragLock();
 });
 
@@ -92,6 +95,37 @@ describe("PaneSplit", () => {
     const panes = container.querySelectorAll(".pane-leaf");
     expect(panes[0].classList.contains("active")).toBe(false);
     expect(panes[1].classList.contains("active")).toBe(true);
+  });
+
+  it("does not show a center drop overlay while reordering within the source pane", async () => {
+    const { container } = render(PaneSplit, { tree: SPLIT, ...baseProps });
+    const panes = container.querySelectorAll(".pane-leaf");
+
+    activeTabDrag.set({
+      key: "p1:p1-tab",
+      surface: "terminal",
+      sourcePaneId: "p1",
+      path: "p1-tab",
+      label: "proj",
+      clientX: 20,
+      clientY: 20,
+      target: { paneId: "p1", zone: "center" },
+    });
+    await tick();
+    expect(panes[0].classList.contains("tab-drop-target-center")).toBe(false);
+
+    activeTabDrag.set({
+      key: "p1:p1-tab",
+      surface: "terminal",
+      sourcePaneId: "p1",
+      path: "p1-tab",
+      label: "proj",
+      clientX: 250,
+      clientY: 20,
+      target: { paneId: "p2", zone: "center" },
+    });
+    await tick();
+    expect(panes[1].classList.contains("tab-drop-target-center")).toBe(true);
   });
 
   it("regression: a multi-event drag tracks the pointer's total displacement instead of compounding on every event", () => {
