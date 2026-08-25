@@ -10,6 +10,7 @@ use sqlparser::parser::Parser;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fs::File;
+use std::mem;
 use std::path::Path;
 
 const MAX_SOURCE_ROWS: usize = 100_000;
@@ -79,7 +80,7 @@ pub fn query_file(
     let mut table = read_table(path, logical_path)?;
     let parsed = parse_query(sql_query, &table.columns)?;
     let source_truncated = table.truncated;
-    let mut rows = table.rows.drain(..).collect::<Vec<_>>();
+    let mut rows = mem::take(&mut table.rows);
     if let Some(filter) = &parsed.filter {
         let mut filtered_rows = Vec::with_capacity(rows.len());
         for row in rows {

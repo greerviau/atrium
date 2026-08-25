@@ -1,6 +1,7 @@
 import { writable, get } from "svelte/store";
 import { fsListDir, localWorkspaceId, type DirEntry } from "../ipc/commands";
-import { basename, dirOf, isPathUnderOrEqual } from "../util/path";
+import { basename, isPathUnderOrEqual, pathsEqual, relativeToRoot } from "../util/path";
+import { traceFsChange } from "../ipc/fsChangeTrace";
 
 export interface TreeNode {
   entry: DirEntry;
@@ -145,28 +146,92 @@ export async function expandToPath(path: string, isStale: () => boolean): Promis
   }
 }
 
+/**
+ * `changedPath` expressed as the list of path segments below `rootPath`, or
+ * `undefined` when `changedPath` is not inside the root at all. An empty
+ * array means `changedPath` *is* the root — a directory watcher may report
+ * the workspace root itself for a change to one of its children.
+ */
+function segmentsUnderRoot(changedPath: string, rootPath: string): string[] | undefined {
+  if (!isPathUnderOrEqual(changedPath, rootPath)) return undefined;
+  if (pathsEqual(changedPath, rootPath)) return [];
+  return relativeToRoot(changedPath, rootPath)
+    .split("/")
+    .filter((segment) => segment !== "");
+}
+
+/**
+ * The deepest expanded directory node whose own listing would contain
+ * `changedPath`, or `undefined` when `changedPath` falls outside the tree or
+ * the root itself is collapsed. A collapsed directory along the way stops
+ * the descent, so the nearest *visible* ancestor is what gets relisted —
+ * refreshing below a collapsed node would fetch rows nothing renders.
+ *
+ * The descent matches `entry.name` segment by segment rather than matching
+ * `dirOf(changedPath)` against whole node paths, because a node's path and
+ * an `fs:changed` path are not guaranteed to be spelled the same way.
+ * `fs_watch::reported_path` addresses every event against the raw,
+ * unresolved workspace root the user picked, and `root.entry.path` is that
+ * same raw form (it comes from `$workspace.root`) — but every *child* node's
+ * path comes from `fs_list_dir`, which builds its entries by joining onto a
+ * `std::fs::canonicalize`d root. For a workspace opened through a symlinked
+ * ancestor (macOS's `/tmp` and `/var`, or a project reached through a
+ * symlink of any kind) the two spellings diverge from the first level down,
+ * so a whole-path match finds nothing below the root and the walk falls back
+ * to relisting the root — which cannot drop a stale row that lives inside a
+ * subdirectory. Segment names carry no prefix, so they match either way, and
+ * they sidestep the `/`-versus-`\` mismatch on Windows for free (a watcher
+ * path is folded to `/` by `onFsChanged`, while node paths keep the native
+ * separators `fs_list_dir` returned).
+ */
+function deepestExpandedDirectoryFor(root: TreeNode, changedPath: string): TreeNode | undefined {
+  const segments = segmentsUnderRoot(changedPath, root.entry.path);
+  if (segments === undefined || !root.expanded) return undefined;
+
+  // The last segment names the changed entry itself; the listing that has to
+  // be refetched is its parent's.
+  let directory = root;
+  for (const name of segments.slice(0, -1)) {
+    const child = directory.children?.find((node) => node.entry.isDir && node.entry.name === name);
+    if (!child?.expanded || !child.children) break;
+    directory = child;
+  }
+  return directory;
+}
+
 /** Re-fetches the children of whichever expanded directory contains `path`, used by the `fs:changed` live-update handler (section 6.3). */
 export async function refreshDirectoryContaining(changedPath: string): Promise<void> {
-  const state = get(fileTree);
-  if (!state.root) {
+  const root = get(fileTree).root;
+  if (!root) {
+    traceFsChange("resolved", { changedPath, directory: null, reason: "no tree root loaded" });
     return;
   }
-  // `dirOf` falls back to its input unchanged when there's no separator to
-  // split on (e.g. a workspace rooted at the filesystem root "/", where a
-  // top-level entry's own path already *is* as short as `dirOf` can make
-  // it) — the old private `parentPath` this replaced special-cased that as
-  // "/" specifically. The general case is "the entry belongs to the root
-  // itself", so fall back to the tree's own root path rather than a
-  // hardcoded "/", which also covers a Windows drive root the same way.
-  const computed = dirOf(changedPath);
-  const parent = computed === changedPath ? state.root.entry.path : computed;
-  if (findNode(state.root, parent)?.expanded) {
-    await loadChildren(parent);
+  const directory = deepestExpandedDirectoryFor(root, changedPath);
+  if (!directory) {
+    traceFsChange("resolved", {
+      changedPath,
+      directory: null,
+      rootPath: root.entry.path,
+      rootExpanded: root.expanded,
+      reason: root.expanded ? "path is outside the workspace root" : "root is collapsed",
+    });
+    return;
   }
+  traceFsChange("resolved", { changedPath, directory: directory.entry.path });
+  // Call IPC with the tree's own spelling of the directory, not anything
+  // derived from the event path: `loadChildren` keys the listing it patches
+  // back in by exactly this string.
+  await loadChildren(directory.entry.path);
+  const refreshed = get(fileTree).root;
+  traceFsChange("relisted", {
+    directory: directory.entry.path,
+    children:
+      refreshed && findNode(refreshed, directory.entry.path)?.children?.map((n) => n.entry.path),
+  });
 }
 
 function findNode(node: TreeNode, path: string): TreeNode | undefined {
-  if (node.entry.path === path) {
+  if (pathsEqual(node.entry.path, path)) {
     return node;
   }
   if (!node.children) {
@@ -182,7 +247,7 @@ function findNode(node: TreeNode, path: string): TreeNode | undefined {
 }
 
 function patchNode(node: TreeNode, path: string, patch: (node: TreeNode) => TreeNode): TreeNode {
-  if (node.entry.path === path) {
+  if (pathsEqual(node.entry.path, path)) {
     return patch(node);
   }
   if (!node.children) {
