@@ -225,6 +225,65 @@ describe("fileTree: root-level refresh", () => {
     expect(subNode?.children?.map((n) => n.entry.name)).toEqual(["nested.txt"]);
   });
 
+  // Issue #470. `fs_watch::reported_path` addresses every event against the
+  // raw workspace root the user picked, which is also what the tree's root
+  // node holds (it comes from `$workspace.root`). `fs_list_dir` builds its
+  // entries by joining onto a `std::fs::canonicalize`d root instead, so every
+  // node below the root is spelled the other way whenever the root sits
+  // behind a symlinked ancestor — macOS's `/tmp` -> `/private/tmp`, or any
+  // project reached through a symlink. Matching `dirOf(changedPath)` against
+  // whole node paths finds nothing below the root in that case and relists
+  // the root, which cannot drop a stale row that lives inside a subdirectory.
+  it("refreshes the containing subdirectory when the event path and the node paths spell the root differently", async () => {
+    const rawRoot = "/tmp/ws";
+    const realRoot = "/private/tmp/ws";
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([
+      { name: "sub", path: `${realRoot}/sub`, isDir: true, isSymlink: false },
+    ]);
+    await loadRoot(rawRoot);
+
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([
+      { name: "kept.txt", path: `${realRoot}/sub/kept.txt`, isDir: false, isSymlink: false },
+      { name: "gone.txt", path: `${realRoot}/sub/gone.txt`, isDir: false, isSymlink: false },
+    ]);
+    await loadChildren(`${realRoot}/sub`);
+
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([
+      { name: "kept.txt", path: `${realRoot}/sub/kept.txt`, isDir: false, isSymlink: false },
+    ]);
+    await refreshDirectoryContaining(`${rawRoot}/sub/gone.txt`);
+
+    expect(commands.fsListDir).toHaveBeenLastCalledWith("local", `${realRoot}/sub`);
+    const sub = get(fileTree).root?.children?.find((n) => n.entry.name === "sub");
+    expect(sub?.children?.map((n) => n.entry.name)).toEqual(["kept.txt"]);
+  });
+
+  it("stops at the deepest expanded directory rather than relisting below a collapsed one", async () => {
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([dir("sub")]);
+    await loadRoot(ROOT);
+
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([
+      { name: "deep", path: `${ROOT}/sub/deep`, isDir: true, isSymlink: false },
+    ]);
+    await loadChildren(`${ROOT}/sub`);
+    collapse(`${ROOT}/sub`);
+
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([dir("sub")]);
+    await refreshDirectoryContaining(`${ROOT}/sub/deep/note.txt`);
+
+    expect(commands.fsListDir).toHaveBeenLastCalledWith("local", ROOT);
+  });
+
+  it("ignores a path outside the workspace root entirely", async () => {
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("a.txt")]);
+    await loadRoot(ROOT);
+    expect(commands.fsListDir).toHaveBeenCalledTimes(1);
+
+    await refreshDirectoryContaining("/elsewhere/b.txt");
+
+    expect(commands.fsListDir).toHaveBeenCalledTimes(1);
+  });
+
   it("no-ops refreshDirectoryContaining when the root has been explicitly collapsed", async () => {
     vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("a.txt")]);
     await loadRoot(ROOT);
