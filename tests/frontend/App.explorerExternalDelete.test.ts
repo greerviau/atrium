@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { get } from "svelte/store";
 import { tick } from "svelte";
 import { render, cleanup } from "@testing-library/svelte";
 import App from "../../src/App.svelte";
@@ -9,6 +10,7 @@ import { fileTree } from "../../src/lib/stores/fileTree";
 import { errorToast } from "../../src/lib/stores/errorToast";
 import { focusedEditorPaneId, editorPaneTree } from "../../src/lib/stores/editorPanes";
 import { onFsChanged, type FsChangeEvent } from "../../src/lib/ipc/events";
+import * as commands from "../../src/lib/ipc/commands";
 import type { DirEntry } from "../../src/lib/ipc/commands";
 
 // Issue #470, end-to-end through the seam a user actually hits: a file
@@ -35,6 +37,9 @@ vi.mock("../../src/lib/ipc/commands", async (importOriginal) => {
     workspaceTakePendingOpen: vi.fn().mockResolvedValue([]),
     appConfirmClose: vi.fn().mockResolvedValue(undefined),
     fsReadFile: vi.fn().mockResolvedValue("content\n"),
+    // The welcome screen renders while no project is open, and it loads the
+    // recents list on mount.
+    workspaceGetRecents: vi.fn().mockResolvedValue([]),
     fsListDir: vi.fn(async (_workspaceId: string, path: string) => fakeFs.get(path) ?? []),
   };
 });
@@ -165,6 +170,75 @@ describe("App: an externally deleted file leaves the explorer (issue #470)", () 
 
     expect(renderedPaths(container)).toContain(`${REAL_ROOT}/src/a.ts`);
     expect(renderedPaths(container)).not.toContain(`${REAL_ROOT}/src/b.ts`);
+  });
+
+  // The production sequence: App mounts at the welcome screen with no root
+  // and registers its `fs:changed` listener there, and the project is opened
+  // afterwards. Every other case here sets the root before `render`, which
+  // never exercises the listener closure reading a workspace that changed
+  // after `onMount` ran.
+  it("drops the row when the project was opened after the listener was registered", async () => {
+    workspace.set({ id: "local", root: null });
+    const { container } = render(App);
+    await flush();
+
+    fakeFs.set(ROOT, [file(ROOT, "keep.md"), file(ROOT, "gone.md")]);
+    workspace.set({ id: "local", root: ROOT });
+    await flush();
+    expect(renderedPaths(container)).toContain(`${ROOT}/gone.md`);
+
+    fakeFs.set(ROOT, [file(ROOT, "keep.md")]);
+    fsChangedHandler()({ workspaceId: "local", path: `${ROOT}/gone.md`, kind: "remove" });
+    await flush();
+
+    expect(renderedPaths(container)).not.toContain(`${ROOT}/gone.md`);
+  });
+
+  // `fs_watch`'s own test helper documents that the debouncer can emit more
+  // than one wire event per filesystem operation, and Tauri delivers a burst
+  // back to back with no await between handler invocations. Every one of them
+  // starts its own `loadChildren` against the same directory.
+  it("drops the row when the delete arrives as a burst of events for the entry and its directory", async () => {
+    fakeFs.set(ROOT, [directory(ROOT, "src")]);
+    fakeFs.set(`${ROOT}/src`, [file(`${ROOT}/src`, "a.ts"), file(`${ROOT}/src`, "b.ts")]);
+    workspace.set({ id: "local", root: ROOT });
+    const { container } = render(App);
+    await flush();
+
+    const srcRow = container.querySelector<HTMLElement>(`.row[data-path="${ROOT}/src"]`);
+    if (!srcRow) throw new Error("no row for the src directory");
+    srcRow.click();
+    await flush();
+    expect(renderedPaths(container)).toContain(`${ROOT}/src/b.ts`);
+
+    fakeFs.set(`${ROOT}/src`, [file(`${ROOT}/src`, "a.ts")]);
+    const handler = fsChangedHandler();
+    handler({ workspaceId: "local", path: `${ROOT}/src/b.ts`, kind: "remove" });
+    handler({ workspaceId: "local", path: `${ROOT}/src`, kind: "modify" });
+    handler({ workspaceId: "local", path: `${ROOT}/src/b.ts`, kind: "remove" });
+    await flush();
+
+    expect(renderedPaths(container)).not.toContain(`${ROOT}/src/b.ts`);
+  });
+
+  // A rejected relist leaves the explorer showing rows for files that are no
+  // longer on disk — the same symptom as a missing event, reached from the
+  // other direction. It used to be a bare `void`, so the rejection went
+  // unhandled and nothing anywhere said the tree had gone stale.
+  it("surfaces a failed relist instead of leaving the tree silently stale", async () => {
+    fakeFs.set(ROOT, [file(ROOT, "keep.md"), file(ROOT, "gone.md")]);
+    workspace.set({ id: "local", root: ROOT });
+    render(App);
+    await flush();
+
+    vi.mocked(commands.fsListDir).mockRejectedValueOnce({
+      code: "IO_ERROR",
+      message: "permission denied",
+    });
+    fsChangedHandler()({ workspaceId: "local", path: `${ROOT}/gone.md`, kind: "remove" });
+    await flush();
+
+    expect(get(errorToast)).toBe("Couldn't refresh the file explorer: permission denied");
   });
 
   it("drops the row when the watcher reports the containing directory instead of the entry", async () => {

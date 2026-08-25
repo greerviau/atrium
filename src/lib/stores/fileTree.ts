@@ -1,6 +1,7 @@
 import { writable, get } from "svelte/store";
 import { fsListDir, localWorkspaceId, type DirEntry } from "../ipc/commands";
 import { basename, isPathUnderOrEqual, pathsEqual, relativeToRoot } from "../util/path";
+import { traceFsChange } from "../ipc/fsChangeTrace";
 
 export interface TreeNode {
   entry: DirEntry;
@@ -201,13 +202,32 @@ function deepestExpandedDirectoryFor(root: TreeNode, changedPath: string): TreeN
 /** Re-fetches the children of whichever expanded directory contains `path`, used by the `fs:changed` live-update handler (section 6.3). */
 export async function refreshDirectoryContaining(changedPath: string): Promise<void> {
   const root = get(fileTree).root;
-  if (!root) return;
+  if (!root) {
+    traceFsChange("resolved", { changedPath, directory: null, reason: "no tree root loaded" });
+    return;
+  }
   const directory = deepestExpandedDirectoryFor(root, changedPath);
-  if (!directory) return;
+  if (!directory) {
+    traceFsChange("resolved", {
+      changedPath,
+      directory: null,
+      rootPath: root.entry.path,
+      rootExpanded: root.expanded,
+      reason: root.expanded ? "path is outside the workspace root" : "root is collapsed",
+    });
+    return;
+  }
+  traceFsChange("resolved", { changedPath, directory: directory.entry.path });
   // Call IPC with the tree's own spelling of the directory, not anything
   // derived from the event path: `loadChildren` keys the listing it patches
   // back in by exactly this string.
   await loadChildren(directory.entry.path);
+  const refreshed = get(fileTree).root;
+  traceFsChange("relisted", {
+    directory: directory.entry.path,
+    children:
+      refreshed && findNode(refreshed, directory.entry.path)?.children?.map((n) => n.entry.path),
+  });
 }
 
 function findNode(node: TreeNode, path: string): TreeNode | undefined {

@@ -2,6 +2,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { DragDropEvent } from "@tauri-apps/api/webview";
 import { canonicalizePath } from "../util/path";
+import { traceFsChange } from "./fsChangeTrace";
 
 /**
  * The matching normalization boundary for `commands.ts`'s IPC calls: every
@@ -24,14 +25,17 @@ export interface FsChangeEvent {
 export function onFsChanged(
   handler: (event: FsChangeEvent) => void,
 ): Promise<UnlistenFn> {
-  return listen<FsChangeEvent>("fs:changed", (event) =>
-    handler({
+  return listen<FsChangeEvent>("fs:changed", (event) => {
+    traceFsChange("received", { payload: event.payload });
+    const canonical: FsChangeEvent = {
       ...event.payload,
       path: canonicalizePath(event.payload.path),
       fromPath:
         event.payload.fromPath === undefined ? undefined : canonicalizePath(event.payload.fromPath),
-    }),
-  );
+    };
+    traceFsChange("canonicalized", { ...canonical });
+    handler(canonical);
+  });
 }
 
 /** Native menu bar items that need frontend behavior. */

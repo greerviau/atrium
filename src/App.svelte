@@ -32,6 +32,8 @@
   import { rekeyPath } from "./lib/editor/editorViewRegistry";
   import { get } from "svelte/store";
   import { onFsChanged, onDockOpenPath, onCloseRequested, onDragDropEvent } from "./lib/ipc/events";
+  import { traceFsChange } from "./lib/ipc/fsChangeTrace";
+  import { showErrorToast, describeError } from "./lib/stores/errorToast";
   import { insertPathsAtScreenPoint } from "./lib/terminal/terminalDropTargets";
   import { resolveExplorerDropTargetDir } from "./lib/explorer/explorerDropTargets";
   import { resolveEditorDropTarget } from "./lib/editor/editorDropTargets";
@@ -1396,6 +1398,21 @@
     openFileReportingErrors(path, undefined, targetWorkspaceId);
   }
 
+  /**
+   * A relist that rejects used to be discarded by a bare `void`, which is an
+   * unhandled promise rejection in the WebView: silent, and it leaves the
+   * explorer showing rows for files that are no longer there — the exact
+   * symptom issue #470 reports, arrived at from a different direction than a
+   * missing event. Surfacing it matches the `openFileReportingErrors` /
+   * `reloadFromDiskReportingErrors` / `requestSaveReportingErrors` idiom.
+   */
+  function refreshExplorerReportingErrors(path: string): void {
+    refreshDirectoryContaining(path).catch((err: unknown) => {
+      traceFsChange("failed", { path, error: describeError(err) });
+      showErrorToast(`Couldn't refresh the file explorer: ${describeError(err)}`);
+    });
+  }
+
   onMount(() => {
     // The first-availability `$effect` above clamps terminalHeight AND
     // terminalWidth against the container every time `mainEl` becomes
@@ -1415,7 +1432,16 @@
       // The standalone watcher remains alive across project switches, and a
       // previous local watcher can still drain queued events. Only the
       // currently displayed project's events may mutate its tree or tabs.
-      if (!$workspace.root || event.workspaceId !== $workspace.id) return;
+      const accepted = Boolean($workspace.root) && event.workspaceId === $workspace.id;
+      traceFsChange("routed", {
+        accepted,
+        eventWorkspaceId: event.workspaceId,
+        openWorkspaceId: $workspace.id,
+        openWorkspaceRoot: $workspace.root,
+        kind: event.kind,
+        path: event.path,
+      });
+      if (!accepted) return;
       if (event.kind === "remove") {
         markPathDeleted(event.path);
       } else if (event.kind === "rename" && event.fromPath) {
@@ -1425,11 +1451,11 @@
         // old paired-rename shape emitted one wire event per path, so both
         // directories got refreshed for free; this one event now only
         // covers the destination on its own.
-        void refreshDirectoryContaining(event.fromPath);
+        refreshExplorerReportingErrors(event.fromPath);
       } else {
         void reconcileExternalChange(event.path);
       }
-      void refreshDirectoryContaining(event.path);
+      refreshExplorerReportingErrors(event.path);
     });
     // Rust's `launch_open` module (issue #325's cold-launch plan) delivers
     // each OS-opened or launch-argument path exactly once, via one of two mechanisms:
