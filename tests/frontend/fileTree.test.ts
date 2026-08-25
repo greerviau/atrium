@@ -93,6 +93,16 @@ describe("fileTree: root-level refresh", () => {
     expect(childPaths()).toContain(`${ROOT}/external.txt`);
   });
 
+  it("refreshes the workspace root when the watcher reports the root directory itself", async () => {
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("a.txt")]);
+    await loadRoot(ROOT);
+
+    vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("a.txt"), file("external.txt")]);
+    await refreshDirectoryContaining(ROOT);
+
+    expect(childPaths()).toEqual([`${ROOT}/a.txt`, `${ROOT}/external.txt`]);
+  });
+
   it("reflects an externally-deleted top-level file once refreshDirectoryContaining fires from fs:changed", async () => {
     vi.mocked(commands.fsListDir).mockResolvedValueOnce([file("a.txt"), file("b.txt")]);
     await loadRoot(ROOT);

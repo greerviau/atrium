@@ -1412,6 +1412,10 @@
     window.addEventListener("resize", handleWindowResize);
     void initMenuBar(newTerminalTab, () => splitFocusedPane("right"), splitFocusedSurface, closeFocusedTab);
     void onFsChanged((event) => {
+      // The standalone watcher remains alive across project switches, and a
+      // previous local watcher can still drain queued events. Only the
+      // currently displayed project's events may mutate its tree or tabs.
+      if (!$workspace.root || event.workspaceId !== $workspace.id) return;
       if (event.kind === "remove") {
         markPathDeleted(event.path);
       } else if (event.kind === "rename" && event.fromPath) {

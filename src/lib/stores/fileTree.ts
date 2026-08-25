@@ -1,6 +1,6 @@
 import { writable, get } from "svelte/store";
 import { fsListDir, localWorkspaceId, type DirEntry } from "../ipc/commands";
-import { basename, dirOf, isPathUnderOrEqual } from "../util/path";
+import { basename, dirOf, isPathUnderOrEqual, pathsEqual } from "../util/path";
 
 export interface TreeNode {
   entry: DirEntry;
@@ -148,21 +148,48 @@ export async function expandToPath(path: string, isStale: () => boolean): Promis
 /** Re-fetches the children of whichever expanded directory contains `path`, used by the `fs:changed` live-update handler (section 6.3). */
 export async function refreshDirectoryContaining(changedPath: string): Promise<void> {
   const state = get(fileTree);
-  if (!state.root) {
+  const root = state.root;
+  if (!root) {
     return;
   }
-  // `dirOf` falls back to its input unchanged when there's no separator to
-  // split on (e.g. a workspace rooted at the filesystem root "/", where a
-  // top-level entry's own path already *is* as short as `dirOf` can make
-  // it) — the old private `parentPath` this replaced special-cased that as
-  // "/" specifically. The general case is "the entry belongs to the root
-  // itself", so fall back to the tree's own root path rather than a
-  // hardcoded "/", which also covers a Windows drive root the same way.
-  const computed = dirOf(changedPath);
-  const parent = computed === changedPath ? state.root.entry.path : computed;
-  if (findNode(state.root, parent)?.expanded) {
-    await loadChildren(parent);
+
+  // Directory watchers may report the workspace root itself for a child
+  // change. In that case `dirOf(root)` is outside the tree, so treat the
+  // root as the directory whose listing needs refreshing. For ordinary
+  // entries, begin with their parent as before.
+  let candidate = pathsEqual(changedPath, root.entry.path) ? changedPath : dirOf(changedPath);
+  if (candidate === changedPath || candidate === "") {
+    candidate = root.entry.path;
   }
+  for (;;) {
+    const directory = findNodeByPath(root, candidate);
+    if (directory?.expanded) {
+      // Use the tree's own spelling when calling IPC. The event may use a
+      // different separator form on Windows or a canonical spelling on
+      // macOS, while the node path is the form fs_list_dir was keyed with.
+      await loadChildren(directory.entry.path);
+      return;
+    }
+    const parent = dirOf(candidate);
+    if (parent === candidate) return;
+    candidate = parent;
+  }
+}
+
+function findNodeByPath(node: TreeNode, path: string): TreeNode | undefined {
+  if (pathsEqual(node.entry.path, path)) {
+    return node;
+  }
+  if (!node.children) {
+    return undefined;
+  }
+  for (const child of node.children) {
+    const found = findNodeByPath(child, path);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
 }
 
 function findNode(node: TreeNode, path: string): TreeNode | undefined {
